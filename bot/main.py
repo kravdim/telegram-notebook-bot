@@ -11,13 +11,22 @@ from aiogram.enums import ParseMode
 from aiogram.fsm.storage.memory import MemoryStorage
 
 from bot.config import settings
-from bot.handlers import admin, callbacks, commands, messages, onboarding
+from bot.handlers import (
+    admin, callbacks, commands, evening_review,
+    messages, onboarding, trip, voice,
+)
 from bot.llm.client import LLMClient
 from bot.llm.context import clear_all as clear_context
 from bot.llm.queue import LLMQueue
 from bot.middleware import WhitelistMiddleware
+from bot.scheduler.backup import run_backup
+from bot.scheduler.chronometry import send_chronometry_prompts
+from bot.scheduler.digest import send_digests
 from bot.scheduler.healthcheck import check_llm_health
+from bot.scheduler.log_rotation import rotate_llm_logs
+from bot.scheduler.memoir import send_memoir_prompts
 from bot.scheduler.reminders import send_pending_reminders
+from bot.scheduler.reindex import reindex_missing_embeddings
 from bot.scheduler.sweep import sweep_missed_reminders
 
 logging.basicConfig(
@@ -26,6 +35,51 @@ logging.basicConfig(
     stream=sys.stdout,
 )
 logger = logging.getLogger(__name__)
+
+
+def _init_embedding_client():
+    """Инициализация embedding-клиента на основе конфига."""
+    yaml_cfg = settings.yaml_config
+    provider = yaml_cfg.get("embedding", {}).get("provider", "ollama")
+
+    try:
+        if provider == "ollama":
+            from bot.embeddings.ollama import OllamaEmbeddingClient
+            client = OllamaEmbeddingClient()
+        else:
+            from bot.embeddings.cloud import CloudEmbeddingClient
+            client = CloudEmbeddingClient()
+
+        from bot.embeddings import indexer
+        from bot.scheduler import reindex
+        indexer.init(client)
+        reindex.init(client)
+        logger.info("Embedding-клиент инициализирован: %s", provider)
+        return client
+    except Exception as e:
+        logger.warning("Embedding-клиент не инициализирован: %s", e)
+        return None
+
+
+def _init_stt_client():
+    """Инициализация STT-клиента на основе конфига."""
+    yaml_cfg = settings.yaml_config
+    provider = yaml_cfg.get("stt", {}).get("provider", "local_whisper")
+
+    try:
+        if provider == "local_whisper":
+            from bot.stt.local_whisper import LocalWhisperClient
+            client = LocalWhisperClient()
+        else:
+            from bot.stt.cloud_stt import CloudSTTClient
+            client = CloudSTTClient()
+
+        voice.init(client)
+        logger.info("STT-клиент инициализирован: %s", provider)
+        return client
+    except Exception as e:
+        logger.warning("STT-клиент не инициализирован: %s", e)
+        return None
 
 
 async def main() -> None:
@@ -45,6 +99,16 @@ async def main() -> None:
     llm_queue = LLMQueue()
     llm_queue.start()
     messages.init(llm_client, llm_queue)
+
+    # Хронометраж
+    from bot.handlers import chronometry as chrono_handler
+    chrono_handler.init(llm_client, llm_queue)
+
+    # Embedding
+    _init_embedding_client()
+
+    # STT
+    _init_stt_client()
 
     # Очистка контекста при старте
     clear_context()
@@ -78,19 +142,70 @@ async def main() -> None:
             except Exception as e:
                 logger.error("Health check error: %s", e)
 
+    async def _digest_loop():
+        """Проверка и отправка дайджестов каждую минуту."""
+        while True:
+            await asyncio.sleep(60)
+            try:
+                await send_digests(bot)
+            except Exception as e:
+                logger.error("Digest loop error: %s", e)
+
+    async def _memoir_loop():
+        """Проверка и отправка вопросов мемуарника каждую минуту."""
+        while True:
+            await asyncio.sleep(60)
+            try:
+                await send_memoir_prompts(bot)
+            except Exception as e:
+                logger.error("Memoir loop error: %s", e)
+
+    async def _chronometry_loop():
+        """Хронометраж: проверка каждую минуту."""
+        while True:
+            await asyncio.sleep(60)
+            try:
+                await send_chronometry_prompts(bot)
+            except Exception as e:
+                logger.error("Chronometry loop error: %s", e)
+
+    async def _maintenance_loop():
+        """Обслуживание: бэкап, ротация логов, реиндекс — раз в час."""
+        while True:
+            await asyncio.sleep(3600)
+            try:
+                await reindex_missing_embeddings()
+                await rotate_llm_logs()
+
+                # Бэкап в 3:00
+                import pendulum
+                now = pendulum.now()
+                backup_hour = settings.yaml_config.get("scheduler", {}).get("backup_hour", 3)
+                if now.hour == backup_hour:
+                    await run_backup()
+            except Exception as e:
+                logger.error("Maintenance loop error: %s", e)
+
     asyncio.create_task(_reminders_loop())
     asyncio.create_task(_sweep_loop())
     asyncio.create_task(_health_loop())
+    asyncio.create_task(_digest_loop())
+    asyncio.create_task(_memoir_loop())
+    asyncio.create_task(_chronometry_loop())
+    asyncio.create_task(_maintenance_loop())
 
     # Middleware
     dp.message.middleware(WhitelistMiddleware())
     dp.callback_query.middleware(WhitelistMiddleware())
 
-    # Роутеры (порядок: onboarding, admin, commands, callbacks первыми; messages — последний)
+    # Роутеры (порядок важен: onboarding, admin, commands, callbacks первыми; messages — последний)
     dp.include_router(onboarding.router)
     dp.include_router(admin.router)
     dp.include_router(commands.router)
     dp.include_router(callbacks.router)
+    dp.include_router(evening_review.router)
+    dp.include_router(trip.router)
+    dp.include_router(voice.router)
     dp.include_router(messages.router)
 
     # Graceful shutdown

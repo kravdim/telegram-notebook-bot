@@ -1,12 +1,13 @@
-"""Команды администратора: /prompts, /status, /adduser и др."""
+"""Команды администратора: /prompts, /status, /adduser, /removeuser."""
 
 import logging
 
 from aiogram import Router
-from aiogram.filters import Command
+from aiogram.filters import Command, CommandObject
 from aiogram.types import Message
 
 from bot.config import settings
+from bot.db.crud.users import get_all_users
 from bot.db.engine import async_session
 from bot.llm.prompts import get_all_prompts
 
@@ -44,17 +45,102 @@ async def cmd_prompts(message: Message) -> None:
 
 @router.message(Command("status"))
 async def cmd_status(message: Message) -> None:
-    """Показать статус бота (admin)."""
+    """Показать расширенный статус бота (admin)."""
     if not message.from_user or not _is_admin(message.from_user.id):
         await message.answer("Эта команда доступна только администратору.")
         return
 
     from bot.handlers.messages import llm_client
-    main_status = "healthy" if (llm_client and llm_client._main_healthy) else "down"
+    from bot.scheduler.healthcheck import check_all_health
 
-    await message.answer(
-        f"<b>Статус бота</b>\n"
-        f"Main LLM: {main_status}\n"
-        f"Whitelist: {len(settings.allowed_telegram_ids)} users",
-        parse_mode="HTML",
-    )
+    if not llm_client:
+        await message.answer("LLM-клиент не инициализирован.")
+        return
+
+    health = await check_all_health(llm_client)
+
+    async with async_session() as session:
+        users = await get_all_users(session)
+
+    lines = ["<b>Статус бота</b>\n"]
+
+    for service, info in health.items():
+        status = info.get("status", "?")
+        emoji = {"ok": "🟢", "degraded": "🟡", "error": "🔴", "not_configured": "⚪"}.get(
+            status, "⚪"
+        )
+        latency = f" ({info['latency_ms']}ms)" if "latency_ms" in info else ""
+        lines.append(f"{emoji} {service}: {status}{latency}")
+
+    lines.append(f"\n👥 Пользователей: {len(users)}")
+    lines.append(f"📋 Whitelist: {len(settings.allowed_telegram_ids)}")
+
+    await message.answer("\n".join(lines), parse_mode="HTML")
+
+
+@router.message(Command("adduser"))
+async def cmd_adduser(message: Message, command: CommandObject) -> None:
+    """Добавить пользователя в whitelist (admin)."""
+    if not message.from_user or not _is_admin(message.from_user.id):
+        await message.answer("Эта команда доступна только администратору.")
+        return
+
+    if not command.args:
+        await message.answer("Использование: /adduser TELEGRAM_ID")
+        return
+
+    try:
+        user_id = int(command.args.strip())
+    except ValueError:
+        await message.answer("Telegram ID должен быть числом.")
+        return
+
+    if user_id not in settings.allowed_telegram_ids:
+        settings.allowed_telegram_ids.append(user_id)
+
+    await message.answer(f"✅ Пользователь {user_id} добавлен в whitelist.")
+
+
+@router.message(Command("removeuser"))
+async def cmd_removeuser(message: Message, command: CommandObject) -> None:
+    """Удалить пользователя из whitelist (admin)."""
+    if not message.from_user or not _is_admin(message.from_user.id):
+        await message.answer("Эта команда доступна только администратору.")
+        return
+
+    if not command.args:
+        await message.answer("Использование: /removeuser TELEGRAM_ID")
+        return
+
+    try:
+        user_id = int(command.args.strip())
+    except ValueError:
+        await message.answer("Telegram ID должен быть числом.")
+        return
+
+    if user_id in settings.allowed_telegram_ids:
+        settings.allowed_telegram_ids.remove(user_id)
+
+    await message.answer(f"✅ Пользователь {user_id} удалён из whitelist.")
+
+
+@router.message(Command("listusers"))
+async def cmd_listusers(message: Message) -> None:
+    """Показать всех пользователей (admin)."""
+    if not message.from_user or not _is_admin(message.from_user.id):
+        await message.answer("Эта команда доступна только администратору.")
+        return
+
+    async with async_session() as session:
+        users = await get_all_users(session)
+
+    if not users:
+        await message.answer("Пользователей нет.")
+        return
+
+    lines = ["<b>Пользователи:</b>\n"]
+    for u in users:
+        role = "👑" if u.role == "admin" else "👤"
+        lines.append(f"{role} {u.username} ({u.telegram_id})")
+
+    await message.answer("\n".join(lines), parse_mode="HTML")

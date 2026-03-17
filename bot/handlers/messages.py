@@ -121,6 +121,37 @@ async def handle_text(message: Message) -> None:
             )
             return
 
+        # Специальный случай: проект создан → декомпозиция
+        if result.startswith("PROJECT_CREATED:"):
+            parts = result.split(":", 2)
+            project_id = parts[1]
+            project_title = parts[2]
+            await message.answer(
+                f"🐘 Проект «{project_title}» создан!\n"
+                "Сейчас декомпозирую на задачи..."
+            )
+            await message.bot.send_chat_action(chat_id=message.chat.id, action="typing")
+
+            from bot.llm.decompose import decompose_project, create_project_tasks
+            task_titles = await decompose_project(
+                llm_client, llm_queue, user_id, project_id, project_title,
+            )
+            if task_titles:
+                created = await create_project_tasks(user_id, project_id, task_titles)
+                tasks_list = "\n".join(f"  • {t}" for t in task_titles)
+                add_message(user_id, "assistant", f"Проект создан с {created} задачами")
+                await message.answer(
+                    f"Создано {created} задач:\n{tasks_list}\n\n"
+                    "Смотри /projects для прогресса."
+                )
+            else:
+                add_message(user_id, "assistant", "Проект создан")
+                await message.answer(
+                    "Не удалось автоматически декомпозировать. "
+                    "Добавь задачи вручную."
+                )
+            return
+
         add_message(user_id, "assistant", result)
         await message.answer(result)
     elif response.content:

@@ -1,0 +1,105 @@
+"""CRUD-операции для мемуарника."""
+
+import uuid
+from datetime import date
+from typing import List, Optional
+
+from sqlalchemy import select, func, and_
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from bot.db.models import MemoirEntry
+
+
+async def create_memoir_entry(
+    session: AsyncSession,
+    user_id: int,
+    event_date: date,
+    content: str,
+    value_tag: Optional[str] = None,
+    period_type: str = "day",
+) -> MemoirEntry:
+    """Создать запись мемуарника (upsert по user_id + event_date + period_type)."""
+    result = await session.execute(
+        select(MemoirEntry).where(
+            MemoirEntry.user_id == user_id,
+            MemoirEntry.event_date == event_date,
+            MemoirEntry.period_type == period_type,
+        )
+    )
+    entry = result.scalar_one_or_none()
+    if entry:
+        entry.content = content
+        entry.value_tag = value_tag
+    else:
+        entry = MemoirEntry(
+            user_id=user_id,
+            event_date=event_date,
+            content=content,
+            value_tag=value_tag,
+            period_type=period_type,
+        )
+        session.add(entry)
+    await session.commit()
+    await session.refresh(entry)
+    return entry
+
+
+async def get_memoir_entries(
+    session: AsyncSession,
+    user_id: int,
+    period_type: str = "day",
+    limit: int = 7,
+) -> List[MemoirEntry]:
+    """Получить последние записи мемуарника."""
+    result = await session.execute(
+        select(MemoirEntry)
+        .where(
+            MemoirEntry.user_id == user_id,
+            MemoirEntry.period_type == period_type,
+        )
+        .order_by(MemoirEntry.event_date.desc())
+        .limit(limit)
+    )
+    return list(result.scalars().all())
+
+
+async def get_memoir_for_date(
+    session: AsyncSession,
+    user_id: int,
+    event_date: date,
+    period_type: str = "day",
+) -> Optional[MemoirEntry]:
+    """Получить запись мемуарника за конкретную дату."""
+    result = await session.execute(
+        select(MemoirEntry).where(
+            MemoirEntry.user_id == user_id,
+            MemoirEntry.event_date == event_date,
+            MemoirEntry.period_type == period_type,
+        )
+    )
+    return result.scalar_one_or_none()
+
+
+async def get_value_stats(
+    session: AsyncSession,
+    user_id: int,
+    days: int = 90,
+) -> List[dict]:
+    """Статистика ценностей за N дней."""
+    import pendulum
+    since = pendulum.now().subtract(days=days).date()
+    result = await session.execute(
+        select(
+            MemoirEntry.value_tag,
+            func.count().label("cnt"),
+        )
+        .where(
+            MemoirEntry.user_id == user_id,
+            MemoirEntry.period_type == "day",
+            MemoirEntry.event_date >= since,
+            MemoirEntry.value_tag.isnot(None),
+        )
+        .group_by(MemoirEntry.value_tag)
+        .order_by(func.count().desc())
+    )
+    return [{"value": row.value_tag, "count": row.cnt} for row in result.all()]

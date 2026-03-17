@@ -8,8 +8,9 @@ from typing import Any, Dict, Optional, Tuple
 import pendulum
 from json_repair import repair_json
 
-from bot.db.crud.notes import create_note
 from bot.db.crud.diary import create_diary_entry
+from bot.db.crud.notes import create_note
+from bot.db.crud.projects import create_project as crud_create_project
 from bot.db.crud.reminders import create_reminder
 from bot.db.crud.tasks import create_task, complete_task, search_tasks, update_task as crud_update_task
 from bot.db.engine import async_session
@@ -226,20 +227,60 @@ async def _handle_create_reminder(
 
 
 async def _handle_search(user_id: int, args: Dict[str, Any]) -> str:
-    # Заглушка — полный поиск будет на этапе 9 (RAG)
     query = args.get("query", "")
     scope = args.get("scope", "all")
+    results = []
 
-    if scope in ("all", "tasks"):
-        async with async_session() as session:
+    async with async_session() as session:
+        # Поиск по задачам
+        if scope in ("all", "tasks"):
             tasks = await search_tasks(session, user_id, query)
-        if tasks:
-            lines = [f"Найдено задач: {len(tasks)}"]
             for t in tasks[:5]:
                 status = "✅" if t.status == "done" else "📌"
-                lines.append(f"{status} {t.title}")
-            return "\n".join(lines)
+                results.append(f"{status} {t.title}")
 
+        # Поиск по заметкам
+        if scope in ("all", "notes"):
+            from sqlalchemy import select
+            from bot.db.models import Note
+            pattern = f"%{query}%"
+            res = await session.execute(
+                select(Note)
+                .where(Note.user_id == user_id, Note.content.ilike(pattern))
+                .limit(5)
+            )
+            for n in res.scalars().all():
+                title = n.title or n.content[:50]
+                results.append(f"📝 {title}")
+
+        # Поиск по дневнику
+        if scope in ("all", "diary"):
+            from sqlalchemy import select
+            from bot.db.models import DiaryEntry
+            pattern = f"%{query}%"
+            res = await session.execute(
+                select(DiaryEntry)
+                .where(DiaryEntry.user_id == user_id, DiaryEntry.content.ilike(pattern))
+                .limit(5)
+            )
+            for d in res.scalars().all():
+                results.append(f"📓 {d.content[:50]}...")
+
+        # Поиск по мемуарнику
+        if scope in ("all", "memoir"):
+            from sqlalchemy import select
+            from bot.db.models import MemoirEntry
+            pattern = f"%{query}%"
+            res = await session.execute(
+                select(MemoirEntry)
+                .where(MemoirEntry.user_id == user_id, MemoirEntry.content.ilike(pattern))
+                .limit(5)
+            )
+            for m in res.scalars().all():
+                results.append(f"📔 {m.content[:50]}...")
+
+    if results:
+        return f"🔍 По запросу «{query}» найдено:\n" + "\n".join(results)
     return f"По запросу «{query}» ничего не найдено."
 
 
@@ -289,5 +330,23 @@ async def _handle_delete_task(user_id: int, args: Dict[str, Any]) -> str:
 
 
 async def _handle_create_project(user_id: int, args: Dict[str, Any]) -> str:
-    # Заглушка — полная реализация на этапе 5
-    return "Создание проектов будет доступно в следующей версии."
+    title = args.get("title", "").strip()
+    err = _validate_title(title)
+    if err:
+        return err
+
+    description = args.get("description", "")
+    category = args.get("category", "work")
+    if category not in ("work", "personal"):
+        category = "work"
+
+    async with async_session() as session:
+        project = await crud_create_project(
+            session,
+            user_id=user_id,
+            title=title,
+            description=description,
+            category=category,
+        )
+
+    return f"PROJECT_CREATED:{project.id}:{project.title}"

@@ -1,0 +1,61 @@
+"""STT через faster-whisper (macOS, локально)."""
+
+import asyncio
+import logging
+from pathlib import Path
+
+from bot.config import settings
+from bot.stt.base import STTClient
+
+logger = logging.getLogger(__name__)
+
+
+class LocalWhisperClient(STTClient):
+    """faster-whisper для локальной транскрибации."""
+
+    def __init__(self):
+        yaml_cfg = settings.yaml_config
+        stt_cfg = yaml_cfg.get("stt", {})
+        self.model_size = stt_cfg.get("model", "medium")
+        self.language = stt_cfg.get("language", "ru")
+        self._model = None
+
+    def _load_model(self):
+        """Ленивая загрузка модели."""
+        if self._model is None:
+            try:
+                from faster_whisper import WhisperModel
+                self._model = WhisperModel(
+                    self.model_size,
+                    device="cpu",
+                    compute_type="int8",
+                )
+                logger.info("Whisper модель загружена: %s", self.model_size)
+            except ImportError:
+                logger.error("faster-whisper не установлен")
+                raise
+
+    async def transcribe(self, audio_path: Path) -> str:
+        """Транскрибировать аудио через faster-whisper."""
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(None, self._transcribe_sync, audio_path)
+
+    def _transcribe_sync(self, audio_path: Path) -> str:
+        """Синхронная транскрибация."""
+        self._load_model()
+        segments, info = self._model.transcribe(
+            str(audio_path),
+            language=self.language,
+            beam_size=5,
+        )
+        text = " ".join(segment.text.strip() for segment in segments)
+        logger.info("Транскрибация: %.1f сек, %d символов", info.duration, len(text))
+        return text
+
+    async def health_check(self) -> bool:
+        """Проверить доступность whisper."""
+        try:
+            self._load_model()
+            return self._model is not None
+        except Exception:
+            return False

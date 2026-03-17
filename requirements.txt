@@ -10,3 +10,6 @@ pgvector
 openai
 json-repair
 tiktoken
+httpx[socks]
+# Optional: local STT (macOS)
+# faster-whisper

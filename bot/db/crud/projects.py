@@ -1,0 +1,100 @@
+"""CRUD-операции для проектов (слонов)."""
+
+import uuid
+from typing import List, Optional
+
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from bot.db.models import Project, Task
+
+
+async def create_project(
+    session: AsyncSession,
+    user_id: int,
+    title: str,
+    description: Optional[str] = None,
+    category: str = "work",
+) -> Project:
+    """Создать проект."""
+    project = Project(
+        user_id=user_id,
+        title=title,
+        description=description,
+        category=category,
+    )
+    session.add(project)
+    await session.commit()
+    await session.refresh(project)
+    return project
+
+
+async def get_project_by_id(
+    session: AsyncSession,
+    project_id: uuid.UUID,
+) -> Optional[Project]:
+    """Получить проект по ID."""
+    result = await session.execute(
+        select(Project).where(Project.id == project_id)
+    )
+    return result.scalar_one_or_none()
+
+
+async def get_user_projects(
+    session: AsyncSession,
+    user_id: int,
+    status: str = "active",
+) -> List[Project]:
+    """Получить проекты пользователя."""
+    result = await session.execute(
+        select(Project)
+        .where(Project.user_id == user_id, Project.status == status)
+        .order_by(Project.created_at.desc())
+    )
+    return list(result.scalars().all())
+
+
+async def get_project_tasks(
+    session: AsyncSession,
+    project_id: uuid.UUID,
+) -> List[Task]:
+    """Получить задачи проекта."""
+    result = await session.execute(
+        select(Task)
+        .where(Task.project_id == project_id)
+        .order_by(Task.created_at.asc())
+    )
+    return list(result.scalars().all())
+
+
+async def update_project(
+    session: AsyncSession,
+    project_id: uuid.UUID,
+    user_id: int,
+    **updates,
+) -> Optional[Project]:
+    """Обновить проект."""
+    project = await get_project_by_id(session, project_id)
+    if not project or project.user_id != user_id:
+        return None
+    for key, value in updates.items():
+        if hasattr(project, key):
+            setattr(project, key, value)
+    await session.commit()
+    await session.refresh(project)
+    return project
+
+
+async def get_project_progress(
+    session: AsyncSession,
+    project_id: uuid.UUID,
+) -> dict:
+    """Получить прогресс проекта."""
+    tasks = await get_project_tasks(session, project_id)
+    total = len(tasks)
+    done = sum(1 for t in tasks if t.status == "done")
+    return {
+        "total": total,
+        "done": done,
+        "percent": int(done / total * 100) if total > 0 else 0,
+    }

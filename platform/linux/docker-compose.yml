@@ -1,0 +1,38 @@
+version: "3.8"
+
+services:
+  bot:
+    build:
+      context: ../..
+      dockerfile: platform/linux/Dockerfile
+    restart: always
+    env_file:
+      - ../../.env
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://notebook:password@db:5432/notebook_bot
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - backups:/app/backups
+
+  db:
+    image: pgvector/pgvector:pg15
+    restart: always
+    environment:
+      POSTGRES_USER: notebook
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: notebook_bot
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U notebook -d notebook_bot"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    ports:
+      - "127.0.0.1:5432:5432"
+
+volumes:
+  pgdata:
+  backups:
