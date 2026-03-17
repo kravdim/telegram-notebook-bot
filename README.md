@@ -16,17 +16,18 @@
 - **Командировки** (`/trip`) — отдельный список задач, адаптированный дайджест
 - **Голосовые сообщения** — STT + confirm перед обработкой
 - **Семантический поиск** — pgvector + pg_trgm, гибридный поиск по всем записям
+- **Статистика** (`/stats`) — лягушки, продуктивность, ценности
 
 ## Технический стек
 
 | Компонент | Технология |
 |-----------|-----------|
-| Язык | Python 3.9+ |
+| Язык | Python 3.12+ |
 | Telegram | aiogram 3.x (async) |
 | БД | PostgreSQL 15 + pgvector + pg_trgm |
 | ORM | SQLAlchemy 2.x async + asyncpg |
 | Миграции | Alembic |
-| LLM | DeepSeek V3.2 (main) + MiniMax M2.5 (fallback) через OpenAI SDK |
+| LLM | Gemini 3 Flash Preview (main) + DeepSeek (fallback) через OpenAI SDK |
 | Embedding | Ollama + nomic-embed-text (macOS) / API (VPS) |
 | STT | faster-whisper (macOS) / Groq API (VPS) |
 | Конфиг | Pydantic Settings + config.yaml + .env |
@@ -35,15 +36,15 @@
 
 ### Требования
 
-- Python 3.9+
+- Python 3.12+
 - PostgreSQL 15+ с расширениями `pgvector`, `pg_trgm`, `uuid-ossp`
-- API-ключи: Telegram Bot Token, DeepSeek, MiniMax (опционально)
+- API-ключи: Telegram Bot Token, Gemini / DeepSeek
 
 ### Установка
 
 ```bash
 # Клонировать
-git clone https://github.com/<your-user>/telegram-notebook-bot.git
+git clone https://github.com/kravdim/telegram-notebook-bot.git
 cd telegram-notebook-bot
 
 # Виртуальное окружение
@@ -77,6 +78,20 @@ chmod +x platform/macos/install.sh
 
 Бот будет автоматически запускаться при загрузке macOS и перезапускаться при сбоях.
 
+### VPS — Docker
+
+```bash
+cd platform/linux
+docker-compose up -d
+```
+
+Или через systemd:
+
+```bash
+chmod +x platform/linux/install.sh
+sudo ./platform/linux/install.sh
+```
+
 ## Структура проекта
 
 ```
@@ -86,35 +101,63 @@ bot/
 ├── middleware.py                # Whitelist middleware
 ├── handlers/
 │   ├── onboarding.py           # FSM онбординга (6 шагов)
-│   ├── commands.py             # /today, /tasks, /frog, /done, /help
+│   ├── commands.py             # /today, /tasks, /frog, /done, /notes, /projects,
+│   │                           # /memoir, /chrono, /focus, /stats, /settings, /help
 │   ├── messages.py             # Свободный текст → LLM → function call
 │   ├── callbacks.py            # Snooze, confirm удаления
-│   └── admin.py                # /status, /prompts (admin)
+│   ├── evening_review.py       # Разбор невыполненных задач
+│   ├── chronometry.py          # Обработка ответов хронометража
+│   ├── trip.py                 # Управление командировками
+│   ├── voice.py                # Голосовые → STT → confirm → обработка
+│   └── admin.py                # /status, /prompts, /adduser, /removeuser, /listusers
 ├── llm/
-│   ├── client.py               # LLMClient с fallback
+│   ├── client.py               # LLMClient с fallback (Gemini → DeepSeek)
 │   ├── queue.py                # PriorityQueue для LLM-запросов
-│   ├── functions.py            # JSON Schema function tools
-│   ├── dispatcher.py           # Исполнение function calls
-│   ├── prompts.py              # Промпты из БД + кэш
+│   ├── functions.py            # JSON Schema function tools (10 функций)
+│   ├── dispatcher.py           # Исполнение function calls + валидация
+│   ├── decompose.py            # LLM-декомпозиция проектов на задачи
+│   ├── prompts.py              # Промпты из БД + 5-мин кэш
 │   └── context.py              # История диалога + компрессия
 ├── db/
 │   ├── engine.py               # Async engine + session factory
 │   ├── models.py               # SQLAlchemy модели (12 таблиц)
 │   ├── crud/                   # CRUD-операции
-│   │   ├── tasks.py
-│   │   ├── users.py
-│   │   ├── reminders.py
-│   │   ├── notes.py
-│   │   ├── diary.py
-│   │   └── llm_logs.py
+│   │   ├── tasks.py            # Задачи, лягушки, поиск
+│   │   ├── users.py            # Пользователи, настройки
+│   │   ├── projects.py         # Проекты (слоны), прогресс
+│   │   ├── memoir.py           # Мемуарник, ценности, статистика
+│   │   ├── chronometry.py      # Хронометраж, дневная/недельная статистика
+│   │   ├── trips.py            # Командировки
+│   │   ├── reminders.py        # Напоминания, snooze
+│   │   ├── notes.py            # Заметки
+│   │   ├── diary.py            # Дневник
+│   │   └── llm_logs.py         # Логи LLM-запросов
 │   └── migrations/             # Alembic миграции
 ├── scheduler/
-│   ├── reminders.py            # Основной контур напоминаний
-│   ├── sweep.py                # Двойной контур (пропущенные)
-│   └── healthcheck.py          # Health check LLM
-├── embeddings/                 # (этап 9)
-├── stt/                        # (этап 10)
-└── formatters/                 # (этап 4+)
+│   ├── reminders.py            # Основной контур напоминаний (30 сек)
+│   ├── sweep.py                # Двойной контур: пропущенные (5 мин)
+│   ├── digest.py               # Утренний/вечерний дайджесты
+│   ├── memoir.py               # Вопросы мемуарника
+│   ├── chronometry.py          # Периодический опрос хронометража
+│   ├── healthcheck.py          # Health check (DB, LLM, Embedding)
+│   ├── backup.py               # pg_dump + ротация (30 дней)
+│   ├── log_rotation.py         # Ротация llm_logs (90 дней)
+│   └── reindex.py              # Переиндексация NULL embeddings
+├── embeddings/
+│   ├── base.py                 # Абстрактный интерфейс
+│   ├── ollama.py               # Ollama + nomic-embed-text (macOS)
+│   ├── cloud.py                # Облачный API (VPS)
+│   └── indexer.py              # Фоновая индексация
+├── stt/
+│   ├── base.py                 # Абстрактный интерфейс
+│   ├── local_whisper.py        # faster-whisper (macOS)
+│   └── cloud_stt.py            # Groq / OpenAI Whisper API (VPS)
+└── formatters/
+    ├── digest.py               # Утренний/вечерний дайджест
+    ├── evening_review.py       # Разбор невыполненных
+    ├── memoir.py               # Мемуарник + ценности
+    ├── chronometry.py          # Фотография рабочего дня
+    └── stats.py                # Статистика лягушек, продуктивности
 ```
 
 ## Модель данных
@@ -136,8 +179,8 @@ bot/
 | `create_note` | Создать заметку |
 | `create_diary_entry` | Запись в дневник |
 | `create_reminder` | Напоминание на конкретное время |
-| `search` | Поиск по задачам, заметкам, дневнику |
-| `create_project` | Создать «слона» |
+| `search` | Гибридный поиск по задачам, заметкам, дневнику, мемуарнику |
+| `create_project` | Создать «слона» с AI-декомпозицией на задачи |
 | `respond_to_user` | Свободный ответ |
 
 ## Надёжность
@@ -145,28 +188,12 @@ bot/
 - **Напоминания независимы от LLM** — если API лежит, напоминания отправляются из БД
 - **Write-ahead** — сначала запись в БД, потом подтверждение, потом фон
 - **Двойной контур** — основной (30 сек) + sweep (5 мин) для пропущенных напоминаний
-- **LLM fallback** — при сбое DeepSeek автоматический переход на MiniMax
+- **LLM fallback** — при сбое Gemini автоматический переход на DeepSeek
 - **Health check** — восстановление main каждые 5 минут
 - **Идемпотентность** — `digest_sent_date`, `memoir_asked_date`, `is_sent`
 - **json_repair** — автокоррекция невалидного JSON от LLM
-
-## Этапы разработки
-
-| Этап | Статус | Описание |
-|------|--------|----------|
-| 1. Фундамент | ✅ | Окружение, БД, Telegram, whitelist, онбординг, launchd |
-| 2. LLM-клиент | ✅ | DeepSeek/MiniMax fallback, function calling, промпты |
-| 3. Задачи + лягушка | ✅ | CRUD, приоритеты, snooze, двойной контур |
-| 4. Дайджесты | ⬜ | Утренний/вечерний, разбор невыполненных |
-| 5. Слоны | ⬜ | Проекты, декомпозиция через LLM |
-| 6. Мемуарник | ⬜ | ГСД, ценности, ревью |
-| 7. Хронометраж | ⬜ | Опрос, фокус, фотография дня |
-| 8. Командировки | ⬜ | Режим командировки |
-| 9. Заметки + RAG | ⬜ | Embedding, семантический поиск |
-| 10. Голос + мониторинг | ⬜ | STT, healthcheck, бэкапы |
-| 11. Статистика | ⬜ | /stats frogs, productivity, values |
-| 12. VPS-версия | ⬜ | Docker, systemd, cloud STT/embedding |
-| 13. Полировка | ⬜ | Тюнинг промптов, UX, нагрузочный тест |
+- **Бэкапы** — ежедневный pg_dump с ротацией 30 дней
+- **Graceful shutdown** — корректное завершение при SIGTERM
 
 ## Команды бота
 
@@ -178,8 +205,72 @@ bot/
 | `/tasks` | Все открытые задачи |
 | `/frog` | Лягушка дня |
 | `/done [текст]` | Отметить задачу выполненной |
+| `/projects` | Проекты (слоны) с прогресс-барами |
+| `/notes` | Последние заметки |
+| `/memoir` | Мемуарник + статистика ценностей |
+| `/chrono` | Фотография рабочего дня |
+| `/chrono week` | Недельная сводка хронометража |
+| `/focus [мин]` | Режим фокуса (по умолчанию 30 мин) |
+| `/trip` | Командировки (on/off) |
+| `/stats frogs` | Статистика лягушек |
+| `/stats productivity` | Статистика продуктивности |
+| `/stats values` | Статистика ценностей |
+| `/settings` | Текущие настройки |
+| `/status` | Статус сервисов (admin) |
 | `/prompts` | Список промптов (admin) |
-| `/status` | Статус бота (admin) |
+| `/adduser ID` | Добавить в whitelist (admin) |
+| `/removeuser ID` | Удалить из whitelist (admin) |
+| `/listusers` | Список пользователей (admin) |
+
+## Конфигурация
+
+### config.yaml
+
+```yaml
+llm:
+  main:
+    provider: gemini
+    model: gemini-3-flash-preview
+    base_url: https://generativelanguage.googleapis.com/v1beta/openai/
+    timeout_sec: 15
+    max_retries: 2
+  fallback:
+    provider: deepseek
+    model: deepseek-chat
+    base_url: https://api.deepseek.com/v1
+
+embedding:
+  provider: ollama          # или "cloud"
+  model: nomic-embed-text
+  base_url: http://localhost:11434
+
+stt:
+  provider: local_whisper   # или "groq", "openai"
+  model: medium
+  language: ru
+
+bot:
+  admin_telegram_ids: []
+  allowed_telegram_ids: []
+  default_timezone: Europe/Moscow
+```
+
+### .env
+
+```bash
+BOT_TOKEN=your_telegram_bot_token
+GEMINI_API_KEY=...
+DEEPSEEK_API_KEY=...
+DATABASE_URL=postgresql+asyncpg://notebook:password@localhost:5432/notebook_bot
+```
+
+## Деплой
+
+### macOS (LaunchAgent)
+Бот запускается как LaunchAgent с `KeepAlive=true`. Автоматический перезапуск при сбоях, логи в `~/Library/Logs/notebook-bot/`.
+
+### VPS (Docker)
+`docker-compose.yml` с PostgreSQL (pgvector) + ботом. Или standalone через systemd.
 
 ## Лицензия
 

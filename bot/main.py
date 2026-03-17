@@ -9,6 +9,7 @@ from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.fsm.storage.memory import MemoryStorage
+from aiogram.types import BotCommand, BotCommandScopeAllPrivateChats
 
 from bot.config import settings
 from bot.handlers import (
@@ -112,6 +113,26 @@ async def main() -> None:
 
     # Очистка контекста при старте
     clear_context()
+
+    # Меню команд в Telegram
+    await bot.set_my_commands(
+        [
+            BotCommand(command="today", description="Задачи на сегодня"),
+            BotCommand(command="tasks", description="Все открытые задачи"),
+            BotCommand(command="frog", description="Лягушка дня"),
+            BotCommand(command="done", description="Отметить задачу выполненной"),
+            BotCommand(command="projects", description="Проекты (слоны)"),
+            BotCommand(command="notes", description="Заметки"),
+            BotCommand(command="memoir", description="Мемуарник"),
+            BotCommand(command="chrono", description="Хронометраж"),
+            BotCommand(command="focus", description="Режим фокуса"),
+            BotCommand(command="trip", description="Командировка"),
+            BotCommand(command="stats", description="Статистика"),
+            BotCommand(command="settings", description="Настройки"),
+            BotCommand(command="help", description="Справка"),
+        ],
+        scope=BotCommandScopeAllPrivateChats(),
+    )
 
     # --- Фоновые задачи ---
 
