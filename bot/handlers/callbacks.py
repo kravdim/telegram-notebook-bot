@@ -6,6 +6,7 @@ from datetime import timedelta
 
 import pendulum
 from aiogram import F, Router
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.types import CallbackQuery
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
@@ -62,20 +63,24 @@ async def cb_snooze_done(callback: CallbackQuery) -> None:
     reminder_id = callback.data.split(":", 1)[1]
     await callback.answer("✅")
 
-    async with async_session() as session:
-        reminder = await get_reminder_by_id(session, uuid.UUID(reminder_id))
-        if reminder:
-            await mark_sent(session, reminder.id)
-            if reminder.task_id:
-                task = await complete_task_by_id(session, reminder.task_id, callback.from_user.id)
-                if task:
-                    await callback.message.edit_text(
-                        f"✅ Задача «{task.title}» выполнена!",
-                        parse_mode="HTML",
-                    )
-                    return
+    result_text = "✅ Готово!"
+    try:
+        async with async_session() as session:
+            reminder = await get_reminder_by_id(session, uuid.UUID(reminder_id))
+            if reminder:
+                await mark_sent(session, reminder.id)
+                if reminder.task_id:
+                    task = await complete_task_by_id(session, reminder.task_id, callback.from_user.id)
+                    if task:
+                        result_text = f"✅ Задача «{task.title}» выполнена!"
+    except Exception as e:
+        logger.error("Ошибка при обработке snooze_done: %s", e)
+        result_text = "✅ Готово!"
 
-    await callback.message.edit_text("✅ Готово!")
+    try:
+        await callback.message.edit_text(result_text, reply_markup=None)
+    except TelegramBadRequest:
+        pass  # Сообщение уже отредактировано (двойной клик)
 
 
 async def _do_snooze(
@@ -92,25 +97,30 @@ async def _do_snooze(
     else:
         new_time = pendulum.now("UTC").add(minutes=minutes)
 
-    async with async_session() as session:
-        reminder = await snooze_reminder(session, uuid.UUID(reminder_id), new_time)
+    try:
+        async with async_session() as session:
+            reminder = await snooze_reminder(session, uuid.UUID(reminder_id), new_time)
 
-    if not reminder:
-        await callback.message.edit_text("Напоминание не найдено.")
-        return
+        if not reminder:
+            await callback.message.edit_text("Напоминание не найдено.", reply_markup=None)
+            return
 
-    if reminder.snooze_count >= MAX_SNOOZE:
+        if reminder.snooze_count >= MAX_SNOOZE:
+            await callback.message.edit_text(
+                f"⚠️ Это напоминание уже откладывалось {reminder.snooze_count} раз.\n"
+                f"Напоминание: {reminder.message}\n\n"
+                "Может, пора взяться за это дело?",
+                reply_markup=None,
+            )
+            return
+
+        time_str = new_time.strftime("%d.%m %H:%M") if hasattr(new_time, 'strftime') else str(new_time)
         await callback.message.edit_text(
-            f"⚠️ Это напоминание уже откладывалось {reminder.snooze_count} раз.\n"
-            f"Напоминание: {reminder.message}\n\n"
-            "Может, пора взяться за это дело?"
+            f"⏰ Напомню: {time_str}\n{reminder.message}",
+            reply_markup=None,
         )
-        return
-
-    time_str = new_time.strftime("%d.%m %H:%M") if hasattr(new_time, 'strftime') else str(new_time)
-    await callback.message.edit_text(
-        f"⏰ Напомню: {time_str}\n{reminder.message}"
-    )
+    except TelegramBadRequest:
+        pass  # Сообщение уже отредактировано (двойной клик)
 
 
 # --- Confirm удаления задач ---

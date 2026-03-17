@@ -25,7 +25,15 @@
     <key>EnvironmentVariables</key>
     <dict>
         <key>PATH</key>
-        <string>/usr/local/bin:/usr/bin:/bin</string>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+        <key>PYTHONPATH</key>
+        <string>__PROJECT_PATH__</string>
+        <key>HTTP_PROXY</key>
+        <string>http://127.0.0.1:1081</string>
+        <key>HTTPS_PROXY</key>
+        <string>http://127.0.0.1:1081</string>
+        <key>ALL_PROXY</key>
+        <string>socks5://127.0.0.1:1080</string>
     </dict>
 </dict>
 </plist>

@@ -37,6 +37,7 @@ class Settings(BaseSettings):
     bot_token: str = ""
 
     # LLM
+    gemini_api_key: str = ""
     deepseek_api_key: str = ""
     minimax_api_key: str = ""
     groq_api_key: str = ""

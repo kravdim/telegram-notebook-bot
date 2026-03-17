@@ -44,6 +44,7 @@ class LLMClient:
 
         # API ключи по провайдеру
         api_keys = {
+            "gemini": settings.gemini_api_key,
             "deepseek": settings.deepseek_api_key,
             "minimax": settings.minimax_api_key,
             "openai": settings.openai_api_key,
