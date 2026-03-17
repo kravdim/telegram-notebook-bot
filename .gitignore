@@ -1,0 +1,50 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Virtual environment
+.venv/
+venv/
+env/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# macOS
+.DS_Store
+._*
+
+# Environment / secrets
+.env
+*.env.local
+
+# Logs
+*.log
+logs/
+
+# Database
+*.sql.bak
+*.dump
+
+# Alembic
+alembic.ini.local
+
+# Config with real values (use .example files)
+config.yaml
+
+# Claude Code
+.claude/
+
+# Misc
+*.zip
+project/

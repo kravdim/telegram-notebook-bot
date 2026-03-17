@@ -1,0 +1,12 @@
+aiogram>=3.4
+sqlalchemy[asyncio]>=2.0
+asyncpg
+apscheduler>=3.10
+pydantic-settings
+pendulum
+alembic
+pyyaml
+pgvector
+openai
+json-repair
+tiktoken

@@ -1,0 +1,52 @@
+llm:
+  main:
+    provider: deepseek
+    model: deepseek-chat
+    base_url: https://api.deepseek.com/v1
+    timeout_sec: 15
+    max_retries: 2
+  fallback:
+    provider: minimax
+    model: MiniMax-M2.5
+    base_url: https://api.minimax.chat/v1
+    timeout_sec: 15
+    max_retries: 1
+
+embedding:
+  provider: ollama  # или "cloud"
+  model: nomic-embed-text
+  base_url: http://localhost:11434
+  dimensions: 768
+
+stt:
+  provider: local_whisper  # или "groq", "openai"
+  model: medium
+  language: ru
+
+bot:
+  admin_telegram_ids: []
+  allowed_telegram_ids: []
+  default_timezone: Europe/Moscow
+
+scheduler:
+  healthcheck_interval_min: 5
+  sweep_interval_min: 5
+  backup_hour: 3
+  backup_retention_days: 30
+  llm_log_retention_days: 90
+
+chronometry:
+  default_interval_min: 60
+  onboarding_week1_interval: 60
+  onboarding_week2_interval: 30
+  target_interval: 15
+  ignore_threshold: 3
+
+search:
+  semantic_weight: 0.6
+  text_weight: 0.4
+  top_k: 5
+
+context:
+  max_tokens: 3000
+  keep_recent_pairs: 5
