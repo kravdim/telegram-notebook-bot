@@ -46,6 +46,21 @@ async def handle_text(message: Message) -> None:
     user_id = message.from_user.id
     text = message.text.strip()
 
+    # Проверяем, ожидается ли ответ на хронометраж
+    from bot.scheduler.chronometry import is_awaiting_response, clear_awaiting
+    if is_awaiting_response(user_id):
+        clear_awaiting(user_id)
+        await message.bot.send_chat_action(chat_id=message.chat.id, action="typing")
+
+        async with async_session() as session:
+            user = await get_user(session, user_id)
+        user_tz = user.timezone if user else "Europe/Moscow"
+
+        from bot.handlers.chronometry import process_chronometry_response
+        result = await process_chronometry_response(user_id, text, user_tz)
+        await message.answer(result)
+        return
+
     # Typing indicator
     await message.bot.send_chat_action(chat_id=message.chat.id, action="typing")
 

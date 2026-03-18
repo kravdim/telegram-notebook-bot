@@ -13,6 +13,19 @@ logger = logging.getLogger(__name__)
 # user_id → timestamp последнего вопроса
 _last_asked: dict[int, float] = {}
 
+# user_id → True если ожидаем ответ на хронометраж
+_awaiting_response: dict[int, bool] = {}
+
+
+def is_awaiting_response(user_id: int) -> bool:
+    """Проверить, ожидается ли ответ на хронометраж от пользователя."""
+    return _awaiting_response.get(user_id, False)
+
+
+def clear_awaiting(user_id: int) -> None:
+    """Очистить флаг ожидания ответа."""
+    _awaiting_response.pop(user_id, None)
+
 
 async def send_chronometry_prompts(bot: Bot) -> None:
     """Проверить и отправить вопросы хронометража."""
@@ -27,8 +40,8 @@ async def send_chronometry_prompts(bot: Bot) -> None:
             tz = user.timezone or "Europe/Moscow"
             now = pendulum.now(tz)
 
-            # Не беспокоим в нерабочее время
-            if now.day_of_week not in user.work_days:
+            # Не беспокоим в нерабочее время (work_days: ISO 1=Пн...7=Вс)
+            if now.isoweekday() not in user.work_days:
                 continue
 
             current_time = now.time()
@@ -48,6 +61,7 @@ async def send_chronometry_prompts(bot: Bot) -> None:
                 continue
 
             _last_asked[user.telegram_id] = now.timestamp()
+            _awaiting_response[user.telegram_id] = True
 
             await bot.send_message(
                 chat_id=user.telegram_id,
