@@ -18,12 +18,14 @@ class LLMResponse:
         self,
         content: Optional[str] = None,
         function_call: Optional[Dict[str, Any]] = None,
+        function_calls: Optional[List[Dict[str, Any]]] = None,
         model: str = "",
         total_tokens: int = 0,
         latency_ms: int = 0,
     ):
         self.content = content
         self.function_call = function_call
+        self.function_calls = function_calls or []
         self.model = model
         self.total_tokens = total_tokens
         self.latency_ms = latency_ms
@@ -131,17 +133,22 @@ class LLMClient:
                 choice = response.choices[0]
                 content = choice.message.content
                 function_call = None
+                function_calls = []
 
                 if choice.message.tool_calls:
-                    tc = choice.message.tool_calls[0]
-                    function_call = {
-                        "name": tc.function.name,
-                        "arguments": tc.function.arguments,
-                    }
+                    for tc in choice.message.tool_calls:
+                        fc = {
+                            "name": tc.function.name,
+                            "arguments": tc.function.arguments,
+                        }
+                        function_calls.append(fc)
+                    # Обратная совместимость: первый вызов в function_call
+                    function_call = function_calls[0] if function_calls else None
 
                 return LLMResponse(
                     content=content,
                     function_call=function_call,
+                    function_calls=function_calls,
                     model=model,
                     total_tokens=response.usage.total_tokens if response.usage else 0,
                     latency_ms=elapsed_ms,

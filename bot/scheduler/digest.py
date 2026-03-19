@@ -6,7 +6,7 @@ import pendulum
 from aiogram import Bot
 
 from bot.db.crud.projects import get_project_progress, get_user_projects
-from bot.db.crud.tasks import get_frog, get_today_tasks, get_user_tasks
+from bot.db.crud.tasks import get_completed_today, get_frog, get_today_tasks, get_user_tasks
 from bot.db.crud.trips import get_active_trip
 from bot.db.crud.users import get_all_users, update_user_settings
 from bot.db.engine import async_session
@@ -44,11 +44,22 @@ async def send_digests(bot: Bot) -> None:
 
             sent_date = user.digest_sent_date
 
+            # Идемпотентность: digest_sent_date хранит дату последнего
+            # отправленного дайджеста. Формат: date.
+            # None или вчера → можно отправить утренний.
+            # == today → утренний отправлен, можно отправить вечерний.
+            # == today + 0.5 дня (tomorrow) → оба отправлены (используем tomorrow как маркер).
+
+            morning_sent = sent_date is not None and sent_date >= today
+            # Вечерний маркер: sent_date == завтра (today + 1)
+            tomorrow = today + pendulum.duration(days=1)
+            evening_sent = sent_date is not None and sent_date >= tomorrow
+
             # Утренний дайджест
             if (
                 now >= morning_target
                 and now <= morning_target.add(minutes=5)
-                and sent_date != today
+                and not morning_sent
             ):
                 await _send_morning(bot, user, today, tz)
                 async with async_session() as session:
@@ -56,15 +67,18 @@ async def send_digests(bot: Bot) -> None:
                         session, user.telegram_id, digest_sent_date=today
                     )
 
-            # Вечерний дайджест
+            # Вечерний дайджест (не зависит от утреннего)
             if (
                 now >= evening_target
                 and now <= evening_target.add(minutes=5)
-                and sent_date == today  # Утренний уже отправлен
+                and not evening_sent
             ):
-                # Используем специальную дату для отметки вечернего
-                # Если digest_sent_date == today, утренний отправлен; отправляем вечерний
                 await _send_evening(bot, user, today, tz)
+                # Маркер: ставим завтрашнюю дату чтобы не повторять
+                async with async_session() as session:
+                    await update_user_settings(
+                        session, user.telegram_id, digest_sent_date=tomorrow
+                    )
 
         except Exception as e:
             logger.error(
@@ -108,15 +122,8 @@ async def _send_evening(bot: Bot, user, today, tz: str) -> None:
     """Отправить вечерний дайджест."""
     async with async_session() as session:
         all_tasks = await get_user_tasks(session, user.telegram_id, status="open")
-        completed = await get_user_tasks(session, user.telegram_id, status="done")
+        completed_today = await get_completed_today(session, user.telegram_id, today, tz)
         frog = await get_frog(session, user.telegram_id)
-
-    # Фильтруем выполненные за сегодня
-    completed_today = [
-        t for t in completed
-        if hasattr(t, 'created_at') and t.created_at
-        and pendulum.instance(t.created_at).in_tz(tz).date() == today
-    ]
 
     # Оставшиеся на сегодня
     remaining = [

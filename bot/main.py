@@ -2,11 +2,13 @@
 
 import asyncio
 import logging
+import os
 import signal
 import sys
 
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
+from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.enums import ParseMode
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import BotCommand, BotCommandScopeAllPrivateChats
@@ -89,9 +91,14 @@ async def main() -> None:
         logger.error("BOT_TOKEN не задан в .env!")
         sys.exit(1)
 
+    # Прокси для Telegram API (из env: ALL_PROXY или HTTPS_PROXY)
+    proxy_url = os.environ.get("ALL_PROXY") or os.environ.get("HTTPS_PROXY")
+    session = AiohttpSession(proxy=proxy_url) if proxy_url else None
+
     bot = Bot(
         token=settings.bot_token,
         default=DefaultBotProperties(parse_mode=ParseMode.HTML),
+        session=session,
     )
     dp = Dispatcher(storage=MemoryStorage())
 

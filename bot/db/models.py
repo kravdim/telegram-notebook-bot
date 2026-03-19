@@ -133,6 +133,7 @@ class Task(Base):
     status: Mapped[str] = mapped_column(Text, nullable=False, default="open")
     resolution: Mapped[Optional[str]] = mapped_column(Text)
     tags: Mapped[List[str]] = mapped_column(ARRAY(Text), default=[])
+    completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default="now()"
     )

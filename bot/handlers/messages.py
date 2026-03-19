@@ -120,55 +120,64 @@ async def handle_text(message: Message) -> None:
         )
 
     # Обработка ответа
-    if response.function_call:
-        result = await dispatch(response.function_call, user_id, user_tz)
+    if response.function_calls:
+        all_results = []
 
-        # Специальный случай: confirm удаления
-        if result.startswith("CONFIRM_DELETE:"):
-            parts = result.split(":", 2)
-            task_id = parts[1]
-            task_title = parts[2]
-            from bot.handlers.callbacks import build_delete_confirm_keyboard
-            kb = build_delete_confirm_keyboard(task_id)
-            await message.answer(
-                f"Нашёл задачу «{task_title}». Удалить?",
-                reply_markup=kb.as_markup(),
-            )
-            return
+        for fc in response.function_calls:
+            result = await dispatch(fc, user_id, user_tz)
 
-        # Специальный случай: проект создан → декомпозиция
-        if result.startswith("PROJECT_CREATED:"):
-            parts = result.split(":", 2)
-            project_id = parts[1]
-            project_title = parts[2]
-            await message.answer(
-                f"🐘 Проект «{project_title}» создан!\n"
-                "Сейчас декомпозирую на задачи..."
-            )
-            await message.bot.send_chat_action(chat_id=message.chat.id, action="typing")
-
-            from bot.llm.decompose import decompose_project, create_project_tasks
-            task_titles = await decompose_project(
-                llm_client, llm_queue, user_id, project_id, project_title,
-            )
-            if task_titles:
-                created = await create_project_tasks(user_id, project_id, task_titles)
-                tasks_list = "\n".join(f"  • {t}" for t in task_titles)
-                add_message(user_id, "assistant", f"Проект создан с {created} задачами")
+            # Специальный случай: confirm удаления
+            if result.startswith("CONFIRM_DELETE:"):
+                parts = result.split(":", 2)
+                task_id = parts[1]
+                task_title = parts[2]
+                from bot.handlers.callbacks import build_delete_confirm_keyboard
+                kb = build_delete_confirm_keyboard(task_id)
                 await message.answer(
-                    f"Создано {created} задач:\n{tasks_list}\n\n"
-                    "Смотри /projects для прогресса."
+                    f"Нашёл задачу «{task_title}». Удалить?",
+                    reply_markup=kb.as_markup(),
                 )
-            else:
-                add_message(user_id, "assistant", "Проект создан")
-                await message.answer(
-                    "Не удалось автоматически декомпозировать. "
-                    "Добавь задачи вручную."
-                )
-            return
+                continue
 
-        add_message(user_id, "assistant", result)
-        await message.answer(result)
+            # Специальный случай: проект создан → декомпозиция
+            if result.startswith("PROJECT_CREATED:"):
+                parts = result.split(":", 2)
+                project_id = parts[1]
+                project_title = parts[2]
+                await message.answer(
+                    f"🐘 Проект «{project_title}» создан!\n"
+                    "Сейчас декомпозирую на задачи..."
+                )
+                await message.bot.send_chat_action(chat_id=message.chat.id, action="typing")
+
+                from bot.llm.decompose import decompose_project, create_project_tasks
+                task_titles = await decompose_project(
+                    llm_client, llm_queue, user_id, project_id, project_title,
+                )
+                if task_titles:
+                    created = await create_project_tasks(user_id, project_id, task_titles)
+                    tasks_list = "\n".join(f"  • {t}" for t in task_titles)
+                    all_results.append(f"Проект создан с {created} задачами")
+                    await message.answer(
+                        f"Создано {created} задач:\n{tasks_list}\n\n"
+                        "Смотри /projects для прогресса."
+                    )
+                else:
+                    all_results.append("Проект создан")
+                    await message.answer(
+                        "Не удалось автоматически декомпозировать. "
+                        "Добавь задачи вручную."
+                    )
+                continue
+
+            all_results.append(result)
+
+        # Отправляем все результаты одним сообщением
+        if all_results:
+            combined = "\n\n".join(all_results)
+            add_message(user_id, "assistant", combined)
+            await message.answer(combined)
+
     elif response.content:
         add_message(user_id, "assistant", response.content)
         await message.answer(response.content)
@@ -217,6 +226,12 @@ def _default_intent_prompt() -> str:
         "create_reminder, search, create_project или respond_to_user.\n\n"
         "Текущая дата и время: {now}\n"
         "Часовой пояс: {timezone}\n\n"
+        "ВАЖНО: В одном сообщении может быть несколько намерений. Например:\n"
+        "«Завтра встреча с Иваном в 15:00, а ещё надо купить продукты» — это ДВЕ задачи.\n"
+        "«Напомни в 12 про звонок и запиши задачу сходить в банк» — это задача + напоминание.\n"
+        "В таких случаях вызывай НЕСКОЛЬКО функций одновременно (multiple tool calls).\n\n"
+        "Также учитывай контекст предыдущих сообщений. Если пользователь пишет "
+        "«а ещё...» или «и ещё...» — это дополнение к предыдущему сообщению.\n\n"
         "Если пользователь просто общается — используй respond_to_user.\n"
         "Всегда отвечай на русском языке. Будь дружелюбным и поддерживающим."
     )

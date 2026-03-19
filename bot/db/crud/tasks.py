@@ -4,6 +4,7 @@ import uuid
 from datetime import date, datetime
 from typing import Any, Dict, List, Optional
 
+import pendulum
 from sqlalchemy import select, and_
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -155,6 +156,7 @@ async def complete_task(
     task = tasks[0]
     task.status = "done"
     task.resolution = "completed"
+    task.completed_at = pendulum.now("UTC")
     await session.commit()
     await session.refresh(task)
     return task
@@ -172,6 +174,7 @@ async def complete_task_by_id(
 
     task.status = "done"
     task.resolution = "completed"
+    task.completed_at = pendulum.now("UTC")
     await session.commit()
     await session.refresh(task)
     return task
@@ -195,6 +198,29 @@ async def update_task(
     await session.commit()
     await session.refresh(task)
     return task
+
+
+async def get_completed_today(
+    session: AsyncSession,
+    user_id: int,
+    today: date,
+    tz: str = "Europe/Moscow",
+) -> List[Task]:
+    """Получить задачи, выполненные сегодня."""
+    start_of_day = pendulum.datetime(today.year, today.month, today.day, tz=tz)
+    end_of_day = start_of_day.add(days=1)
+
+    result = await session.execute(
+        select(Task)
+        .where(
+            Task.user_id == user_id,
+            Task.status == "done",
+            Task.completed_at >= start_of_day,
+            Task.completed_at < end_of_day,
+        )
+        .order_by(Task.completed_at.asc())
+    )
+    return list(result.scalars().all())
 
 
 async def delete_task(

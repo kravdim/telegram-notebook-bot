@@ -11,5 +11,6 @@ openai
 json-repair
 tiktoken
 httpx[socks]
+aiohttp-socks
 # Optional: local STT (macOS)
 faster-whisper
