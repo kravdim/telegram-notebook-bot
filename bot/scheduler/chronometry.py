@@ -1,20 +1,36 @@
 """Планировщик хронометража: периодический опрос в рабочее время."""
 
 import logging
+import random
 
 import pendulum
 from aiogram import Bot
 
-from bot.db.crud.users import get_all_users
+from bot.db.crud.users import get_all_users, update_user_settings
 from bot.db.engine import async_session
 
 logger = logging.getLogger(__name__)
 
-# user_id → timestamp последнего вопроса
-_last_asked: dict[int, float] = {}
-
 # user_id → True если ожидаем ответ на хронометраж
 _awaiting_response: dict[int, bool] = {}
+
+# user_id → индекс последнего вопроса (чтобы не повторять подряд)
+_last_question_idx: dict[int, int] = {}
+
+_CHRONOMETRY_QUESTIONS = [
+    "⏱ Чем занимаешься сейчас?",
+    "⏱ Что делаешь в данный момент?",
+    "⏱ На чём сейчас сфокусирован?",
+    "⏱ Чем сейчас занят?",
+    "⏱ Как проводишь время прямо сейчас?",
+    "⏱ Что сейчас в работе?",
+    "⏱ Расскажи, чем занят?",
+    "⏱ Над чем сейчас работаешь?",
+    "⏱ Что происходит прямо сейчас?",
+    "⏱ Чему посвящаешь время сейчас?",
+    "⏱ Как дела? Чем занят?",
+    "⏱ Что на повестке прямо сейчас?",
+]
 
 
 def is_awaiting_response(user_id: int) -> bool:
@@ -54,18 +70,31 @@ async def send_chronometry_prompts(bot: Bot) -> None:
                 if now < focus_until:
                     continue
 
-            # Проверяем интервал
+            # Проверяем интервал (из БД, переживает рестарты)
             interval_sec = user.chronometry_interval_min * 60
-            last = _last_asked.get(user.telegram_id, 0)
-            if now.timestamp() - last < interval_sec:
-                continue
+            if user.chronometry_last_asked:
+                last = pendulum.instance(user.chronometry_last_asked)
+                if (now - last).in_seconds() < interval_sec:
+                    continue
 
-            _last_asked[user.telegram_id] = now.timestamp()
+            # Обновляем timestamp в БД
+            async with async_session() as session:
+                await update_user_settings(
+                    session, user.telegram_id,
+                    chronometry_last_asked=now,
+                )
+
             _awaiting_response[user.telegram_id] = True
+
+            # Выбираем вопрос, отличный от предыдущего
+            last_idx = _last_question_idx.get(user.telegram_id, -1)
+            available = [i for i in range(len(_CHRONOMETRY_QUESTIONS)) if i != last_idx]
+            idx = random.choice(available)
+            _last_question_idx[user.telegram_id] = idx
 
             await bot.send_message(
                 chat_id=user.telegram_id,
-                text="⏱ Чем занимаешься сейчас?",
+                text=_CHRONOMETRY_QUESTIONS[idx],
             )
             logger.info("Хронометраж: вопрос отправлен %s", user.telegram_id)
 

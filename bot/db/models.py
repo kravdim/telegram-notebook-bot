@@ -49,6 +49,8 @@ class User(Base):
     onboarding_completed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     digest_sent_date: Mapped[Optional[date]] = mapped_column(Date)
     memoir_asked_date: Mapped[Optional[date]] = mapped_column(Date)
+    chronometry_last_asked: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    tasks_reminder_last_hour: Mapped[Optional[int]] = mapped_column(Integer)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default="now()"
     )

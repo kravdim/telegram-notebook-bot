@@ -29,6 +29,7 @@ from bot.scheduler.healthcheck import check_llm_health
 from bot.scheduler.log_rotation import rotate_llm_logs
 from bot.scheduler.memoir import send_memoir_prompts
 from bot.scheduler.reminders import send_pending_reminders
+from bot.scheduler.task_reminders import send_task_reminders
 from bot.scheduler.reindex import reindex_missing_embeddings
 from bot.scheduler.sweep import sweep_missed_reminders
 
@@ -197,6 +198,15 @@ async def main() -> None:
             except Exception as e:
                 logger.error("Chronometry loop error: %s", e)
 
+    async def _task_reminders_loop():
+        """Напоминание актуальных задач каждые 2 часа в рабочее время."""
+        while True:
+            await asyncio.sleep(60)
+            try:
+                await send_task_reminders(bot)
+            except Exception as e:
+                logger.error("Task reminders loop error: %s", e)
+
     async def _maintenance_loop():
         """Обслуживание: бэкап, ротация логов, реиндекс — раз в час."""
         while True:
@@ -220,6 +230,7 @@ async def main() -> None:
     asyncio.create_task(_digest_loop())
     asyncio.create_task(_memoir_loop())
     asyncio.create_task(_chronometry_loop())
+    asyncio.create_task(_task_reminders_loop())
     asyncio.create_task(_maintenance_loop())
 
     # Middleware

@@ -223,6 +223,43 @@ async def get_completed_today(
     return list(result.scalars().all())
 
 
+async def count_similar_completed(
+    session: AsyncSession,
+    user_id: int,
+    title: str,
+) -> tuple[int, Optional[datetime]]:
+    """Подсчитать похожие выполненные задачи. Возвращает (count, last_completed_at).
+
+    Ищет по ключевым словам из заголовка (ILIKE по каждому слову длиннее 3 символов).
+    """
+    # Извлекаем значимые слова
+    words = [w for w in title.lower().split() if len(w) > 3]
+    if not words:
+        return 0, None
+
+    from sqlalchemy import func, or_
+
+    # Ищем задачи, содержащие хотя бы одно ключевое слово
+    conditions = [func.lower(Task.title).contains(w) for w in words[:3]]
+
+    result = await session.execute(
+        select(Task)
+        .where(
+            Task.user_id == user_id,
+            Task.status == "done",
+            or_(*conditions),
+        )
+        .order_by(Task.completed_at.desc().nullslast())
+    )
+    tasks = list(result.scalars().all())
+
+    if not tasks:
+        return 0, None
+
+    last_at = tasks[0].completed_at if tasks else None
+    return len(tasks), last_at
+
+
 async def delete_task(
     session: AsyncSession,
     task_id: uuid.UUID,

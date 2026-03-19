@@ -88,8 +88,22 @@ FUNCTIONS = [
         },
     },
     {
+        "name": "list_tasks",
+        "description": "Показать список задач. Используй когда пользователь спрашивает 'какие дела', 'что на сегодня', 'список задач', 'мои задачи'",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "scope": {
+                    "type": "string",
+                    "enum": ["today", "all", "overdue"],
+                    "description": "today — задачи на сегодня (включая просроченные и лягушки), all — все открытые, overdue — только просроченные",
+                },
+            },
+        },
+    },
+    {
         "name": "search",
-        "description": "Семантический поиск по заметкам, дневнику, задачам",
+        "description": "Текстовый поиск по содержимому заметок, дневника, задач, мемуарника",
         "parameters": {
             "type": "object",
             "properties": {

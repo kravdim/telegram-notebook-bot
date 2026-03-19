@@ -12,7 +12,11 @@ from bot.db.crud.diary import create_diary_entry
 from bot.db.crud.notes import create_note
 from bot.db.crud.projects import create_project as crud_create_project
 from bot.db.crud.reminders import create_reminder
-from bot.db.crud.tasks import create_task, complete_task, search_tasks, update_task as crud_update_task
+from bot.db.crud.tasks import (
+    count_similar_completed, create_task, complete_task, get_frog,
+    get_today_tasks, get_user_tasks, search_tasks,
+    update_task as crud_update_task,
+)
 from bot.db.engine import async_session
 
 logger = logging.getLogger(__name__)
@@ -55,6 +59,8 @@ async def dispatch(
             return await _handle_create_diary(user_id, args)
         elif name == "create_reminder":
             return await _handle_create_reminder(user_id, args, user_timezone)
+        elif name == "list_tasks":
+            return await _handle_list_tasks(user_id, args, user_timezone)
         elif name == "respond_to_user":
             return args.get("message", "")
         elif name == "search":
@@ -155,6 +161,9 @@ async def _handle_create_task(
             remind_before_min=args.get("remind_before_min"),
         )
 
+        # Проверяем, повторяющаяся ли это задача
+        similar_count, last_at = await count_similar_completed(session, user_id, title)
+
     parts = [f"Задача создана: {task.title}"]
     if due_date:
         parts.append(f"📅 {due_date.strftime('%d.%m.%Y')}")
@@ -164,16 +173,91 @@ async def _handle_create_task(
         parts.append(f"🔔 Напомню: {remind_at.strftime('%d.%m %H:%M')}")
     if is_frog:
         parts.append("🐸 Лягушка!")
-    return " ".join(parts) + " ✅"
+
+    result = " ".join(parts) + " ✅"
+
+    # Комментарий для повторяющихся задач
+    if similar_count >= 2:
+        result += "\n" + _recurring_create_comment(title, similar_count, last_at, tz)
+
+    return result
 
 
 async def _handle_complete_task(user_id: int, args: Dict[str, Any]) -> str:
     query = args.get("search_query", "")
     async with async_session() as session:
         task = await complete_task(session, user_id, query)
-    if task:
-        return f"Задача «{task.title}» выполнена! 🎉"
-    return "Не нашёл такую задачу. Уточни название."
+        if not task:
+            return "Не нашёл такую задачу. Уточни название."
+
+        # Считаем сколько раз подобное уже выполнялось (включая текущий)
+        similar_count, _ = await count_similar_completed(session, user_id, task.title)
+
+    result = f"Задача «{task.title}» выполнена! 🎉"
+
+    if similar_count >= 2:
+        result += "\n" + _recurring_complete_comment(task.title, similar_count)
+
+    return result
+
+
+def _recurring_create_comment(title: str, count: int, last_at, tz: str) -> str:
+    """Комментарий при создании повторяющейся задачи."""
+    import random
+
+    if last_at:
+        last_local = pendulum.instance(last_at).in_tz(tz)
+        days_ago = (pendulum.now(tz) - last_local).in_days()
+    else:
+        days_ago = None
+
+    comments = [
+        f"🔄 Знакомая задача! Ты уже делал подобное {count} раз.",
+        f"🔄 О, снова! Это уже {count}-й раз — настоящая рутина 💪",
+        f"🔄 Похоже, это регулярное дело (выполнено {count} раз). Ты профи!",
+        f"🔄 Уже {count}-й раз! Может, стоит сделать повторяющуюся задачу? 😉",
+    ]
+
+    if count >= 10:
+        comments.extend([
+            f"🔄 {count} раз! Это уже традиция 🏆",
+            f"🔄 Ветеран! {count}-е выполнение этой задачи.",
+        ])
+
+    if days_ago is not None and days_ago <= 1:
+        comments.append("🔄 Только вчера делал — и снова! Вот это темп 🚀")
+
+    result = random.choice(comments)
+
+    if days_ago is not None and days_ago > 0:
+        result += f"\n📊 Последний раз: {days_ago} дн. назад"
+
+    return result
+
+
+def _recurring_complete_comment(title: str, count: int) -> str:
+    """Комментарий при завершении повторяющейся задачи."""
+    import random
+
+    if count <= 3:
+        comments = [
+            f"📊 Это уже {count}-й раз! Начинается традиция.",
+            f"📊 {count}-е выполнение. Входишь в ритм!",
+        ]
+    elif count <= 10:
+        comments = [
+            f"📊 {count}-й раз! Стабильность — признак мастерства 💪",
+            f"📊 Уже {count} раз — ты машина! 🤖",
+            f"📊 {count}-е выполнение. Рутина? Нет, дисциплина! 💪",
+        ]
+    else:
+        comments = [
+            f"📊 {count}-й раз! Легенда! 🏆",
+            f"📊 {count} выполнений — впечатляет! Настоящий профессионал.",
+            f"📊 Ого, уже {count}! Это дело — часть твоей жизни 😄",
+        ]
+
+    return random.choice(comments)
 
 
 async def _handle_create_note(user_id: int, args: Dict[str, Any]) -> str:
@@ -224,6 +308,51 @@ async def _handle_create_reminder(
         )
 
     return f"Напоминание установлено: {message}\n🔔 {remind_at.strftime('%d.%m.%Y %H:%M')}"
+
+
+async def _handle_list_tasks(
+    user_id: int, args: Dict[str, Any], tz: str
+) -> str:
+    scope = args.get("scope", "today")
+    today = pendulum.now(tz).date()
+
+    async with async_session() as session:
+        if scope == "today":
+            tasks = await get_today_tasks(session, user_id, today)
+            frog = await get_frog(session, user_id)
+            if not tasks:
+                return "На сегодня задач нет. Свободный день! 🎉"
+
+            lines = ["📋 Задачи на сегодня:\n"]
+            for t in tasks:
+                icon = "🐸" if t.is_frog else ("🔴" if t.priority == "high" else "📌")
+                time_str = f" ⏰ {t.due_time.strftime('%H:%M')}" if t.due_time else ""
+                date_str = ""
+                if t.due_date and t.due_date < today:
+                    date_str = f" ⚠️ просрочена с {t.due_date.strftime('%d.%m')}"
+                lines.append(f"{icon} {t.title}{time_str}{date_str}")
+            return "\n".join(lines)
+
+        elif scope == "overdue":
+            all_tasks = await get_user_tasks(session, user_id, status="open")
+            overdue = [t for t in all_tasks if t.due_date and t.due_date < today]
+            if not overdue:
+                return "Просроченных задач нет 👍"
+            lines = ["⚠️ Просроченные задачи:\n"]
+            for t in overdue:
+                lines.append(f"📌 {t.title} (дедлайн {t.due_date.strftime('%d.%m')})")
+            return "\n".join(lines)
+
+        else:  # all
+            tasks = await get_user_tasks(session, user_id, status="open")
+            if not tasks:
+                return "Открытых задач нет. Всё сделано! 🎉"
+            lines = ["📋 Все открытые задачи:\n"]
+            for t in tasks:
+                icon = "🐸" if t.is_frog else ("🔴" if t.priority == "high" else "📌")
+                date_str = f" 📅 {t.due_date.strftime('%d.%m')}" if t.due_date else ""
+                lines.append(f"{icon} {t.title}{date_str}")
+            return "\n".join(lines)
 
 
 async def _handle_search(user_id: int, args: Dict[str, Any]) -> str:
