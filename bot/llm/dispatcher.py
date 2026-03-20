@@ -333,6 +333,16 @@ async def _handle_list_tasks(
                 lines.append(f"{icon} {t.title}{time_str}{date_str}")
             return "\n".join(lines)
 
+        elif scope == "done_today":
+            from bot.db.crud.tasks import get_completed_today
+            completed = await get_completed_today(session, user_id, today, tz)
+            if not completed:
+                return "Сегодня пока ничего не выполнено."
+            lines = [f"✅ Выполнено сегодня: {len(completed)}\n"]
+            for t in completed:
+                lines.append(f"  • {t.title}")
+            return "\n".join(lines)
+
         elif scope == "overdue":
             all_tasks = await get_user_tasks(session, user_id, status="open")
             overdue = [t for t in all_tasks if t.due_date and t.due_date < today]

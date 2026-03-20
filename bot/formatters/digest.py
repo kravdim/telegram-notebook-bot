@@ -92,15 +92,13 @@ def format_evening_digest(
     # Выполненные
     if completed_tasks:
         parts.append(f"\n✅ <b>Выполнено: {len(completed_tasks)}</b>")
-        for t in completed_tasks[:5]:
+        for t in completed_tasks:
             parts.append(f"  • {t.title}")
-        if len(completed_tasks) > 5:
-            parts.append(f"  ... и ещё {len(completed_tasks) - 5}")
 
     # Невыполненные
     if remaining_tasks:
         parts.append(f"\n📌 <b>Осталось: {len(remaining_tasks)}</b>")
-        for t in remaining_tasks[:5]:
+        for t in remaining_tasks:
             emoji = _PRIORITY_EMOJI.get(t.priority, "⚪")
             parts.append(f"  {emoji} {t.title}")
 
