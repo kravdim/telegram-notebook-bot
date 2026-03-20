@@ -61,6 +61,8 @@ async def dispatch(
             return await _handle_create_reminder(user_id, args, user_timezone)
         elif name == "list_tasks":
             return await _handle_list_tasks(user_id, args, user_timezone)
+        elif name == "get_advice":
+            return await _handle_get_advice(user_id, args)
         elif name == "respond_to_user":
             return args.get("message", "")
         elif name == "search":
@@ -370,6 +372,9 @@ async def _handle_search(user_id: int, args: Dict[str, Any]) -> str:
     scope = args.get("scope", "all")
     results = []
 
+    from bot.embeddings.indexer import get_embedding
+    query_emb = await get_embedding(query)
+
     async with async_session() as session:
         # Поиск по задачам
         if scope in ("all", "tasks"):
@@ -378,45 +383,94 @@ async def _handle_search(user_id: int, args: Dict[str, Any]) -> str:
                 status = "✅" if t.status == "done" else "📌"
                 results.append(f"{status} {t.title}")
 
-        # Поиск по заметкам
+        # Поиск по заметкам (гибридный)
         if scope in ("all", "notes"):
-            from sqlalchemy import select
+            from sqlalchemy import select, text
             from bot.db.models import Note
-            pattern = f"%{query}%"
-            res = await session.execute(
-                select(Note)
-                .where(Note.user_id == user_id, Note.content.ilike(pattern))
-                .limit(5)
-            )
-            for n in res.scalars().all():
-                title = n.title or n.content[:50]
+            if query_emb:
+                res = await session.execute(
+                    text("""
+                        SELECT id, title, content,
+                               COALESCE(1 - (embedding <=> :emb), 0) * 0.6 +
+                               COALESCE(similarity(content, :query), 0) * 0.4 AS score
+                        FROM notes
+                        WHERE user_id = :uid
+                          AND (content %% :query OR content ILIKE :pattern
+                               OR (embedding IS NOT NULL AND embedding <=> :emb < 0.8))
+                        ORDER BY score DESC
+                        LIMIT 5
+                    """),
+                    {"uid": user_id, "query": query, "pattern": f"%{query}%", "emb": str(query_emb)},
+                )
+            else:
+                res = await session.execute(
+                    select(Note)
+                    .where(Note.user_id == user_id, Note.content.ilike(f"%{query}%"))
+                    .limit(5)
+                )
+            for row in res.fetchall():
+                title = row.title or (row.content[:50] if hasattr(row, "content") else str(row)[:50])
                 results.append(f"📝 {title}")
 
-        # Поиск по дневнику
+        # Поиск по дневнику (гибридный)
         if scope in ("all", "diary"):
-            from sqlalchemy import select
+            from sqlalchemy import text
             from bot.db.models import DiaryEntry
-            pattern = f"%{query}%"
-            res = await session.execute(
-                select(DiaryEntry)
-                .where(DiaryEntry.user_id == user_id, DiaryEntry.content.ilike(pattern))
-                .limit(5)
-            )
-            for d in res.scalars().all():
-                results.append(f"📓 {d.content[:50]}...")
+            if query_emb:
+                res = await session.execute(
+                    text("""
+                        SELECT id, content,
+                               COALESCE(1 - (embedding <=> :emb), 0) * 0.6 +
+                               COALESCE(similarity(content, :query), 0) * 0.4 AS score
+                        FROM diary_entries
+                        WHERE user_id = :uid
+                          AND (content %% :query OR content ILIKE :pattern
+                               OR (embedding IS NOT NULL AND embedding <=> :emb < 0.8))
+                        ORDER BY score DESC
+                        LIMIT 5
+                    """),
+                    {"uid": user_id, "query": query, "pattern": f"%{query}%", "emb": str(query_emb)},
+                )
+            else:
+                from sqlalchemy import select
+                res = await session.execute(
+                    select(DiaryEntry)
+                    .where(DiaryEntry.user_id == user_id, DiaryEntry.content.ilike(f"%{query}%"))
+                    .limit(5)
+                )
+            for row in res.fetchall():
+                content = row.content if hasattr(row, "content") else str(row)
+                results.append(f"📓 {content[:50]}...")
 
-        # Поиск по мемуарнику
+        # Поиск по мемуарнику (гибридный)
         if scope in ("all", "memoir"):
-            from sqlalchemy import select
+            from sqlalchemy import text
             from bot.db.models import MemoirEntry
-            pattern = f"%{query}%"
-            res = await session.execute(
-                select(MemoirEntry)
-                .where(MemoirEntry.user_id == user_id, MemoirEntry.content.ilike(pattern))
-                .limit(5)
-            )
-            for m in res.scalars().all():
-                results.append(f"📔 {m.content[:50]}...")
+            if query_emb:
+                res = await session.execute(
+                    text("""
+                        SELECT id, content,
+                               COALESCE(1 - (embedding <=> :emb), 0) * 0.6 +
+                               COALESCE(similarity(content, :query), 0) * 0.4 AS score
+                        FROM memoir_entries
+                        WHERE user_id = :uid
+                          AND (content %% :query OR content ILIKE :pattern
+                               OR (embedding IS NOT NULL AND embedding <=> :emb < 0.8))
+                        ORDER BY score DESC
+                        LIMIT 5
+                    """),
+                    {"uid": user_id, "query": query, "pattern": f"%{query}%", "emb": str(query_emb)},
+                )
+            else:
+                from sqlalchemy import select
+                res = await session.execute(
+                    select(MemoirEntry)
+                    .where(MemoirEntry.user_id == user_id, MemoirEntry.content.ilike(f"%{query}%"))
+                    .limit(5)
+                )
+            for row in res.fetchall():
+                content = row.content if hasattr(row, "content") else str(row)
+                results.append(f"📔 {content[:50]}...")
 
     if results:
         return f"🔍 По запросу «{query}» найдено:\n" + "\n".join(results)
@@ -489,3 +543,37 @@ async def _handle_create_project(user_id: int, args: Dict[str, Any]) -> str:
         )
 
     return f"PROJECT_CREATED:{project.id}:{project.title}"
+
+
+async def _handle_get_advice(user_id: int, args: Dict[str, Any]) -> str:
+    """Поиск совета в базе знаний Архангельского."""
+    query = args.get("query", "").strip()
+    if not query:
+        return "Задай вопрос — я подскажу по методике Архангельского."
+
+    from bot.db.crud.knowledge import hybrid_search
+    from bot.embeddings.indexer import get_embedding
+
+    query_emb = await get_embedding(query)
+
+    async with async_session() as session:
+        chunks = await hybrid_search(
+            session, query, query_embedding=query_emb, limit=3,
+        )
+
+    if not chunks:
+        return (
+            "Не нашёл подходящего совета в базе знаний. "
+            "Попробуй переформулировать вопрос, например: "
+            "«Как справиться с прокрастинацией?» или «Как декомпозировать слона?»"
+        )
+
+    # Формируем ответ из найденных чанков
+    parts = ["📚 <b>Совет по методике Архангельского:</b>\n"]
+    for i, chunk in enumerate(chunks, 1):
+        parts.append(f"{chunk.content}")
+        if i < len(chunks):
+            parts.append("")  # пустая строка между чанками
+
+    parts.append(f"\n📖 <i>Источник: {chunks[0].source}</i>")
+    return "\n".join(parts)

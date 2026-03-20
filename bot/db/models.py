@@ -302,6 +302,30 @@ class Reminder(Base):
     )
 
 
+class KnowledgeChunk(Base):
+    """Чанки базы знаний (выжимки из книг Архангельского)."""
+    __tablename__ = "knowledge_base"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    source: Mapped[str] = mapped_column(Text, nullable=False)
+    topic: Mapped[str] = mapped_column(Text, nullable=False)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    embedding = mapped_column(Vector(768))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default="now()"
+    )
+
+    __table_args__ = (
+        Index(
+            "idx_kb_content_trgm", "content",
+            postgresql_using="gin",
+            postgresql_ops={"content": "gin_trgm_ops"},
+        ),
+    )
+
+
 class LlmQueueItem(Base):
     __tablename__ = "llm_queue"
 
