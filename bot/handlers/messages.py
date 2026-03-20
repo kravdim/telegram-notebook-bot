@@ -145,8 +145,8 @@ async def handle_text(message: Message) -> None:
                 project_id = parts[1]
                 project_title = parts[2]
                 await message.answer(
-                    f"🐘 Проект «{project_title}» создан!\n"
-                    "Сейчас декомпозирую на задачи..."
+                    f"🐘 Слон «{project_title}» создан!\n"
+                    "Сейчас нарезаю на бифштексы..."
                 )
                 await message.bot.send_chat_action(chat_id=message.chat.id, action="typing")
 
@@ -157,13 +157,13 @@ async def handle_text(message: Message) -> None:
                 if task_titles:
                     created = await create_project_tasks(user_id, project_id, task_titles)
                     tasks_list = "\n".join(f"  • {t}" for t in task_titles)
-                    all_results.append(f"Проект создан с {created} задачами")
+                    all_results.append(f"Слон создан, нарезан на {created} бифштексов")
                     await message.answer(
-                        f"Создано {created} задач:\n{tasks_list}\n\n"
+                        f"🔪 Нарезано {created} бифштексов:\n{tasks_list}\n\n"
                         "Смотри /projects для прогресса."
                     )
                 else:
-                    all_results.append("Проект создан")
+                    all_results.append("Слон создан")
                     await message.answer(
                         "Не удалось автоматически декомпозировать. "
                         "Добавь задачи вручную."

@@ -128,7 +128,7 @@ FUNCTIONS = [
     },
     {
         "name": "create_project",
-        "description": "Создать слона (крупный проект) и начать декомпозицию",
+        "description": "Создать слона (крупный проект) и нарезать на бифштексы (подзадачи на 1-2 часа)",
         "parameters": {
             "type": "object",
             "properties": {

@@ -59,7 +59,7 @@ def format_morning_digest(
 
     # Слоны
     if projects and not is_weekend:
-        parts.append("\n🐘 <b>Проекты:</b>")
+        parts.append("\n🐘 <b>Слоны:</b>")
         for p in projects[:3]:
             progress = project_progress.get(str(p.id), {})
             pct = progress.get("percent", 0)
