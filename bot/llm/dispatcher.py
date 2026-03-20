@@ -78,7 +78,8 @@ async def dispatch(
             return "Не удалось обработать команду. Попробуй переформулировать."
     except Exception as e:
         logger.error("Ошибка при выполнении %s: %s", name, e, exc_info=True)
-        return f"Произошла ошибка: {e}"
+        from html import escape
+        return f"Произошла ошибка при обработке. Попробуй ещё раз."
 
 
 def _validate_title(title: str) -> Optional[str]:
@@ -391,12 +392,12 @@ async def _handle_search(user_id: int, args: Dict[str, Any]) -> str:
                 res = await session.execute(
                     text("""
                         SELECT id, title, content,
-                               COALESCE(1 - (embedding <=> :emb), 0) * 0.6 +
-                               COALESCE(similarity(content, :query), 0) * 0.4 AS score
+                               COALESCE(1 - (embedding <=> CAST(:emb AS vector)), 0) * 0.6 +
+                               COALESCE(similarity(content, CAST(:query AS text)), 0) * 0.4 AS score
                         FROM notes
                         WHERE user_id = :uid
-                          AND (content %% :query OR content ILIKE :pattern
-                               OR (embedding IS NOT NULL AND embedding <=> :emb < 0.8))
+                          AND (content % CAST(:query AS text) OR content ILIKE :pattern
+                               OR (embedding IS NOT NULL AND embedding <=> CAST(:emb AS vector) < 0.8))
                         ORDER BY score DESC
                         LIMIT 5
                     """),
@@ -420,12 +421,12 @@ async def _handle_search(user_id: int, args: Dict[str, Any]) -> str:
                 res = await session.execute(
                     text("""
                         SELECT id, content,
-                               COALESCE(1 - (embedding <=> :emb), 0) * 0.6 +
-                               COALESCE(similarity(content, :query), 0) * 0.4 AS score
+                               COALESCE(1 - (embedding <=> CAST(:emb AS vector)), 0) * 0.6 +
+                               COALESCE(similarity(content, CAST(:query AS text)), 0) * 0.4 AS score
                         FROM diary_entries
                         WHERE user_id = :uid
-                          AND (content %% :query OR content ILIKE :pattern
-                               OR (embedding IS NOT NULL AND embedding <=> :emb < 0.8))
+                          AND (content % CAST(:query AS text) OR content ILIKE :pattern
+                               OR (embedding IS NOT NULL AND embedding <=> CAST(:emb AS vector) < 0.8))
                         ORDER BY score DESC
                         LIMIT 5
                     """),
@@ -450,12 +451,12 @@ async def _handle_search(user_id: int, args: Dict[str, Any]) -> str:
                 res = await session.execute(
                     text("""
                         SELECT id, content,
-                               COALESCE(1 - (embedding <=> :emb), 0) * 0.6 +
-                               COALESCE(similarity(content, :query), 0) * 0.4 AS score
+                               COALESCE(1 - (embedding <=> CAST(:emb AS vector)), 0) * 0.6 +
+                               COALESCE(similarity(content, CAST(:query AS text)), 0) * 0.4 AS score
                         FROM memoir_entries
                         WHERE user_id = :uid
-                          AND (content %% :query OR content ILIKE :pattern
-                               OR (embedding IS NOT NULL AND embedding <=> :emb < 0.8))
+                          AND (content % CAST(:query AS text) OR content ILIKE :pattern
+                               OR (embedding IS NOT NULL AND embedding <=> CAST(:emb AS vector) < 0.8))
                         ORDER BY score DESC
                         LIMIT 5
                     """),

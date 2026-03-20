@@ -48,18 +48,18 @@ async def hybrid_search(
         sql = text("""
             WITH vector_results AS (
                 SELECT id, content, source, topic,
-                       ROW_NUMBER() OVER (ORDER BY embedding <=> :emb) AS vrank
+                       ROW_NUMBER() OVER (ORDER BY embedding <=> CAST(:emb AS vector)) AS vrank
                 FROM knowledge_base
                 WHERE embedding IS NOT NULL
-                ORDER BY embedding <=> :emb
+                ORDER BY embedding <=> CAST(:emb AS vector)
                 LIMIT 20
             ),
             text_results AS (
                 SELECT id, content, source, topic,
-                       ROW_NUMBER() OVER (ORDER BY similarity(content, :query) DESC) AS trank
+                       ROW_NUMBER() OVER (ORDER BY similarity(content, CAST(:query AS text)) DESC) AS trank
                 FROM knowledge_base
-                WHERE content %% :query
-                ORDER BY similarity(content, :query) DESC
+                WHERE content % CAST(:query AS text)
+                ORDER BY similarity(content, CAST(:query AS text)) DESC
                 LIMIT 20
             ),
             combined AS (
@@ -86,8 +86,8 @@ async def hybrid_search(
         sql = text("""
             SELECT id, content, source, topic
             FROM knowledge_base
-            WHERE content %% :query OR content ILIKE :pattern
-            ORDER BY similarity(content, :query) DESC
+            WHERE content % CAST(:query AS text) OR content ILIKE :pattern
+            ORDER BY similarity(content, CAST(:query AS text)) DESC
             LIMIT :lim
         """)
         result = await session.execute(
