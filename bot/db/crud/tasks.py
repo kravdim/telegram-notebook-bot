@@ -223,6 +223,46 @@ async def get_completed_today(
     return list(result.scalars().all())
 
 
+async def get_completed_in_range(
+    session: AsyncSession,
+    user_id: int,
+    start: datetime,
+    end: datetime,
+) -> List[Task]:
+    """Получить выполненные задачи за период."""
+    result = await session.execute(
+        select(Task)
+        .where(
+            Task.user_id == user_id,
+            Task.status == "done",
+            Task.completed_at >= start,
+            Task.completed_at < end,
+        )
+        .order_by(Task.completed_at.asc())
+    )
+    return list(result.scalars().all())
+
+
+async def get_frogs_in_range(
+    session: AsyncSession,
+    user_id: int,
+    start: datetime,
+    end: datetime,
+) -> List[Task]:
+    """Получить лягушки за период (выполненные и невыполненные)."""
+    result = await session.execute(
+        select(Task)
+        .where(
+            Task.user_id == user_id,
+            Task.is_frog == True,
+            Task.created_at >= start,
+            Task.created_at < end,
+        )
+        .order_by(Task.created_at.asc())
+    )
+    return list(result.scalars().all())
+
+
 async def count_similar_completed(
     session: AsyncSession,
     user_id: int,

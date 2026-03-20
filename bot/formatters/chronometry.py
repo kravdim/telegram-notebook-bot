@@ -68,7 +68,9 @@ def format_week_summary(stats: dict) -> str:
             hours = minutes // 60
             mins = minutes % 60
             time_str = f"{hours}ч {mins}м" if hours else f"{mins}м"
-            parts.append(f"{emoji} {name}: {time_str}")
+            pct = int(minutes / total * 100) if total else 0
+            bar = "▓" * max(1, pct // 5) + "░" * (20 - max(1, pct // 5))
+            parts.append(f"{emoji} {name}: {bar} {time_str} ({pct}%)")
 
     if avg_prod:
         parts.append(f"\n📈 Средняя продуктивность: {avg_prod}/5")
