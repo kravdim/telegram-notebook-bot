@@ -21,6 +21,7 @@ def format_morning_digest(
     project_progress: dict,
     is_weekend: bool,
     active_trip: Optional[str] = None,
+    birthdays: Optional[List] = None,
 ) -> str:
     """Форматирование утреннего дайджеста."""
     weekday = _WEEKDAYS_RU.get(today.weekday(), "")
@@ -30,6 +31,18 @@ def format_morning_digest(
         header += f"\n✈️ Командировка: {active_trip}"
 
     parts = [header]
+
+    # Дни рождения
+    if birthdays:
+        parts.append("\n🎂 <b>Сегодня день рождения:</b>")
+        for b in birthdays:
+            age = ""
+            if b.birth_date.year > 1900:
+                years = today.year - b.birth_date.year
+                age = f" ({years} лет)"
+            note = f" — {b.note}" if b.note else ""
+            parts.append(f"  🎁 {b.name}{age}{note}")
+        parts.append("  Не забудь поздравить!")
 
     # Лягушка
     if frog and not is_weekend:

@@ -10,6 +10,7 @@ from aiogram.filters import Command, CommandObject
 from aiogram.types import CallbackQuery, Message
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
+from bot.db.crud.birthdays import get_all_birthdays, get_upcoming_birthdays
 from bot.db.crud.chronometry import get_day_stats, get_week_stats
 from bot.db.crud.memoir import get_memoir_entries, get_value_stats
 from bot.db.crud.projects import get_project_progress, get_project_tasks, get_user_projects
@@ -550,3 +551,123 @@ async def cmd_settings(message: Message) -> None:
         f"Дайджесты: {'✅' if user.digest_enabled else '❌'}",
         parse_mode="HTML",
     )
+
+
+@router.message(Command("birthdays"))
+async def cmd_birthdays(message: Message) -> None:
+    """Показать все дни рождения."""
+    if not message.from_user:
+        return
+
+    user_id = message.from_user.id
+    async with async_session() as session:
+        all_bdays = await get_all_birthdays(session, user_id)
+
+    if not all_bdays:
+        await message.answer(
+            "🎂 Дней рождения пока нет.\n"
+            "Скажи мне «запомни день рождения Маши 5 мая» — и я запомню!"
+        )
+        return
+
+    # Ближайшие
+    today = pendulum.now("Europe/Moscow").date()
+    lines = ["🎂 <b>Дни рождения:</b>\n"]
+    for b in all_bdays:
+        date_str = b.birth_date.strftime("%d.%m")
+        age = ""
+        if b.birth_date.year > 1900:
+            years = today.year - b.birth_date.year
+            # Если ДР ещё не было в этом году
+            this_year_bday = b.birth_date.replace(year=today.year)
+            if this_year_bday < today:
+                years_now = years
+            else:
+                years_now = years
+            age = f" ({years_now} лет)"
+        note = f" — {b.note}" if b.note else ""
+        lines.append(f"  🎁 {b.name} — {date_str}{age}{note}")
+
+    await message.answer("\n".join(lines), parse_mode="HTML")
+
+
+@router.message(Command("export"))
+async def cmd_export(message: Message) -> None:
+    """Экспорт данных в Markdown-файлы."""
+    if not message.from_user:
+        return
+
+    user_id = message.from_user.id
+    await message.bot.send_chat_action(chat_id=message.chat.id, action="typing")
+
+    import io
+    import zipfile
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        async with async_session() as session:
+            # Задачи
+            tasks = await get_user_tasks(session, user_id, status=None)
+            if tasks:
+                md = "# Задачи\n\n"
+                for t in tasks:
+                    status = "x" if t.status == "done" else " "
+                    frog = " 🐸" if t.is_frog else ""
+                    date_str = f" (до {t.due_date.strftime('%d.%m.%Y')})" if t.due_date else ""
+                    md += f"- [{status}] {t.title}{frog}{date_str}\n"
+                zf.writestr("tasks.md", md)
+
+            # Заметки
+            from bot.db.models import Note
+            from sqlalchemy import select
+            res = await session.execute(
+                select(Note).where(Note.user_id == user_id).order_by(Note.created_at.desc())
+            )
+            notes = list(res.scalars().all())
+            if notes:
+                md = "# Заметки\n\n"
+                for n in notes:
+                    title = n.title or "Без названия"
+                    date_str = n.created_at.strftime("%Y-%m-%d %H:%M")
+                    md += f"## {title}\n*{date_str}*\n\n{n.content}\n\n---\n\n"
+                zf.writestr("notes.md", md)
+
+            # Дневник
+            from bot.db.models import DiaryEntry
+            res = await session.execute(
+                select(DiaryEntry).where(DiaryEntry.user_id == user_id)
+                .order_by(DiaryEntry.entry_date.desc())
+            )
+            diary = list(res.scalars().all())
+            if diary:
+                md = "# Дневник\n\n"
+                for d in diary:
+                    md += f"## {d.entry_date.strftime('%Y-%m-%d')}\n\n{d.content}\n\n---\n\n"
+                zf.writestr("diary.md", md)
+
+            # Мемуарник
+            memoirs = await get_memoir_entries(session, user_id, limit=365)
+            if memoirs:
+                md = "# Мемуарник\n\n"
+                for m in memoirs:
+                    tag = f" [{m.value_tag}]" if m.value_tag else ""
+                    md += f"## {m.event_date.strftime('%Y-%m-%d')}{tag}\n\n{m.content}\n\n---\n\n"
+                zf.writestr("memoir.md", md)
+
+            # Дни рождения
+            bdays = await get_all_birthdays(session, user_id)
+            if bdays:
+                md = "# Дни рождения\n\n"
+                for b in bdays:
+                    note = f" — {b.note}" if b.note else ""
+                    md += f"- {b.name}: {b.birth_date.strftime('%d.%m.%Y')}{note}\n"
+                zf.writestr("birthdays.md", md)
+
+    buf.seek(0)
+
+    from aiogram.types import BufferedInputFile
+    doc = BufferedInputFile(
+        buf.read(),
+        filename=f"export_{pendulum.now().format('YYYY-MM-DD')}.zip",
+    )
+    await message.answer_document(doc, caption="📦 Экспорт данных в Markdown (Obsidian-совместимый)")

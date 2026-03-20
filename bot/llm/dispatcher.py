@@ -61,6 +61,8 @@ async def dispatch(
             return await _handle_create_reminder(user_id, args, user_timezone)
         elif name == "list_tasks":
             return await _handle_list_tasks(user_id, args, user_timezone)
+        elif name == "add_birthday":
+            return await _handle_add_birthday(user_id, args, user_timezone)
         elif name == "get_advice":
             return await _handle_get_advice(user_id, args)
         elif name == "respond_to_user":
@@ -544,6 +546,30 @@ async def _handle_create_project(user_id: int, args: Dict[str, Any]) -> str:
         )
 
     return f"PROJECT_CREATED:{project.id}:{project.title}"
+
+
+async def _handle_add_birthday(user_id: int, args: Dict[str, Any], tz: str) -> str:
+    """Добавить день рождения."""
+    name = args.get("name", "").strip()
+    if not name:
+        return "Укажи имя человека."
+
+    date_str = args.get("date")
+    bd = _parse_date(date_str, tz)
+    if not bd:
+        return "Не удалось распознать дату. Укажи в формате ДД.ММ или ДД месяц."
+
+    note = args.get("note")
+
+    from bot.db.crud.birthdays import add_birthday
+    async with async_session() as session:
+        entry = await add_birthday(session, user_id, name=name, birth_date=bd, note=note)
+
+    result = f"🎂 Запомнил: {name} — {bd.strftime('%d.%m')}"
+    if note:
+        result += f"\n📝 {note}"
+    result += "\nБуду напоминать в утреннем дайджесте!"
+    return result
 
 
 async def _handle_get_advice(user_id: int, args: Dict[str, Any]) -> str:

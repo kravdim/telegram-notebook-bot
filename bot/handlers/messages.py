@@ -223,7 +223,7 @@ def _default_intent_prompt() -> str:
         "Ты — персональный ассистент по управлению временем. "
         "Пользователь пишет тебе свободным текстом. Определи его намерение и вызови "
         "подходящую функцию: create_task, complete_task, create_note, create_diary_entry, "
-        "create_reminder, list_tasks, search, get_advice, create_project или respond_to_user.\n\n"
+        "create_reminder, list_tasks, search, get_advice, add_birthday, create_project или respond_to_user.\n\n"
         "Текущая дата и время: {now}\n"
         "Часовой пояс: {timezone}\n\n"
         "ВАЖНО: В одном сообщении может быть несколько намерений. Например:\n"
@@ -236,6 +236,8 @@ def _default_intent_prompt() -> str:
         "Если спрашивает 'покажи выполненные' → list_tasks с scope done_today.\n"
         "Если спрашивает совет по тайм-менеджменту, как справиться с прокрастинацией, "
         "как организовать день, как не откладывать — get_advice.\n"
+        "Если пользователь говорит про день рождения ('ДР у Маши 5 мая', "
+        "'запомни день рождения') → add_birthday.\n"
         "Если пользователь просто общается — используй respond_to_user.\n"
         "Всегда отвечай на русском языке. Будь дружелюбным и поддерживающим."
     )

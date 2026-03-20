@@ -5,6 +5,7 @@ import logging
 import pendulum
 from aiogram import Bot
 
+from bot.db.crud.birthdays import get_birthdays_on_date
 from bot.db.crud.projects import get_project_progress, get_user_projects
 from bot.db.crud.tasks import get_completed_today, get_frog, get_today_tasks, get_user_tasks
 from bot.db.crud.trips import get_active_trip
@@ -96,6 +97,7 @@ async def _send_morning(bot: Bot, user, today, tz: str) -> None:
         frog = await get_frog(session, user.telegram_id)
         projects = await get_user_projects(session, user.telegram_id)
         trip = await get_active_trip(session, user.telegram_id)
+        birthdays = await get_birthdays_on_date(session, user.telegram_id, today)
 
         project_progress = {}
         for p in projects[:3]:
@@ -110,6 +112,7 @@ async def _send_morning(bot: Bot, user, today, tz: str) -> None:
         project_progress=project_progress,
         is_weekend=is_weekend,
         active_trip=trip.title if trip else None,
+        birthdays=birthdays,
     )
 
     await bot.send_message(

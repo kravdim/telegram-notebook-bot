@@ -47,14 +47,13 @@ async def get_task_by_id(
 async def get_user_tasks(
     session: AsyncSession,
     user_id: int,
-    status: str = "open",
+    status: Optional[str] = "open",
 ) -> List[Task]:
-    """Получить задачи пользователя по статусу."""
-    result = await session.execute(
-        select(Task)
-        .where(Task.user_id == user_id, Task.status == status)
-        .order_by(Task.created_at.desc())
-    )
+    """Получить задачи пользователя по статусу. status=None — все задачи."""
+    query = select(Task).where(Task.user_id == user_id)
+    if status is not None:
+        query = query.where(Task.status == status)
+    result = await session.execute(query.order_by(Task.created_at.desc()))
     return list(result.scalars().all())
 
 
