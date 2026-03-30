@@ -11,6 +11,7 @@ from bot.db.crud.tasks import get_completed_today, get_frog, get_today_tasks, ge
 from bot.db.crud.trips import get_active_trip
 from bot.db.crud.users import get_all_users, update_user_settings
 from bot.db.engine import async_session
+from bot.formatters import split_message
 from bot.formatters.digest import format_evening_digest, format_morning_digest
 
 logger = logging.getLogger(__name__)
@@ -56,12 +57,8 @@ async def send_digests(bot: Bot) -> None:
             tomorrow = today + pendulum.duration(days=1)
             evening_sent = sent_date is not None and sent_date >= tomorrow
 
-            # Утренний дайджест
-            if (
-                now >= morning_target
-                and now <= morning_target.add(minutes=5)
-                and not morning_sent
-            ):
+            # Утренний дайджест (идемпотентность через morning_sent, без верхней границы)
+            if now >= morning_target and not morning_sent:
                 await _send_morning(bot, user, today, tz)
                 async with async_session() as session:
                     await update_user_settings(
@@ -69,11 +66,7 @@ async def send_digests(bot: Bot) -> None:
                     )
 
             # Вечерний дайджест (не зависит от утреннего)
-            if (
-                now >= evening_target
-                and now <= evening_target.add(minutes=5)
-                and not evening_sent
-            ):
+            if now >= evening_target and not evening_sent:
                 await _send_evening(bot, user, today, tz)
                 # Маркер: ставим завтрашнюю дату чтобы не повторять
                 async with async_session() as session:
@@ -115,9 +108,10 @@ async def _send_morning(bot: Bot, user, today, tz: str) -> None:
         birthdays=birthdays,
     )
 
-    await bot.send_message(
-        chat_id=user.telegram_id, text=text, parse_mode="HTML"
-    )
+    for part in split_message(text):
+        await bot.send_message(
+            chat_id=user.telegram_id, text=part, parse_mode="HTML"
+        )
     logger.info("Утренний дайджест отправлен: %s", user.telegram_id)
 
 
@@ -145,7 +139,8 @@ async def _send_evening(bot: Bot, user, today, tz: str) -> None:
         frog_title=frog_title,
     )
 
-    await bot.send_message(
-        chat_id=user.telegram_id, text=text, parse_mode="HTML"
-    )
+    for part in split_message(text):
+        await bot.send_message(
+            chat_id=user.telegram_id, text=part, parse_mode="HTML"
+        )
     logger.info("Вечерний дайджест отправлен: %s", user.telegram_id)

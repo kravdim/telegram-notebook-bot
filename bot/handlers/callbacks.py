@@ -1,5 +1,6 @@
 """Callback handlers: snooze напоминаний, confirm удаления задач."""
 
+import html
 import logging
 import uuid
 from datetime import timedelta
@@ -72,7 +73,7 @@ async def cb_snooze_done(callback: CallbackQuery) -> None:
                 if reminder.task_id:
                     task = await complete_task_by_id(session, reminder.task_id, callback.from_user.id)
                     if task:
-                        result_text = f"✅ Задача «{task.title}» выполнена!"
+                        result_text = f"✅ Задача «{html.escape(task.title)}» выполнена!"
     except Exception as e:
         logger.error("Ошибка при обработке snooze_done: %s", e)
         result_text = "✅ Готово!"

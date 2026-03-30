@@ -46,7 +46,7 @@ class LLMQueue:
 
     async def submit(self, priority: int, coro: Coroutine) -> Any:
         """Добавить запрос в очередь и дождаться результата."""
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         future = loop.create_future()
         task = LLMTask(priority=priority, coro=coro, future=future)
         await self._queue.put(task)

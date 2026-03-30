@@ -44,23 +44,33 @@ async def run_backup() -> None:
     env = os.environ.copy()
     env["PGPASSWORD"] = password
 
-    cmd = (
-        f"pg_dump -h {host} -p {port} -U {user} -d {dbname} "
-        f"--no-owner --no-acl | gzip > {filepath}"
-    )
-
     try:
-        result = subprocess.run(
-            cmd, shell=True, env=env,
-            capture_output=True, text=True, timeout=300,
+        pg_dump = subprocess.Popen(
+            ["pg_dump", "-h", host, "-p", port, "-U", user, "-d", dbname,
+             "--no-owner", "--no-acl"],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env,
         )
-        if result.returncode == 0:
+        with open(filepath, "wb") as out_f:
+            gzip_proc = subprocess.Popen(
+                ["gzip"], stdin=pg_dump.stdout, stdout=out_f, stderr=subprocess.PIPE,
+            )
+        pg_dump.stdout.close()
+        _, gzip_err = gzip_proc.communicate(timeout=300)
+        pg_dump.wait(timeout=10)
+
+        if pg_dump.returncode != 0:
+            stderr = pg_dump.stderr.read().decode() if pg_dump.stderr else ""
+            logger.error("pg_dump failed (rc=%d): %s", pg_dump.returncode, stderr)
+            filepath.unlink(missing_ok=True)
+        elif gzip_proc.returncode != 0:
+            logger.error("gzip failed: %s", gzip_err.decode() if gzip_err else "")
+            filepath.unlink(missing_ok=True)
+        else:
             size_mb = filepath.stat().st_size / (1024 * 1024)
             logger.info("Бэкап создан: %s (%.1f MB)", filename, size_mb)
-        else:
-            logger.error("pg_dump failed: %s", result.stderr)
     except Exception as e:
         logger.error("Ошибка бэкапа: %s", e)
+        filepath.unlink(missing_ok=True)
 
     # Ротация
     _rotate_backups(retention_days)

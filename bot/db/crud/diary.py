@@ -13,10 +13,11 @@ async def create_diary_entry(
     user_id: int,
     content: str,
     entry_date: date = None,
+    tz: str = "Europe/Moscow",
 ) -> DiaryEntry:
     """Создать запись в дневнике."""
     if entry_date is None:
-        entry_date = pendulum.now().date()
+        entry_date = pendulum.now(tz).date()
 
     entry = DiaryEntry(
         user_id=user_id,

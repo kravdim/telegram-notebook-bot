@@ -1,5 +1,6 @@
 """Обработчик вечернего разбора невыполненных задач."""
 
+import html
 import logging
 import uuid as uuid_mod
 
@@ -45,7 +46,7 @@ async def cb_review_tomorrow(callback: CallbackQuery) -> None:
 
     if task:
         await callback.message.edit_text(
-            f"📅 «{task.title}» перенесена на завтра",
+            f"📅 «{html.escape(task.title)}» перенесена на завтра",
             reply_markup=None,
         )
     else:
@@ -66,7 +67,7 @@ async def cb_review_cancel(callback: CallbackQuery) -> None:
 
     if task:
         await callback.message.edit_text(
-            f"🗑 «{task.title}» отменена",
+            f"🗑 «{html.escape(task.title)}» отменена",
             reply_markup=None,
         )
 

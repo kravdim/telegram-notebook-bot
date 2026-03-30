@@ -127,18 +127,33 @@ async def search_tasks(
     session: AsyncSession,
     user_id: int,
     query: str,
+    status: Optional[str] = None,
 ) -> List[Task]:
-    """Поиск задач по текстовому запросу (ILIKE)."""
+    """Поиск задач по текстовому запросу (ILIKE).
+
+    Сортирует: open задачи первыми, потом по дате создания (новые первые).
+    status='open' — только открытые.
+    """
+    from sqlalchemy import case
+
     pattern = f"%{query}%"
-    result = await session.execute(
+    q = (
         select(Task)
         .where(
             Task.user_id == user_id,
             Task.title.ilike(pattern),
         )
-        .order_by(Task.created_at.desc())
-        .limit(10)
     )
+    if status:
+        q = q.where(Task.status == status)
+
+    # Открытые задачи первыми
+    q = q.order_by(
+        case((Task.status == "open", 0), else_=1),
+        Task.created_at.desc(),
+    ).limit(10)
+
+    result = await session.execute(q)
     return list(result.scalars().all())
 
 

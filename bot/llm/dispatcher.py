@@ -32,8 +32,12 @@ def parse_function_call(raw: Dict[str, Any]) -> Tuple[str, Dict[str, Any]]:
             args = json.loads(args_raw)
         except json.JSONDecodeError:
             logger.warning("Невалидный JSON от LLM, применяю json_repair")
-            repaired = repair_json(args_raw)
-            args = json.loads(repaired)
+            try:
+                repaired = repair_json(args_raw)
+                args = json.loads(repaired)
+            except (json.JSONDecodeError, ValueError) as repair_err:
+                logger.error("json_repair не смог восстановить JSON: %s | raw: %.200s", repair_err, args_raw)
+                args = {}
     else:
         args = args_raw
 
@@ -56,7 +60,7 @@ async def dispatch(
         elif name == "create_note":
             return await _handle_create_note(user_id, args)
         elif name == "create_diary_entry":
-            return await _handle_create_diary(user_id, args)
+            return await _handle_create_diary(user_id, args, user_timezone)
         elif name == "create_reminder":
             return await _handle_create_reminder(user_id, args, user_timezone)
         elif name == "list_tasks":
@@ -70,7 +74,7 @@ async def dispatch(
         elif name == "search":
             return await _handle_search(user_id, args)
         elif name == "update_task":
-            return await _handle_update_task(user_id, args)
+            return await _handle_update_task(user_id, args, user_timezone)
         elif name == "delete_task":
             return await _handle_delete_task(user_id, args)
         elif name == "create_project":
@@ -152,6 +156,49 @@ async def _handle_create_task(
 
     is_frog = args.get("is_frog", False)
 
+    # Защита от дубликатов: если есть открытая задача с таким же названием — обновляем её
+    dup_info = None
+    async with async_session() as session:
+        existing = await search_tasks(session, user_id, title, status="open")
+        for t in existing:
+            if t.title.lower().strip() == title.lower().strip():
+                dup_info = {
+                    "id": t.id, "title": t.title, "due_date": t.due_date,
+                    "due_time": t.due_time, "is_frog": t.is_frog, "priority": t.priority,
+                }
+                break
+
+    if dup_info:
+        # Обновляем существующую задачу вместо создания дубликата
+        updates = {}
+        if due_date and due_date != dup_info["due_date"]:
+            updates["due_date"] = due_date
+        if due_time and due_time != dup_info["due_time"]:
+            updates["due_time"] = due_time
+        if remind_at:
+            updates["remind_at"] = remind_at
+        if is_frog and not dup_info["is_frog"]:
+            updates["is_frog"] = is_frog
+        if priority != "normal" and priority != dup_info["priority"]:
+            updates["priority"] = priority
+
+        if updates:
+            async with async_session() as session:
+                from bot.db.crud.tasks import update_task as crud_update
+                await crud_update(session, dup_info["id"], user_id, **updates)
+            changes = []
+            if "due_date" in updates:
+                changes.append(f"📅 {due_date.strftime('%d.%m.%Y')}")
+            if "due_time" in updates:
+                changes.append(f"⏰ {due_time.strftime('%H:%M')}")
+            if "remind_at" in updates:
+                changes.append(f"🔔 {remind_at.strftime('%d.%m %H:%M')}")
+            return f"Задача «{dup_info['title']}» уже есть — обновил: {' '.join(changes)} ✅"
+        else:
+            return f"Задача «{dup_info['title']}» уже существует ✅"
+
+    repeat_rule = args.get("repeat_rule")
+
     async with async_session() as session:
         task = await create_task(
             session,
@@ -164,6 +211,7 @@ async def _handle_create_task(
             due_time=due_time,
             remind_at=remind_at,
             remind_before_min=args.get("remind_before_min"),
+            repeat_rule=repeat_rule,
         )
 
         # Проверяем, повторяющаяся ли это задача
@@ -178,6 +226,8 @@ async def _handle_create_task(
         parts.append(f"🔔 Напомню: {remind_at.strftime('%d.%m %H:%M')}")
     if is_frog:
         parts.append("🐸 Лягушка!")
+    if repeat_rule:
+        parts.append(f"🔄 {_format_repeat_rule(repeat_rule)}")
 
     result = " ".join(parts) + " ✅"
 
@@ -195,15 +245,95 @@ async def _handle_complete_task(user_id: int, args: Dict[str, Any]) -> str:
         if not task:
             return "Не нашёл такую задачу. Уточни название."
 
+        # Снимаем данные пока сессия открыта
+        task_title = task.title
+        task_repeat_rule = task.repeat_rule
+        task_due_date = task.due_date
+        task_due_time = task.due_time
+        task_user_id = task.user_id
+        task_category = task.category
+        task_priority = task.priority
+
         # Считаем сколько раз подобное уже выполнялось (включая текущий)
-        similar_count, _ = await count_similar_completed(session, user_id, task.title)
+        similar_count, _ = await count_similar_completed(session, user_id, task_title)
 
-    result = f"Задача «{task.title}» выполнена! 🎉"
+    result = f"Задача «{task_title}» выполнена! 🎉"
 
-    if similar_count >= 2:
-        result += "\n" + _recurring_complete_comment(task.title, similar_count)
+    # Повторяющаяся задача — создаём следующую
+    if task_repeat_rule:
+        task_snapshot = {
+            "repeat_rule": task_repeat_rule, "due_date": task_due_date,
+            "due_time": task_due_time, "user_id": task_user_id,
+            "title": task_title, "category": task_category, "priority": task_priority,
+        }
+        next_task = await _create_next_recurring_task(task_snapshot)
+        if next_task:
+            result += f"\n🔄 Следующая: {next_task['due_date_str']}"
+    elif similar_count >= 2:
+        result += "\n" + _recurring_complete_comment(task_title, similar_count)
 
     return result
+
+
+async def _create_next_recurring_task(task_info: dict) -> Optional[dict]:
+    """Создать следующую повторяющуюся задачу на основе завершённой.
+
+    task_info — dict с ключами: repeat_rule, due_date, due_time, user_id, title, category, priority.
+    """
+    from bot.db.crud.reminders import _calc_next_occurrence
+
+    if not task_info["repeat_rule"] or not task_info["due_date"]:
+        return None
+
+    # Вычисляем следующую дату
+    import pendulum
+    due_date = task_info["due_date"]
+    due_time = task_info["due_time"]
+    current_dt = pendulum.datetime(
+        due_date.year, due_date.month, due_date.day,
+        hour=due_time.hour if due_time else 9,
+        minute=due_time.minute if due_time else 0,
+    )
+    next_dt = _calc_next_occurrence(current_dt, task_info["repeat_rule"])
+    if not next_dt:
+        return None
+
+    async with async_session() as session:
+        new_task = await create_task(
+            session,
+            user_id=task_info["user_id"],
+            title=task_info["title"],
+            category=task_info["category"],
+            priority=task_info["priority"],
+            due_date=next_dt.date(),
+            due_time=due_time,
+            repeat_rule=task_info["repeat_rule"],
+        )
+        next_date_str = next_dt.date().strftime('%d.%m')
+    return {"due_date_str": next_date_str}
+
+
+def _format_repeat_rule(rule: str) -> str:
+    """Человекочитаемый формат repeat_rule."""
+    _day_names = {1: "пн", 2: "вт", 3: "ср", 4: "чт", 5: "пт", 6: "сб", 7: "вс"}
+
+    if rule == "daily":
+        return "Каждый день"
+    if rule == "weekdays":
+        return "Каждый будний день"
+    if rule.startswith("weekly:"):
+        days = rule.split(":", 1)[1].split(",")
+        names = [_day_names.get(int(d), d) for d in days]
+        return f"Каждый {', '.join(names)}"
+    if rule.startswith("monthly:"):
+        day = rule.split(":", 1)[1]
+        return f"Каждый месяц {day}-го"
+    if rule.startswith("every:"):
+        interval = rule.split(":", 1)[1]
+        num = interval[:-1]
+        unit = {"d": "дн.", "w": "нед.", "m": "мес."}.get(interval[-1], "")
+        return f"Каждые {num} {unit}"
+    return rule
 
 
 def _recurring_create_comment(title: str, count: int, last_at, tz: str) -> str:
@@ -279,15 +409,74 @@ async def _handle_create_note(user_id: int, args: Dict[str, Any]) -> str:
     return f"Заметка сохранена ✅" + (f" ({note.title})" if note.title else "")
 
 
-async def _handle_create_diary(user_id: int, args: Dict[str, Any]) -> str:
+async def _handle_create_diary(user_id: int, args: Dict[str, Any], tz: str = "Europe/Moscow") -> str:
     content = args.get("content", "").strip()
     if not content:
         return "Запись не может быть пустой."
 
     async with async_session() as session:
-        entry = await create_diary_entry(session, user_id, content=content)
+        entry = await create_diary_entry(session, user_id, content=content, tz=tz)
+
+    # Также сохраняем в мемуарник (memoir_entries) для аналитики ценностей и Sunday Review
+    try:
+        value_tag = _extract_value_tag(content)
+        from bot.db.crud.memoir import create_memoir_entry
+        async with async_session() as session:
+            await create_memoir_entry(
+                session,
+                user_id=user_id,
+                event_date=entry.entry_date,
+                content=content,
+                value_tag=value_tag,
+                period_type="day",
+            )
+        logger.debug("Memoir entry создана: user=%s, date=%s, value=%s", user_id, entry.entry_date, value_tag)
+    except Exception as e:
+        logger.warning("Не удалось создать memoir entry: %s", e)
 
     return "Записано в дневник ✅"
+
+
+def _extract_value_tag(content: str) -> str:
+    """Извлечение ценности из текста по ключевым словам."""
+    text = content.lower()
+
+    family_kw = ("семья", "мама", "папа", "жена", "муж", "дети", "ребёнок", "ребенок",
+                 "сын", "дочь", "родител", "бабушк", "дедушк", "брат", "сестр",
+                 "максим", "аня", "аней")
+    health_kw = ("тренажер", "спорт", "зал ", "тренировк", "бег ", "пробежк",
+                 "здоровь", "врач", "больниц", "фитнес", "йог", "лофт")
+    friends_kw = ("друг", "друзь", "встреч", "гости", "компани", "посидел",
+                  "слава", "серёга", "серега")
+    growth_kw = ("учёба", "учеба", "курс", "книг", "читал", "изуч", "развити",
+                 "настроил", "разобрал", "научил", "бот", "код", "программ")
+    rest_kw = ("отдых", "кино", "фильм", "гулял", "прогулк", "набережн", "парк",
+               "выходн", "поехал", "путешеств", "evoque", "машин")
+    work_kw = ("работ", "офис", "проект", "клиент", "заказчик", "совещани",
+               "митинг", "задач", "дедлайн", "письмо", "аванс", "денежн",
+               "фулфилмент", "коммерческ", "предложени", "сайт")
+
+    # Проверяем в порядке приоритета (личное > работа)
+    for kw in family_kw:
+        if kw in text:
+            return "семья"
+    for kw in health_kw:
+        if kw in text:
+            return "здоровье"
+    for kw in friends_kw:
+        if kw in text:
+            return "дружба"
+    for kw in rest_kw:
+        if kw in text:
+            return "отдых"
+    for kw in growth_kw:
+        if kw in text:
+            return "развитие"
+    for kw in work_kw:
+        if kw in text:
+            return "работа"
+
+    return "другое"
 
 
 async def _handle_create_reminder(
@@ -480,7 +669,7 @@ async def _handle_search(user_id: int, args: Dict[str, Any]) -> str:
     return f"По запросу «{query}» ничего не найдено."
 
 
-async def _handle_update_task(user_id: int, args: Dict[str, Any]) -> str:
+async def _handle_update_task(user_id: int, args: Dict[str, Any], tz: str = "Europe/Moscow") -> str:
     query = args.get("search_query", "")
     updates = args.get("updates", {})
 
@@ -502,6 +691,12 @@ async def _handle_update_task(user_id: int, args: Dict[str, Any]) -> str:
         if not clean_updates:
             return "Нет допустимых полей для обновления."
 
+        # Парсим даты/время из строк
+        if "due_date" in clean_updates and isinstance(clean_updates["due_date"], str):
+            clean_updates["due_date"] = _parse_date(clean_updates["due_date"], tz)
+        if "due_time" in clean_updates and isinstance(clean_updates["due_time"], str):
+            clean_updates["due_time"] = _parse_time(clean_updates["due_time"])
+
         updated = await crud_update_task(session, task.id, user_id, **clean_updates)
 
     if updated:
@@ -516,13 +711,13 @@ async def _handle_delete_task(user_id: int, args: Dict[str, Any]) -> str:
 
     async with async_session() as session:
         tasks = await search_tasks(session, user_id, query)
+        if not tasks:
+            return f"Не нашёл задачу «{query}»."
+        task_id = tasks[0].id
+        task_title = tasks[0].title
 
-    if not tasks:
-        return f"Не нашёл задачу «{query}»."
-
-    task = tasks[0]
     # Возвращаем текст с предложением confirm — кнопки добавит message handler
-    return f"CONFIRM_DELETE:{task.id}:{task.title}"
+    return f"CONFIRM_DELETE:{task_id}:{task_title}"
 
 
 async def _handle_create_project(user_id: int, args: Dict[str, Any]) -> str:

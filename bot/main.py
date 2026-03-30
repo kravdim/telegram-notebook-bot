@@ -261,7 +261,7 @@ async def main() -> None:
     dp.include_router(messages.router)
 
     # Graceful shutdown
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     for sig in (signal.SIGTERM, signal.SIGINT):
         loop.add_signal_handler(
             sig, lambda: asyncio.create_task(_shutdown(dp, bot, llm_queue))
@@ -280,7 +280,6 @@ async def main() -> None:
 async def _shutdown(dp: Dispatcher, bot: Bot, llm_queue: LLMQueue) -> None:
     """Graceful shutdown."""
     logger.info("Получен сигнал завершения, останавливаемся...")
-    await llm_queue.stop()
     await dp.stop_polling()
 
 

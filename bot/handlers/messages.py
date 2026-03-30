@@ -7,6 +7,7 @@ from aiogram import Router
 from aiogram.types import Message
 
 from bot.db.crud.users import get_user
+from bot.formatters import split_message
 from bot.db.engine import async_session
 from bot.llm.client import LLMClient, LLMUnavailableError
 from bot.llm.context import add_message, get_history, needs_compression, compress_history
@@ -31,20 +32,17 @@ def init(client: LLMClient, queue: LLMQueue) -> None:
     llm_queue = queue
 
 
-@router.message()
-async def handle_text(message: Message) -> None:
-    """Свободный текст → LLM → function call / ответ."""
-    if not message.text or not message.from_user:
-        return
+async def process_text_message(user_id: int, text: str, message: Message) -> None:
+    """Обработка текста: LLM → function call / ответ.
 
+    Вызывается из handle_text и из voice confirm callback.
+    message используется для отправки ответа (message.answer).
+    """
     if not llm_client or not llm_queue:
         await message.answer(
             "LLM-клиент не инициализирован. Обратитесь к администратору."
         )
         return
-
-    user_id = message.from_user.id
-    text = message.text.strip()
 
     # Проверяем, ожидается ли ответ на хронометраж
     from bot.scheduler.chronometry import is_awaiting_response, clear_awaiting
@@ -172,11 +170,12 @@ async def handle_text(message: Message) -> None:
 
             all_results.append(result)
 
-        # Отправляем все результаты одним сообщением
+        # Отправляем все результаты (с разбивкой по лимиту Telegram)
         if all_results:
             combined = "\n\n".join(all_results)
             add_message(user_id, "assistant", combined)
-            await message.answer(combined)
+            for part in split_message(combined):
+                await message.answer(part)
 
     elif response.content:
         # Ограничиваем длину свободного ответа (защита от prompt injection)
@@ -191,6 +190,15 @@ async def handle_text(message: Message) -> None:
     # Компрессия при необходимости
     if needs_compression(user_id):
         await _compress(user_id)
+
+
+@router.message()
+async def handle_text(message: Message) -> None:
+    """Свободный текст → LLM → function call / ответ."""
+    if not message.text or not message.from_user:
+        return
+
+    await process_text_message(message.from_user.id, message.text.strip(), message)
 
 
 async def _compress(user_id: int) -> None:

@@ -1,12 +1,14 @@
 """Команды администратора: /prompts, /status, /adduser, /removeuser."""
 
 import logging
+from pathlib import Path
 
+import yaml
 from aiogram import Router
 from aiogram.filters import Command, CommandObject
 from aiogram.types import Message
 
-from bot.config import settings
+from bot.config import settings, BASE_DIR
 from bot.db.crud.users import get_all_users
 from bot.db.engine import async_session
 from bot.llm.prompts import get_all_prompts
@@ -97,6 +99,7 @@ async def cmd_adduser(message: Message, command: CommandObject) -> None:
 
     if user_id not in settings.allowed_telegram_ids:
         settings.allowed_telegram_ids.append(user_id)
+        _persist_whitelist()
 
     await message.answer(f"✅ Пользователь {user_id} добавлен в whitelist.")
 
@@ -120,6 +123,7 @@ async def cmd_removeuser(message: Message, command: CommandObject) -> None:
 
     if user_id in settings.allowed_telegram_ids:
         settings.allowed_telegram_ids.remove(user_id)
+        _persist_whitelist()
 
     await message.answer(f"✅ Пользователь {user_id} удалён из whitelist.")
 
@@ -144,3 +148,17 @@ async def cmd_listusers(message: Message) -> None:
         lines.append(f"{role} {u.username} ({u.telegram_id})")
 
     await message.answer("\n".join(lines), parse_mode="HTML")
+
+
+def _persist_whitelist() -> None:
+    """Сохранить текущий whitelist в config.yaml."""
+    config_path = BASE_DIR / "config.yaml"
+    try:
+        with open(config_path, "r", encoding="utf-8") as f:
+            cfg = yaml.safe_load(f) or {}
+        cfg.setdefault("bot", {})["allowed_telegram_ids"] = list(settings.allowed_telegram_ids)
+        with open(config_path, "w", encoding="utf-8") as f:
+            yaml.dump(cfg, f, default_flow_style=False, allow_unicode=True)
+        logger.info("Whitelist сохранён в config.yaml: %s", settings.allowed_telegram_ids)
+    except Exception as e:
+        logger.error("Не удалось сохранить whitelist в config.yaml: %s", e)

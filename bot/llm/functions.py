@@ -15,6 +15,10 @@ FUNCTIONS = [
                 "due_time": {"type": "string", "description": "Время HH:MM или null"},
                 "remind_at": {"type": "string", "description": "ISO datetime напоминания или null"},
                 "remind_before_min": {"type": "integer", "description": "За N мин до события"},
+                "repeat_rule": {
+                    "type": "string",
+                    "description": "Правило повторения: daily, weekdays (пн-пт), weekly:1 (пн), weekly:1,3 (пн+ср), monthly:15 (15-го числа), every:3d (каждые 3 дня), every:2w (каждые 2 недели). null если не повторяется",
+                },
             },
             "required": ["title"],
         },

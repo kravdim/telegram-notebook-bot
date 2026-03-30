@@ -37,7 +37,7 @@ class LocalWhisperClient(STTClient):
 
     async def transcribe(self, audio_path: Path) -> str:
         """Транскрибировать аудио через faster-whisper."""
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         return await loop.run_in_executor(None, self._transcribe_sync, audio_path)
 
     def _transcribe_sync(self, audio_path: Path) -> str:
@@ -54,8 +54,11 @@ class LocalWhisperClient(STTClient):
 
     async def health_check(self) -> bool:
         """Проверить доступность whisper."""
+        if self._model is not None:
+            return True
         try:
-            self._load_model()
+            loop = asyncio.get_running_loop()
+            await loop.run_in_executor(None, self._load_model)
             return self._model is not None
         except Exception:
             return False

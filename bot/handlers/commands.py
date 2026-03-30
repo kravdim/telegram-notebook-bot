@@ -1,5 +1,6 @@
 """Команды бота: /help, /tasks, /today, /frog, /done, /notes, /projects, /memoir, /chrono, /focus, /stats."""
 
+import html
 import logging
 import uuid as uuid_mod
 from datetime import date, datetime, timedelta
@@ -44,7 +45,7 @@ def _format_task(task) -> str:
         due = f" 📅 {task.due_date.strftime('%d.%m')}"
     if task.due_time:
         due += f" ⏰ {task.due_time.strftime('%H:%M')}"
-    return f"{frog}{emoji} {task.title}{due}"
+    return f"{frog}{emoji} {html.escape(task.title)}{due}"
 
 
 @router.message(Command("help"))
@@ -178,7 +179,7 @@ async def cb_set_frog(callback: CallbackQuery) -> None:
 
     if task:
         await callback.message.edit_text(
-            f"🐸 Лягушка дня назначена: <b>{task.title}</b>\n"
+            f"🐸 Лягушка дня назначена: <b>{html.escape(task.title)}</b>\n"
             "Съешь её первой — остаток дня будет легче!",
             parse_mode="HTML",
         )
@@ -197,7 +198,7 @@ async def cb_frog_done(callback: CallbackQuery) -> None:
 
     if task:
         await callback.message.edit_text(
-            f"🐸✅ Лягушка «{task.title}» съедена! Отличная работа! 🎉",
+            f"🐸✅ Лягушка «{html.escape(task.title)}» съедена! Отличная работа! 🎉",
             parse_mode="HTML",
         )
 
@@ -276,7 +277,7 @@ async def cb_task_done(callback: CallbackQuery) -> None:
 
     if task:
         await callback.message.edit_text(
-            f"✅ Задача «{task.title}» выполнена! 🎉",
+            f"✅ Задача «{html.escape(task.title)}» выполнена! 🎉",
             parse_mode="HTML",
         )
 
@@ -333,16 +334,14 @@ async def cmd_projects(message: Message) -> None:
         return
 
     lines = ["🐘 <b>Проекты (слоны):</b>\n"]
-    for p in projects:
-        async with async_session() as session:
+    async with async_session() as session:
+        for p in projects:
             progress = await get_project_progress(session, p.id)
-            tasks = await get_project_tasks(session, p.id)
-
-        pct = progress["percent"]
-        done = progress["done"]
-        total = progress["total"]
-        bar = "▓" * (pct // 10) + "░" * (10 - pct // 10)
-        lines.append(f"• <b>{p.title}</b> [{bar}] {pct}% ({done}/{total})")
+            pct = progress["percent"]
+            done = progress["done"]
+            total = progress["total"]
+            bar = "▓" * (pct // 10) + "░" * (10 - pct // 10)
+            lines.append(f"• <b>{html.escape(p.title)}</b> [{bar}] {pct}% ({done}/{total})")
 
     await message.answer("\n".join(lines), parse_mode="HTML")
 
@@ -519,6 +518,66 @@ async def _stats_values(message: Message) -> None:
 
 # --- /settings ---
 
+_DAY_NAMES = {1: "Пн", 2: "Вт", 3: "Ср", 4: "Чт", 5: "Пт", 6: "Сб", 7: "Вс"}
+
+
+def _build_settings_kb(user) -> InlineKeyboardBuilder:
+    """Собрать клавиатуру настроек."""
+    kb = InlineKeyboardBuilder()
+    kb.button(
+        text=f"🌅 Утренний дайджест: {user.digest_morning_time.strftime('%H:%M')}",
+        callback_data="settings:morning_time",
+    )
+    kb.button(
+        text=f"🌇 Вечерний итог: {user.digest_evening_time.strftime('%H:%M')}",
+        callback_data="settings:evening_time",
+    )
+    kb.button(
+        text=f"📔 Мемуарник: {user.memoir_prompt_time.strftime('%H:%M')}",
+        callback_data="settings:memoir_time",
+    )
+    kb.button(
+        text=f"🏢 Начало дня: {user.work_start_time.strftime('%H:%M')}",
+        callback_data="settings:work_start",
+    )
+    kb.button(
+        text=f"🏠 Конец дня: {user.work_end_time.strftime('%H:%M')}",
+        callback_data="settings:work_end",
+    )
+    days_str = ", ".join(_DAY_NAMES.get(d, "?") for d in (user.work_days or []))
+    kb.button(text=f"📅 Рабочие дни: {days_str}", callback_data="settings:work_days")
+
+    chrono_icon = "✅" if user.chronometry_enabled else "❌"
+    kb.button(
+        text=f"⏱ Хронометраж: {chrono_icon} ({user.chronometry_interval_min} мин)",
+        callback_data="settings:chrono",
+    )
+
+    digest_icon = "✅" if user.digest_enabled else "❌"
+    kb.button(text=f"📋 Дайджесты: {digest_icon}", callback_data="settings:digest_toggle")
+    kb.adjust(1)
+    return kb
+
+
+def _format_settings_text(user) -> str:
+    """Текст настроек."""
+    days_str = ", ".join(_DAY_NAMES.get(d, "?") for d in (user.work_days or []))
+    return (
+        f"⚙️ <b>Настройки</b>\n\n"
+        f"Часовой пояс: {user.timezone}\n"
+        f"Утренний дайджест: {user.digest_morning_time.strftime('%H:%M')}\n"
+        f"Вечерний итог: {user.digest_evening_time.strftime('%H:%M')}\n"
+        f"Мемуарник: {user.memoir_prompt_time.strftime('%H:%M')}\n"
+        f"Рабочие дни: {days_str}\n"
+        f"Рабочее время: {user.work_start_time.strftime('%H:%M')} — "
+        f"{user.work_end_time.strftime('%H:%M')}\n"
+        f"Хронометраж: {'✅' if user.chronometry_enabled else '❌'}"
+        f" (каждые {user.chronometry_interval_min} мин)\n"
+        f"Дайджесты: {'✅' if user.digest_enabled else '❌'}\n\n"
+        f"Нажми кнопку чтобы изменить:"
+    )
+
+
 @router.message(Command("settings"))
 async def cmd_settings(message: Message) -> None:
     """Показать текущие настройки."""
@@ -532,25 +591,244 @@ async def cmd_settings(message: Message) -> None:
         await message.answer("Пользователь не найден. Используй /start для регистрации.")
         return
 
-    work_days = ", ".join(
-        {1: "Пн", 2: "Вт", 3: "Ср", 4: "Чт", 5: "Пт", 6: "Сб", 7: "Вс"}.get(d, "?")
-        for d in (user.work_days or [])
+    await message.answer(
+        _format_settings_text(user),
+        parse_mode="HTML",
+        reply_markup=_build_settings_kb(user).as_markup(),
     )
 
-    await message.answer(
-        f"⚙️ <b>Настройки</b>\n\n"
-        f"Имя: {user.username}\n"
-        f"Часовой пояс: {user.timezone}\n"
-        f"Утренний дайджест: {user.digest_morning_time.strftime('%H:%M')}\n"
-        f"Вечерний итог: {user.digest_evening_time.strftime('%H:%M')}\n"
-        f"Мемуарник: {user.memoir_prompt_time.strftime('%H:%M')}\n"
-        f"Рабочие дни: {work_days}\n"
-        f"Рабочее время: {user.work_start_time.strftime('%H:%M')} — {user.work_end_time.strftime('%H:%M')}\n"
-        f"Хронометраж: {'✅' if user.chronometry_enabled else '❌'}"
-        f" (каждые {user.chronometry_interval_min} мин)\n"
-        f"Дайджесты: {'✅' if user.digest_enabled else '❌'}",
+
+# --- Settings callbacks ---
+
+async def _show_settings(callback: CallbackQuery) -> None:
+    """Вернуться к главному экрану настроек."""
+    async with async_session() as session:
+        user = await get_user(session, callback.from_user.id)
+    if not user:
+        await callback.message.edit_text("Пользователь не найден. Используй /start.")
+        return
+    await callback.message.edit_text(
+        _format_settings_text(user),
         parse_mode="HTML",
+        reply_markup=_build_settings_kb(user).as_markup(),
     )
+
+
+def _time_picker_kb(callback_prefix: str, start: int = 6, end: int = 23) -> InlineKeyboardBuilder:
+    """Клавиатура выбора времени (целые часы + :30)."""
+    kb = InlineKeyboardBuilder()
+    for hour in range(start, end + 1):
+        kb.button(text=f"{hour:02d}:00", callback_data=f"{callback_prefix}:{hour:02d}:00")
+        if hour < end:
+            kb.button(text=f"{hour:02d}:30", callback_data=f"{callback_prefix}:{hour:02d}:30")
+    kb.button(text="◀️ Назад", callback_data="settings:back")
+    kb.adjust(4)
+    return kb
+
+
+@router.callback_query(F.data == "settings:back")
+async def cb_settings_back(callback: CallbackQuery) -> None:
+    await callback.answer()
+    await _show_settings(callback)
+
+
+# --- Время утреннего дайджеста ---
+
+@router.callback_query(F.data == "settings:morning_time")
+async def cb_morning_time(callback: CallbackQuery) -> None:
+    await callback.answer()
+    kb = _time_picker_kb("settings:set_morning", start=6, end=11)
+    await callback.message.edit_text("🌅 Выбери время утреннего дайджеста:", reply_markup=kb.as_markup())
+
+
+@router.callback_query(F.data.startswith("settings:set_morning:"))
+async def cb_set_morning(callback: CallbackQuery) -> None:
+    await callback.answer()
+    parts = callback.data.split(":")
+    from datetime import time as dt_time
+    t = dt_time(int(parts[2]), int(parts[3]))
+    async with async_session() as session:
+        await update_user_settings(session, callback.from_user.id, digest_morning_time=t)
+    await _show_settings(callback)
+
+
+# --- Время вечернего итога ---
+
+@router.callback_query(F.data == "settings:evening_time")
+async def cb_evening_time(callback: CallbackQuery) -> None:
+    await callback.answer()
+    kb = _time_picker_kb("settings:set_evening", start=18, end=23)
+    await callback.message.edit_text("🌇 Выбери время вечернего итога:", reply_markup=kb.as_markup())
+
+
+@router.callback_query(F.data.startswith("settings:set_evening:"))
+async def cb_set_evening(callback: CallbackQuery) -> None:
+    await callback.answer()
+    parts = callback.data.split(":")
+    from datetime import time as dt_time
+    t = dt_time(int(parts[2]), int(parts[3]))
+    async with async_session() as session:
+        await update_user_settings(session, callback.from_user.id, digest_evening_time=t)
+    await _show_settings(callback)
+
+
+# --- Время мемуарника ---
+
+@router.callback_query(F.data == "settings:memoir_time")
+async def cb_memoir_time(callback: CallbackQuery) -> None:
+    await callback.answer()
+    kb = _time_picker_kb("settings:set_memoir", start=18, end=23)
+    await callback.message.edit_text("📔 Выбери время вопроса мемуарника:", reply_markup=kb.as_markup())
+
+
+@router.callback_query(F.data.startswith("settings:set_memoir:"))
+async def cb_set_memoir(callback: CallbackQuery) -> None:
+    await callback.answer()
+    parts = callback.data.split(":")
+    from datetime import time as dt_time
+    t = dt_time(int(parts[2]), int(parts[3]))
+    async with async_session() as session:
+        await update_user_settings(session, callback.from_user.id, memoir_prompt_time=t)
+    await _show_settings(callback)
+
+
+# --- Начало рабочего дня ---
+
+@router.callback_query(F.data == "settings:work_start")
+async def cb_work_start(callback: CallbackQuery) -> None:
+    await callback.answer()
+    kb = _time_picker_kb("settings:set_wstart", start=6, end=12)
+    await callback.message.edit_text("🏢 Выбери начало рабочего дня:", reply_markup=kb.as_markup())
+
+
+@router.callback_query(F.data.startswith("settings:set_wstart:"))
+async def cb_set_work_start(callback: CallbackQuery) -> None:
+    await callback.answer()
+    parts = callback.data.split(":")
+    from datetime import time as dt_time
+    t = dt_time(int(parts[2]), int(parts[3]))
+    async with async_session() as session:
+        await update_user_settings(session, callback.from_user.id, work_start_time=t)
+    await _show_settings(callback)
+
+
+# --- Конец рабочего дня ---
+
+@router.callback_query(F.data == "settings:work_end")
+async def cb_work_end(callback: CallbackQuery) -> None:
+    await callback.answer()
+    kb = _time_picker_kb("settings:set_wend", start=15, end=23)
+    await callback.message.edit_text("🏠 Выбери конец рабочего дня:", reply_markup=kb.as_markup())
+
+
+@router.callback_query(F.data.startswith("settings:set_wend:"))
+async def cb_set_work_end(callback: CallbackQuery) -> None:
+    await callback.answer()
+    parts = callback.data.split(":")
+    from datetime import time as dt_time
+    t = dt_time(int(parts[2]), int(parts[3]))
+    async with async_session() as session:
+        await update_user_settings(session, callback.from_user.id, work_end_time=t)
+    await _show_settings(callback)
+
+
+# --- Рабочие дни ---
+
+@router.callback_query(F.data == "settings:work_days")
+async def cb_work_days(callback: CallbackQuery) -> None:
+    await callback.answer()
+    async with async_session() as session:
+        user = await get_user(session, callback.from_user.id)
+    current = set(user.work_days or [])
+
+    kb = InlineKeyboardBuilder()
+    for d in range(1, 8):
+        check = "✅" if d in current else "⬜"
+        kb.button(text=f"{check} {_DAY_NAMES[d]}", callback_data=f"settings:toggle_day:{d}")
+    kb.button(text="◀️ Назад", callback_data="settings:back")
+    kb.adjust(4)
+
+    await callback.message.edit_text(
+        "📅 Нажми на день чтобы вкл/выкл:", reply_markup=kb.as_markup()
+    )
+
+
+@router.callback_query(F.data.startswith("settings:toggle_day:"))
+async def cb_toggle_day(callback: CallbackQuery) -> None:
+    await callback.answer()
+    day = int(callback.data.split(":")[2])
+    async with async_session() as session:
+        user = await get_user(session, callback.from_user.id)
+        current = set(user.work_days or [])
+        if day in current:
+            current.discard(day)
+        else:
+            current.add(day)
+        await update_user_settings(session, callback.from_user.id, work_days=sorted(current))
+    # Перерисовать кнопки дней
+    await cb_work_days(callback)
+
+
+# --- Хронометраж (вкл/выкл + интервал) ---
+
+@router.callback_query(F.data == "settings:chrono")
+async def cb_chrono(callback: CallbackQuery) -> None:
+    await callback.answer()
+    async with async_session() as session:
+        user = await get_user(session, callback.from_user.id)
+
+    kb = InlineKeyboardBuilder()
+    chrono_label = "🔴 Выключить" if user.chronometry_enabled else "🟢 Включить"
+    kb.button(text=chrono_label, callback_data="settings:chrono_toggle")
+    for mins in (15, 30, 45, 60, 90, 120):
+        mark = " ✓" if user.chronometry_interval_min == mins else ""
+        kb.button(text=f"{mins} мин{mark}", callback_data=f"settings:chrono_set:{mins}")
+    kb.button(text="◀️ Назад", callback_data="settings:back")
+    kb.adjust(1, 3, 3, 1)
+
+    await callback.message.edit_text(
+        f"⏱ <b>Хронометраж</b>\n\n"
+        f"Статус: {'✅ включён' if user.chronometry_enabled else '❌ выключен'}\n"
+        f"Интервал: каждые {user.chronometry_interval_min} мин\n\n"
+        f"Выбери интервал или вкл/выкл:",
+        parse_mode="HTML",
+        reply_markup=kb.as_markup(),
+    )
+
+
+@router.callback_query(F.data == "settings:chrono_toggle")
+async def cb_chrono_toggle(callback: CallbackQuery) -> None:
+    await callback.answer()
+    async with async_session() as session:
+        user = await get_user(session, callback.from_user.id)
+        if not user:
+            return
+        new_val = not user.chronometry_enabled
+        await update_user_settings(session, callback.from_user.id, chronometry_enabled=new_val)
+    await cb_chrono(callback)
+
+
+@router.callback_query(F.data.startswith("settings:chrono_set:"))
+async def cb_chrono_set(callback: CallbackQuery) -> None:
+    await callback.answer()
+    mins = int(callback.data.split(":")[2])
+    async with async_session() as session:
+        await update_user_settings(session, callback.from_user.id, chronometry_interval_min=mins)
+    await cb_chrono(callback)
+
+
+# --- Дайджесты вкл/выкл ---
+
+@router.callback_query(F.data == "settings:digest_toggle")
+async def cb_digest_toggle(callback: CallbackQuery) -> None:
+    await callback.answer()
+    async with async_session() as session:
+        user = await get_user(session, callback.from_user.id)
+        if not user:
+            return
+        new_val = not user.digest_enabled
+        await update_user_settings(session, callback.from_user.id, digest_enabled=new_val)
+    await _show_settings(callback)
 
 
 @router.message(Command("birthdays"))
@@ -580,10 +858,10 @@ async def cmd_birthdays(message: Message) -> None:
             years = today.year - b.birth_date.year
             # Если ДР ещё не было в этом году
             this_year_bday = b.birth_date.replace(year=today.year)
-            if this_year_bday < today:
+            if this_year_bday <= today:
                 years_now = years
             else:
-                years_now = years
+                years_now = years - 1
             age = f" ({years_now} лет)"
         note = f" — {b.note}" if b.note else ""
         lines.append(f"  🎁 {b.name} — {date_str}{age}{note}")

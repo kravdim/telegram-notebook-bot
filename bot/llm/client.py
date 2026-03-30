@@ -86,7 +86,7 @@ class LLMClient:
                     self.main_client, self.main_model, messages, functions,
                     timeout, self.main_max_retries,
                 )
-            except (APIError, APITimeoutError, RateLimitError, Exception) as e:
+            except (APIError, APITimeoutError, RateLimitError) as e:
                 logger.warning("Main LLM (%s) failed: %s. Switching to fallback.", self.main_model, e)
                 self._main_healthy = False
 

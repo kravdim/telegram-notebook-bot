@@ -88,13 +88,9 @@ async def cb_voice_confirm(callback: CallbackQuery) -> None:
 
     await callback.message.edit_text(f"🎤 {text}")
 
-    # Пересылаем как текстовое сообщение через messages handler
-    from bot.handlers.messages import handle_text
-
-    # Создаём псевдо-сообщение с текстом, используя оригинальное сообщение
-    callback.message.text = text
-    callback.message.from_user = callback.from_user
-    await handle_text(callback.message)
+    # Обрабатываем распознанный текст через LLM
+    from bot.handlers.messages import process_text_message
+    await process_text_message(user_id, text, callback.message)
 
 
 @router.callback_query(F.data == "voice_edit")

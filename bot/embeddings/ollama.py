@@ -30,7 +30,10 @@ class OllamaEmbeddingClient(EmbeddingClient):
             )
             response.raise_for_status()
             data = response.json()
-            return data["embedding"]
+            embedding = data.get("embedding")
+            if not embedding:
+                raise ValueError(f"Ollama вернул ответ без embedding: {list(data.keys())}")
+            return embedding
 
     async def embed_batch(self, texts: List[str]) -> List[List[float]]:
         """Получить embeddings для списка текстов (последовательно)."""
