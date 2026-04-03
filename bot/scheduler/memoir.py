@@ -12,6 +12,24 @@ from bot.formatters.memoir import format_memoir_question, format_weekly_review
 
 logger = logging.getLogger(__name__)
 
+# user_id → message_id вопроса мемуарника (для отслеживания ответа)
+_awaiting_memoir: dict[int, int] = {}
+
+
+def is_awaiting_memoir(user_id: int) -> bool:
+    """Проверить, ожидается ли ответ на мемуарник."""
+    return user_id in _awaiting_memoir
+
+
+def get_memoir_message_id(user_id: int) -> int | None:
+    """Вернуть message_id вопроса мемуарника."""
+    return _awaiting_memoir.get(user_id)
+
+
+def clear_awaiting_memoir(user_id: int) -> None:
+    """Очистить флаг ожидания ответа на мемуарник."""
+    _awaiting_memoir.pop(user_id, None)
+
 
 async def send_memoir_prompts(bot: Bot) -> None:
     """Проверить и отправить вопросы мемуарника."""
@@ -36,11 +54,12 @@ async def send_memoir_prompts(bot: Bot) -> None:
                 if now.day_of_week == pendulum.SUNDAY:
                     await _send_weekly_review(bot, user, tz)
                 else:
-                    await bot.send_message(
+                    sent = await bot.send_message(
                         chat_id=user.telegram_id,
                         text=format_memoir_question(),
                         parse_mode="HTML",
                     )
+                    _awaiting_memoir[user.telegram_id] = sent.message_id
 
                 # Последний день месяца — месячный ревью
                 if now.day == now.days_in_month:
@@ -70,11 +89,12 @@ async def _send_weekly_review(bot: Bot, user, tz: str) -> None:
     )
 
     # Также задаём вопрос дня
-    await bot.send_message(
+    sent = await bot.send_message(
         chat_id=user.telegram_id,
         text=format_memoir_question(),
         parse_mode="HTML",
     )
+    _awaiting_memoir[user.telegram_id] = sent.message_id
 
 
 async def _send_monthly_review(bot: Bot, user, tz: str) -> None:

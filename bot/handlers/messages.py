@@ -44,6 +44,29 @@ async def process_text_message(user_id: int, text: str, message: Message) -> Non
         )
         return
 
+    # Проверяем, ожидается ли ответ на мемуарник
+    from bot.scheduler.memoir import is_awaiting_memoir, clear_awaiting_memoir, get_memoir_message_id
+    if is_awaiting_memoir(user_id):
+        memoir_msg_id = get_memoir_message_id(user_id)
+        reply_to = message.reply_to_message
+
+        # Reply на другое сообщение → не мемуарник
+        is_memoir_reply = True
+        if reply_to and memoir_msg_id and reply_to.message_id != memoir_msg_id:
+            is_memoir_reply = False
+
+        if is_memoir_reply:
+            clear_awaiting_memoir(user_id)
+            await message.bot.send_chat_action(chat_id=message.chat.id, action="typing")
+
+            async with async_session() as session:
+                user = await get_user(session, user_id)
+            user_tz = user.timezone if user else "Europe/Moscow"
+
+            await _save_memoir_answer(user_id, text, user_tz)
+            await message.answer("📔 Записано в мемуарник! ✅")
+            return
+
     # Проверяем, ожидается ли ответ на хронометраж
     from bot.scheduler.chronometry import is_awaiting_response, clear_awaiting, get_chrono_message_id
     if is_awaiting_response(user_id):
@@ -212,6 +235,29 @@ async def handle_text(message: Message) -> None:
         return
 
     await process_text_message(message.from_user.id, message.text.strip(), message)
+
+
+async def _save_memoir_answer(user_id: int, text: str, tz: str) -> None:
+    """Сохранить ответ на мемуарник как memoir_entry + diary_entry."""
+    import pendulum
+    from bot.db.crud.memoir import create_memoir_entry
+    from bot.db.crud.diary import create_diary_entry
+    from bot.llm.dispatcher import _extract_value_tag
+
+    today = pendulum.now(tz).date()
+    value_tag = _extract_value_tag(text)
+
+    async with async_session() as session:
+        await create_memoir_entry(
+            session, user_id=user_id,
+            event_date=today, content=text,
+            value_tag=value_tag, period_type="day",
+        )
+
+    async with async_session() as session:
+        await create_diary_entry(session, user_id, content=text, tz=tz)
+
+    logger.info("Мемуарник сохранён: user=%s, date=%s, value=%s", user_id, today, value_tag)
 
 
 async def _compress(user_id: int) -> None:
