@@ -21,7 +21,7 @@ from bot.handlers import (
 from bot.llm.client import LLMClient
 from bot.llm.context import clear_all as clear_context
 from bot.llm.queue import LLMQueue
-from bot.middleware import WhitelistMiddleware
+from bot.middleware import RateLimitMiddleware, WhitelistMiddleware
 from bot.scheduler.backup import run_backup
 from bot.scheduler.chronometry import send_chronometry_prompts
 from bot.scheduler.digest import send_digests
@@ -246,9 +246,11 @@ async def main() -> None:
     asyncio.create_task(_weekly_review_loop())
     asyncio.create_task(_maintenance_loop())
 
-    # Middleware
+    # Middleware (порядок: whitelist первым, rate limit вторым)
     dp.message.middleware(WhitelistMiddleware())
     dp.callback_query.middleware(WhitelistMiddleware())
+    dp.message.middleware(RateLimitMiddleware())
+    dp.callback_query.middleware(RateLimitMiddleware())
 
     # Роутеры (порядок важен: onboarding, admin, commands, callbacks первыми; messages — последний)
     dp.include_router(onboarding.router)

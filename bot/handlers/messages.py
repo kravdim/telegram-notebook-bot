@@ -45,19 +45,32 @@ async def process_text_message(user_id: int, text: str, message: Message) -> Non
         return
 
     # Проверяем, ожидается ли ответ на хронометраж
-    from bot.scheduler.chronometry import is_awaiting_response, clear_awaiting
+    from bot.scheduler.chronometry import is_awaiting_response, clear_awaiting, get_chrono_message_id
     if is_awaiting_response(user_id):
-        clear_awaiting(user_id)
-        await message.bot.send_chat_action(chat_id=message.chat.id, action="typing")
+        # Определяем, куда направлять сообщение:
+        # - Reply на хронометражный вопрос → хронометраж
+        # - Reply на другое сообщение → обычная обработка (LLM)
+        # - Без reply → хронометраж (обратная совместимость)
+        chrono_msg_id = get_chrono_message_id(user_id)
+        reply_to = message.reply_to_message
 
-        async with async_session() as session:
-            user = await get_user(session, user_id)
-        user_tz = user.timezone if user else "Europe/Moscow"
+        is_chrono_reply = True
+        if reply_to and chrono_msg_id and reply_to.message_id != chrono_msg_id:
+            # Пользователь ответил reply'ем на другое сообщение — это не хронометраж
+            is_chrono_reply = False
 
-        from bot.handlers.chronometry import process_chronometry_response
-        result = await process_chronometry_response(user_id, text, user_tz)
-        await message.answer(result)
-        return
+        if is_chrono_reply:
+            clear_awaiting(user_id)
+            await message.bot.send_chat_action(chat_id=message.chat.id, action="typing")
+
+            async with async_session() as session:
+                user = await get_user(session, user_id)
+            user_tz = user.timezone if user else "Europe/Moscow"
+
+            from bot.handlers.chronometry import process_chronometry_response
+            result = await process_chronometry_response(user_id, text, user_tz)
+            await message.answer(result)
+            return
 
     # Typing indicator
     await message.bot.send_chat_action(chat_id=message.chat.id, action="typing")

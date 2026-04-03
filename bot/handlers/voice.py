@@ -40,6 +40,13 @@ async def handle_voice(message: Message) -> None:
 
     # Скачиваем голосовое
     voice = message.voice
+
+    # Лимит размера: 20 MB
+    max_voice_size = 20 * 1024 * 1024
+    if voice.file_size and voice.file_size > max_voice_size:
+        await message.answer("Голосовое слишком длинное (макс. 20 МБ). Попробуй короче.")
+        return
+
     file = await message.bot.get_file(voice.file_id)
 
     with tempfile.NamedTemporaryFile(suffix=".ogg", delete=False) as tmp:

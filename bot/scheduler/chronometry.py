@@ -11,8 +11,8 @@ from bot.db.engine import async_session
 
 logger = logging.getLogger(__name__)
 
-# user_id → True если ожидаем ответ на хронометраж
-_awaiting_response: dict[int, bool] = {}
+# user_id → message_id хронометражного вопроса (None = не ожидаем)
+_awaiting_response: dict[int, int] = {}
 
 # user_id → индекс последнего вопроса (чтобы не повторять подряд)
 _last_question_idx: dict[int, int] = {}
@@ -35,7 +35,12 @@ _CHRONOMETRY_QUESTIONS = [
 
 def is_awaiting_response(user_id: int) -> bool:
     """Проверить, ожидается ли ответ на хронометраж от пользователя."""
-    return _awaiting_response.get(user_id, False)
+    return user_id in _awaiting_response
+
+
+def get_chrono_message_id(user_id: int) -> int | None:
+    """Вернуть message_id хронометражного вопроса (или None)."""
+    return _awaiting_response.get(user_id)
 
 
 def clear_awaiting(user_id: int) -> None:
@@ -84,18 +89,17 @@ async def send_chronometry_prompts(bot: Bot) -> None:
                     chronometry_last_asked=now,
                 )
 
-            _awaiting_response[user.telegram_id] = True
-
             # Выбираем вопрос, отличный от предыдущего
             last_idx = _last_question_idx.get(user.telegram_id, -1)
             available = [i for i in range(len(_CHRONOMETRY_QUESTIONS)) if i != last_idx]
             idx = random.choice(available)
             _last_question_idx[user.telegram_id] = idx
 
-            await bot.send_message(
+            sent = await bot.send_message(
                 chat_id=user.telegram_id,
                 text=_CHRONOMETRY_QUESTIONS[idx],
             )
+            _awaiting_response[user.telegram_id] = sent.message_id
             logger.info("Хронометраж: вопрос отправлен %s", user.telegram_id)
 
         except Exception as e:

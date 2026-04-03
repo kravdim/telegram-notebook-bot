@@ -12,19 +12,29 @@
 - **Слоны** (`/projects`) — большие проекты разбиваются на бифштексы (задачи на 1-2 часа) через AI-декомпозицию
 - **Мемуарник** (`/memoir`) — каждый вечер вопрос «что было самым ярким?», анализ ценностей
 - **Хронометраж** (`/chrono`) — периодический опрос с AI-реакциями, фотография рабочего дня
+- **Reply-контекст** — ответ reply'ем на конкретное сообщение бота направляется в нужный обработчик (хронометраж или LLM)
 - **Дайджесты** — утренний (с днями рождения!) и вечерний с разбором невыполненных задач
 - **Sunday Review** — еженедельный обзор: распределение времени, лягушки, ценности, прогресс по слонам
 - **Периодические напоминания** — список задач каждые 2 часа в рабочее время (9, 11, 13, 15, 17)
 - **Режим фокуса** (`/focus`) — хронометраж не беспокоит
 - **Командировки** (`/trip`) — отдельный список задач, адаптированный дайджест
-- **Голосовые сообщения** — STT + confirm перед обработкой
+- **Голосовые сообщения** — STT + confirm перед обработкой, лимит размера 20 МБ
 - **Семантический поиск** — pgvector + pg_trgm, гибридный RAG (vector + trigram) по всем записям
 - **База знаний** — советы по методике Архангельского через RAG-поиск
 - **Дни рождения** (`/birthdays`) — запоминает и показывает в утреннем дайджесте
 - **Экспорт** (`/export`) — выгрузка в Markdown (Obsidian-совместимый)
 - **Статистика** (`/stats`) — лягушки, продуктивность, ценности
 - **Повторяющиеся задачи** — бот распознаёт и комментирует рутину с юмором
-- **Защита** — prompt injection protection, ограничение роли, лимит длины ответов
+
+## Безопасность
+
+- **Whitelist** — доступ только для разрешённых Telegram ID (middleware на message + callback_query)
+- **Rate limiting** — анти-флуд middleware: макс. 20 сообщений/минуту на пользователя
+- **Prompt injection protection** — жёсткие границы роли, игнорирование попыток смены поведения, лимит длины ответов
+- **Валидация LLM-вывода** — json_repair + проверка допустимых полей и значений в dispatcher
+- **user_id** проверяется во всех CRUD-операциях
+- **SQL injection** — параметризованные запросы SQLAlchemy
+- **API-ключи** — .env + Pydantic Settings, вне репозитория
 
 ## Технический стек
 
@@ -35,7 +45,7 @@
 | БД | PostgreSQL 15 + pgvector + pg_trgm |
 | ORM | SQLAlchemy 2.x async + asyncpg |
 | Миграции | Alembic |
-| LLM | Gemini 3 Flash Preview (main) + DeepSeek (fallback) через OpenAI SDK |
+| LLM | Gemini 3.1 Pro Preview (main) + DeepSeek (fallback) через OpenAI SDK |
 | Embedding | Ollama + nomic-embed-text (macOS) / API (VPS) |
 | STT | faster-whisper (macOS) / Groq API (VPS) |
 | Конфиг | Pydantic Settings + config.yaml + .env |
@@ -109,18 +119,18 @@ sudo ./platform/linux/install.sh
 bot/
 ├── main.py                     # Точка входа, инициализация, polling
 ├── config.py                   # Pydantic Settings + config.yaml
-├── middleware.py                # Whitelist middleware
+├── middleware.py                # Whitelist + Rate Limiting middleware
 ├── handlers/
 │   ├── onboarding.py           # FSM онбординга (6 шагов)
 │   ├── commands.py             # /today, /tasks, /frog, /done, /notes, /projects,
 │   │                           # /memoir, /chrono, /focus, /stats, /birthdays,
 │   │                           # /export, /settings, /help
-│   ├── messages.py             # Свободный текст → LLM → function call
+│   ├── messages.py             # Свободный текст → LLM → function call (с reply-контекстом)
 │   ├── callbacks.py            # Snooze, confirm удаления
 │   ├── evening_review.py       # Разбор невыполненных задач
 │   ├── chronometry.py          # Обработка ответов хронометража
 │   ├── trip.py                 # Управление командировками
-│   ├── voice.py                # Голосовые → STT → confirm → обработка
+│   ├── voice.py                # Голосовые → STT → confirm → обработка (лимит 20 МБ)
 │   └── admin.py                # /status, /prompts, /adduser, /removeuser, /listusers
 ├── llm/
 │   ├── client.py               # LLMClient с fallback (Gemini → DeepSeek)
@@ -152,7 +162,7 @@ bot/
 │   ├── sweep.py                # Двойной контур: пропущенные (5 мин)
 │   ├── digest.py               # Утренний/вечерний дайджесты
 │   ├── memoir.py               # Вопросы мемуарника
-│   ├── chronometry.py          # Периодический опрос хронометража
+│   ├── chronometry.py          # Периодический опрос хронометража (с reply-tracking)
 │   ├── task_reminders.py       # Напоминания задач каждые 2 часа (9/11/13/15/17)
 │   ├── weekly_review.py        # Еженедельный обзор (воскресенье 21:00)
 │   ├── healthcheck.py          # Health check (DB, LLM, Embedding)
@@ -215,7 +225,6 @@ scripts/
 - **json_repair** — автокоррекция невалидного JSON от LLM
 - **Бэкапы** — ежедневный pg_dump с ротацией 30 дней
 - **Graceful shutdown** — корректное завершение при SIGTERM
-- **Prompt injection protection** — жёсткие границы роли, игнорирование попыток смены поведения
 
 ## Команды бота
 
@@ -254,9 +263,9 @@ scripts/
 llm:
   main:
     provider: gemini
-    model: gemini-3-flash-preview
+    model: gemini-3.1-pro-preview
     base_url: https://generativelanguage.googleapis.com/v1beta/openai/
-    timeout_sec: 15
+    timeout_sec: 25
     max_retries: 2
   fallback:
     provider: deepseek
