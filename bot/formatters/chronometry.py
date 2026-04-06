@@ -1,5 +1,10 @@
 """Форматирование хронометража: фотография рабочего дня, тренды."""
 
+from html import escape
+from typing import List
+
+import pendulum
+
 
 _CATEGORY_EMOJI = {
     "work": "💼",
@@ -45,6 +50,21 @@ def format_day_photo(stats: dict) -> str:
     if avg_prod:
         parts.append(f"\n📈 Средняя продуктивность: {avg_prod}/5")
 
+    return "\n".join(parts)
+
+
+def format_day_timeline(entries: List, tz: str = "Europe/Moscow") -> str:
+    """Хронологический список занятий за день по ответам трекера."""
+    if not entries:
+        return "📝 За сегодня в трекере нет записей."
+
+    parts = [f"📝 <b>Чем занимался сегодня</b> ({len(entries)} записей)\n"]
+    sorted_entries = sorted(entries, key=lambda e: e.timestamp)
+    for e in sorted_entries:
+        ts = pendulum.instance(e.timestamp).in_tz(tz)
+        emoji = _CATEGORY_EMOJI.get(e.category, "🔹")
+        text = escape((e.activity_text or "").strip())
+        parts.append(f"  {ts.format('HH:mm')} {emoji} {text}")
     return "\n".join(parts)
 
 

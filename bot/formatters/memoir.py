@@ -65,7 +65,7 @@ def format_weekly_review(entries: List[MemoirEntry]) -> str:
 
     parts = ["📔 <b>Неделя в мемуарнике</b>\n"]
     values = {}
-    for entry in entries:
+    for entry in sorted(entries, key=lambda e: e.event_date):
         tag = entry.value_tag or "другое"
         values[tag] = values.get(tag, 0) + 1
         emoji = _VALUE_EMOJI.get(tag, "🔹")

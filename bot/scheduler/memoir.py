@@ -5,9 +5,11 @@ import logging
 import pendulum
 from aiogram import Bot
 
+from bot.db.crud.chronometry import get_today_entries
 from bot.db.crud.memoir import get_memoir_entries
 from bot.db.crud.users import get_all_users, update_user_settings
 from bot.db.engine import async_session
+from bot.formatters.chronometry import format_day_timeline
 from bot.formatters.memoir import format_memoir_question, format_weekly_review
 
 logger = logging.getLogger(__name__)
@@ -50,6 +52,9 @@ async def send_memoir_prompts(bot: Bot) -> None:
                 continue
 
             if now >= target and now <= target.add(minutes=5):
+                # Сначала — список дел дня по трекеру
+                await _send_day_timeline(bot, user, tz)
+
                 # Воскресенье — недельный ревью
                 if now.day_of_week == pendulum.SUNDAY:
                     await _send_weekly_review(bot, user, tz)
@@ -76,6 +81,18 @@ async def send_memoir_prompts(bot: Bot) -> None:
                 "Ошибка мемуарника для %s: %s",
                 user.telegram_id, e, exc_info=True,
             )
+
+
+async def _send_day_timeline(bot: Bot, user, tz: str) -> None:
+    """Отправить хронологический список занятий за день из трекера."""
+    async with async_session() as session:
+        entries = await get_today_entries(session, user.telegram_id, tz)
+    if not entries:
+        return
+    text = format_day_timeline(entries, tz)
+    await bot.send_message(
+        chat_id=user.telegram_id, text=text, parse_mode="HTML"
+    )
 
 
 async def _send_weekly_review(bot: Bot, user, tz: str) -> None:
