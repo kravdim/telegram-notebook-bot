@@ -21,8 +21,8 @@ async def send_task_reminders(bot: Bot) -> None:
         users = await get_all_users(session)
 
     for user in users:
-        if not user.digest_enabled:
-            continue
+        # Напоминания задач не привязаны к digest_enabled — это отдельная фича
+        # Пропускаем пользователей без задач (проверка ниже)
 
         try:
             tz = user.timezone or "Europe/Moscow"

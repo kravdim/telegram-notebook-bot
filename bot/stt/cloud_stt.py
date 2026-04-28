@@ -3,6 +3,7 @@
 import logging
 from pathlib import Path
 
+import anyio
 from openai import AsyncOpenAI
 
 from bot.config import settings
@@ -36,7 +37,7 @@ class CloudSTTClient(STTClient):
 
     async def transcribe(self, audio_path: Path) -> str:
         """Транскрибировать через API."""
-        with open(audio_path, "rb") as f:
+        async with await anyio.open_file(audio_path, "rb") as f:
             response = await self.client.audio.transcriptions.create(
                 model=self.model,
                 file=f,
@@ -47,7 +48,7 @@ class CloudSTTClient(STTClient):
     async def health_check(self) -> bool:
         """Проверить доступность API."""
         try:
-            # Нет лёгкого способа проверить — считаем доступным
+            await self.client.models.list(timeout=5)
             return True
         except Exception:
             return False

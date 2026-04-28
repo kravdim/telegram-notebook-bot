@@ -40,7 +40,11 @@ async def get_pending_reminders(
     session: AsyncSession,
     before: datetime,
 ) -> List[Reminder]:
-    """Получить неотправленные напоминания, время которых наступило."""
+    """Получить неотправленные напоминания, время которых наступило.
+
+    Использует FOR UPDATE SKIP LOCKED для предотвращения race condition
+    между основным циклом и sweep.
+    """
     result = await session.execute(
         select(Reminder)
         .where(
@@ -48,6 +52,7 @@ async def get_pending_reminders(
             Reminder.remind_at <= before,
         )
         .order_by(Reminder.remind_at.asc())
+        .with_for_update(skip_locked=True)
     )
     return list(result.scalars().all())
 

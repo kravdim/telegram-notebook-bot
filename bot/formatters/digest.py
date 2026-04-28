@@ -65,8 +65,8 @@ def format_morning_digest(
             time_str = f" ⏰ {t.due_time.strftime('%H:%M')}" if t.due_time else ""
             parts.append(f"  {emoji} {t.title}{time_str}")
 
-    if no_date_tasks and not is_weekend:
-        overdue = [t for t in no_date_tasks if t.due_date and t.due_date < today]
+    if not is_weekend:
+        overdue = [t for t in tasks if t.due_date and t.due_date < today and t.status == "open"]
         if overdue:
             parts.append(f"\n⚠️ Просроченных: {len(overdue)}")
 

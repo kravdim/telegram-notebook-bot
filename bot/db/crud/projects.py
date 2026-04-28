@@ -98,3 +98,40 @@ async def get_project_progress(
         "done": done,
         "percent": int(done / total * 100) if total > 0 else 0,
     }
+
+
+async def batch_project_progress(
+    session: AsyncSession,
+    project_ids: list,
+) -> dict:
+    """Получить прогресс для нескольких проектов одним запросом."""
+    if not project_ids:
+        return {}
+
+    from sqlalchemy import func, case
+    result = await session.execute(
+        select(
+            Task.project_id,
+            func.count().label("total"),
+            func.sum(case((Task.status == "done", 1), else_=0)).label("done"),
+        )
+        .where(Task.project_id.in_(project_ids))
+        .group_by(Task.project_id)
+    )
+
+    progress = {}
+    for row in result.all():
+        total = row.total or 0
+        done = row.done or 0
+        progress[row.project_id] = {
+            "total": total,
+            "done": done,
+            "percent": int(done / total * 100) if total > 0 else 0,
+        }
+
+    # Проекты без задач
+    for pid in project_ids:
+        if pid not in progress:
+            progress[pid] = {"total": 0, "done": 0, "percent": 0}
+
+    return progress

@@ -82,13 +82,6 @@ async def send_chronometry_prompts(bot: Bot) -> None:
                 if (now - last).in_seconds() < interval_sec:
                     continue
 
-            # Обновляем timestamp в БД
-            async with async_session() as session:
-                await update_user_settings(
-                    session, user.telegram_id,
-                    chronometry_last_asked=now,
-                )
-
             # Выбираем вопрос, отличный от предыдущего
             last_idx = _last_question_idx.get(user.telegram_id, -1)
             available = [i for i in range(len(_CHRONOMETRY_QUESTIONS)) if i != last_idx]
@@ -100,6 +93,13 @@ async def send_chronometry_prompts(bot: Bot) -> None:
                 text=_CHRONOMETRY_QUESTIONS[idx],
             )
             _awaiting_response[user.telegram_id] = sent.message_id
+
+            # Обновляем timestamp в БД только после успешной отправки
+            async with async_session() as session:
+                await update_user_settings(
+                    session, user.telegram_id,
+                    chronometry_last_asked=now,
+                )
             logger.info("Хронометраж: вопрос отправлен %s", user.telegram_id)
 
         except Exception as e:

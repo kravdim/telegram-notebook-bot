@@ -81,22 +81,27 @@ async def create_project_tasks(
     created = 0
 
     async with async_session() as session:
-        for title in task_titles:
-            await create_task(
-                session,
-                user_id=user_id,
-                title=title,
-                category=category,
-                project_id=pid,
-            )
-            created += 1
+        try:
+            for title in task_titles:
+                await create_task(
+                    session,
+                    user_id=user_id,
+                    title=title,
+                    category=category,
+                    project_id=pid,
+                )
+                created += 1
 
-        # Обновляем список задач проекта
-        project = await get_project_by_id(session, pid)
-        if project:
-            from bot.db.crud.projects import get_project_tasks
-            tasks = await get_project_tasks(session, pid)
-            project.task_ids_ordered = [str(t.id) for t in tasks]
-            await session.commit()
+            # Обновляем список задач проекта
+            project = await get_project_by_id(session, pid)
+            if project:
+                from bot.db.crud.projects import get_project_tasks
+                tasks = await get_project_tasks(session, pid)
+                project.task_ids_ordered = [str(t.id) for t in tasks]
+                await session.commit()
+        except Exception:
+            await session.rollback()
+            logger.error("Ошибка при создании задач проекта %s, откат", project_id, exc_info=True)
+            return 0
 
     return created

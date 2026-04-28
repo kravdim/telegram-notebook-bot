@@ -77,6 +77,7 @@ async def _trip_on(message: Message, text: str) -> None:
     end_date = pendulum.now(tz).add(days=7).date()
 
     # Ищем даты в формате DD.MM-DD.MM
+    date_part = None
     for part in parts:
         if "-" in part and "." in part:
             try:
@@ -90,10 +91,26 @@ async def _trip_on(message: Message, text: str) -> None:
                 ).date()
                 start_date = sd
                 end_date = ed
-                title = text.replace(part, "").strip()
+                date_part = part
                 break
             except Exception:
                 pass
+
+    # Извлекаем название и город из текста без дат
+    if date_part:
+        remaining = text.replace(date_part, "").strip()
+    else:
+        remaining = text
+
+    # Если остались слова после дат — первое слово/фраза = город, остальное = название
+    if remaining:
+        words = remaining.split()
+        if len(words) >= 2:
+            # Последнее слово может быть городом
+            destination = words[-1]
+            title = " ".join(words[:-1])
+        else:
+            title = remaining
 
     async with async_session() as session:
         # Проверяем, нет ли уже активной

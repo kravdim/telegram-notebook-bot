@@ -57,22 +57,37 @@ async def send_digests(bot: Bot) -> None:
             tomorrow = today + pendulum.duration(days=1)
             evening_sent = sent_date is not None and sent_date >= tomorrow
 
-            # Утренний дайджест (идемпотентность через morning_sent, без верхней границы)
+            # Утренний дайджест (write-ahead: маркер до отправки)
             if now >= morning_target and not morning_sent:
-                await _send_morning(bot, user, today, tz)
                 async with async_session() as session:
                     await update_user_settings(
                         session, user.telegram_id, digest_sent_date=today
                     )
+                try:
+                    await _send_morning(bot, user, today, tz)
+                except Exception:
+                    # Откатываем маркер при ошибке
+                    async with async_session() as session:
+                        await update_user_settings(
+                            session, user.telegram_id, digest_sent_date=None
+                        )
+                    raise
 
-            # Вечерний дайджест (не зависит от утреннего)
+            # Вечерний дайджест (write-ahead: маркер до отправки)
             if now >= evening_target and not evening_sent:
-                await _send_evening(bot, user, today, tz)
-                # Маркер: ставим завтрашнюю дату чтобы не повторять
                 async with async_session() as session:
                     await update_user_settings(
                         session, user.telegram_id, digest_sent_date=tomorrow
                     )
+                try:
+                    await _send_evening(bot, user, today, tz)
+                except Exception:
+                    # Откат к утреннему маркеру при ошибке
+                    async with async_session() as session:
+                        await update_user_settings(
+                            session, user.telegram_id, digest_sent_date=today
+                        )
+                    raise
 
         except Exception as e:
             logger.error(

@@ -1,6 +1,6 @@
 """CRUD-операции для дней рождения."""
 
-from datetime import date
+from datetime import date, timedelta
 from typing import List, Optional
 
 from sqlalchemy import select, extract, and_
@@ -55,7 +55,7 @@ async def get_upcoming_birthdays(
     """Получить дни рождения на ближайшие N дней."""
     results = []
     for delta in range(days_ahead):
-        check_date = today + __import__("datetime").timedelta(days=delta)
+        check_date = today + timedelta(days=delta)
         bdays = await get_birthdays_on_date(session, user_id, check_date)
         for b in bdays:
             b._upcoming_date = check_date  # type: ignore

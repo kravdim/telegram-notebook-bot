@@ -84,7 +84,6 @@ async def dispatch(
             return "Не удалось обработать команду. Попробуй переформулировать."
     except Exception as e:
         logger.error("Ошибка при выполнении %s: %s", name, e, exc_info=True)
-        from html import escape
         return f"Произошла ошибка при обработке. Попробуй ещё раз."
 
 
@@ -444,7 +443,7 @@ def _extract_value_tag(content: str) -> str:
     family_kw = ("семья", "мама", "папа", "жена", "муж", "дети", "ребёнок", "ребенок",
                  "сын", "дочь", "родител", "бабушк", "дедушк", "брат", "сестр",
                  "максим", "аня", "аней")
-    health_kw = ("тренажер", "спорт", "зал ", "тренировк", "бег ", "пробежк",
+    health_kw = ("тренажер", "спорт", "зал", "тренировк", "бег", "пробежк",
                  "здоровь", "врач", "больниц", "фитнес", "йог", "лофт")
     friends_kw = ("друг", "друзь", "встреч", "гости", "компани", "посидел",
                   "слава", "серёга", "серега")
@@ -566,6 +565,7 @@ async def _handle_search(user_id: int, args: Dict[str, Any]) -> str:
 
     from bot.embeddings.indexer import get_embedding
     query_emb = await get_embedding(query)
+    emb_str = str(query_emb) if query_emb else None
 
     async with async_session() as session:
         # Поиск по задачам
@@ -577,90 +577,25 @@ async def _handle_search(user_id: int, args: Dict[str, Any]) -> str:
 
         # Поиск по заметкам (гибридный)
         if scope in ("all", "notes"):
-            from sqlalchemy import select, text
-            from bot.db.models import Note
-            if query_emb:
-                res = await session.execute(
-                    text("""
-                        SELECT id, title, content,
-                               COALESCE(1 - (embedding <=> CAST(:emb AS vector)), 0) * 0.6 +
-                               COALESCE(similarity(content, CAST(:query AS text)), 0) * 0.4 AS score
-                        FROM notes
-                        WHERE user_id = :uid
-                          AND (content % CAST(:query AS text) OR content ILIKE :pattern
-                               OR (embedding IS NOT NULL AND embedding <=> CAST(:emb AS vector) < 0.8))
-                        ORDER BY score DESC
-                        LIMIT 5
-                    """),
-                    {"uid": user_id, "query": query, "pattern": f"%{query}%", "emb": str(query_emb)},
-                )
-            else:
-                res = await session.execute(
-                    select(Note)
-                    .where(Note.user_id == user_id, Note.content.ilike(f"%{query}%"))
-                    .limit(5)
-                )
-            for row in res.fetchall():
+            from bot.db.crud.notes import hybrid_search_notes
+            rows = await hybrid_search_notes(session, user_id, query, emb_str)
+            for row in rows:
                 title = row.title or (row.content[:50] if hasattr(row, "content") else str(row)[:50])
                 results.append(f"📝 {title}")
 
         # Поиск по дневнику (гибридный)
         if scope in ("all", "diary"):
-            from sqlalchemy import text
-            from bot.db.models import DiaryEntry
-            if query_emb:
-                res = await session.execute(
-                    text("""
-                        SELECT id, content,
-                               COALESCE(1 - (embedding <=> CAST(:emb AS vector)), 0) * 0.6 +
-                               COALESCE(similarity(content, CAST(:query AS text)), 0) * 0.4 AS score
-                        FROM diary_entries
-                        WHERE user_id = :uid
-                          AND (content % CAST(:query AS text) OR content ILIKE :pattern
-                               OR (embedding IS NOT NULL AND embedding <=> CAST(:emb AS vector) < 0.8))
-                        ORDER BY score DESC
-                        LIMIT 5
-                    """),
-                    {"uid": user_id, "query": query, "pattern": f"%{query}%", "emb": str(query_emb)},
-                )
-            else:
-                from sqlalchemy import select
-                res = await session.execute(
-                    select(DiaryEntry)
-                    .where(DiaryEntry.user_id == user_id, DiaryEntry.content.ilike(f"%{query}%"))
-                    .limit(5)
-                )
-            for row in res.fetchall():
+            from bot.db.crud.diary import hybrid_search_diary
+            rows = await hybrid_search_diary(session, user_id, query, emb_str)
+            for row in rows:
                 content = row.content if hasattr(row, "content") else str(row)
                 results.append(f"📓 {content[:50]}...")
 
         # Поиск по мемуарнику (гибридный)
         if scope in ("all", "memoir"):
-            from sqlalchemy import text
-            from bot.db.models import MemoirEntry
-            if query_emb:
-                res = await session.execute(
-                    text("""
-                        SELECT id, content,
-                               COALESCE(1 - (embedding <=> CAST(:emb AS vector)), 0) * 0.6 +
-                               COALESCE(similarity(content, CAST(:query AS text)), 0) * 0.4 AS score
-                        FROM memoir_entries
-                        WHERE user_id = :uid
-                          AND (content % CAST(:query AS text) OR content ILIKE :pattern
-                               OR (embedding IS NOT NULL AND embedding <=> CAST(:emb AS vector) < 0.8))
-                        ORDER BY score DESC
-                        LIMIT 5
-                    """),
-                    {"uid": user_id, "query": query, "pattern": f"%{query}%", "emb": str(query_emb)},
-                )
-            else:
-                from sqlalchemy import select
-                res = await session.execute(
-                    select(MemoirEntry)
-                    .where(MemoirEntry.user_id == user_id, MemoirEntry.content.ilike(f"%{query}%"))
-                    .limit(5)
-                )
-            for row in res.fetchall():
+            from bot.db.crud.memoir import hybrid_search_memoir
+            rows = await hybrid_search_memoir(session, user_id, query, emb_str)
+            for row in rows:
                 content = row.content if hasattr(row, "content") else str(row)
                 results.append(f"📔 {content[:50]}...")
 
@@ -682,6 +617,13 @@ async def _handle_update_task(user_id: int, args: Dict[str, Any], tz: str = "Eur
         tasks = await search_tasks(session, user_id, query)
         if not tasks:
             return f"Не нашёл задачу «{query}»."
+
+        if len(tasks) > 1:
+            top3 = tasks[:3]
+            lines = [f"Несколько задач похожи на «{query}». Уточни:"]
+            for i, t in enumerate(top3, 1):
+                lines.append(f"  {i}. {t.title}")
+            return "\n".join(lines)
 
         task = tasks[0]
         # Фильтруем допустимые поля
@@ -713,6 +655,14 @@ async def _handle_delete_task(user_id: int, args: Dict[str, Any]) -> str:
         tasks = await search_tasks(session, user_id, query)
         if not tasks:
             return f"Не нашёл задачу «{query}»."
+
+        if len(tasks) > 1:
+            top3 = tasks[:3]
+            lines = [f"Несколько задач похожи на «{query}». Уточни:"]
+            for i, t in enumerate(top3, 1):
+                lines.append(f"  {i}. {t.title}")
+            return "\n".join(lines)
+
         task_id = tasks[0].id
         task_title = tasks[0].title
 

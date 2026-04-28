@@ -335,8 +335,10 @@ async def cmd_projects(message: Message) -> None:
 
     lines = ["🐘 <b>Проекты (слоны):</b>\n"]
     async with async_session() as session:
+        from bot.db.crud.projects import batch_project_progress
+        progress_map = await batch_project_progress(session, [p.id for p in projects])
         for p in projects:
-            progress = await get_project_progress(session, p.id)
+            progress = progress_map[p.id]
             pct = progress["percent"]
             done = progress["done"]
             total = progress["total"]
@@ -498,10 +500,17 @@ async def _stats_productivity(message: Message) -> None:
     async with async_session() as session:
         week = await get_week_stats(session, message.from_user.id, tz)
 
+    # Месячная статистика: берём 4 недели назад
+    async with async_session() as session:
+        month_stats = await get_week_stats(
+            session, message.from_user.id, tz,
+            days_back=28,
+        )
+
     from bot.formatters.stats import format_productivity_stats
     text = format_productivity_stats(
         avg_week=week["avg_productivity"],
-        avg_month=week["avg_productivity"],  # Упрощение
+        avg_month=month_stats["avg_productivity"],
         trend="stable",
     )
     await message.answer(text, parse_mode="HTML")
@@ -849,7 +858,10 @@ async def cmd_birthdays(message: Message) -> None:
         return
 
     # Ближайшие
-    today = pendulum.now("Europe/Moscow").date()
+    async with async_session() as session:
+        user = await get_user(session, user_id)
+    tz = user.timezone if user else "Europe/Moscow"
+    today = pendulum.now(tz).date()
     lines = ["🎂 <b>Дни рождения:</b>\n"]
     for b in all_bdays:
         date_str = b.birth_date.strftime("%d.%m")

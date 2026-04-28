@@ -44,13 +44,13 @@ class LLMQueue:
             except asyncio.CancelledError:
                 pass
 
-    async def submit(self, priority: int, coro: Coroutine) -> Any:
+    async def submit(self, priority: int, coro: Coroutine, timeout: float = 120.0) -> Any:
         """Добавить запрос в очередь и дождаться результата."""
         loop = asyncio.get_running_loop()
         future = loop.create_future()
         task = LLMTask(priority=priority, coro=coro, future=future)
         await self._queue.put(task)
-        return await future
+        return await asyncio.wait_for(future, timeout=timeout)
 
     async def _worker(self) -> None:
         """Обработка очереди последовательно."""

@@ -1,8 +1,10 @@
 """Команды администратора: /prompts, /status, /adduser, /removeuser."""
 
 import logging
+from html import escape as html_escape
 from pathlib import Path
 
+import anyio
 import yaml
 from aiogram import Router
 from aiogram.filters import Command, CommandObject
@@ -39,8 +41,8 @@ async def cmd_prompts(message: Message) -> None:
 
     lines = ["<b>Активные промпты:</b>\n"]
     for p in prompts:
-        preview = p.content[:80].replace("\n", " ")
-        lines.append(f"• <b>{p.prompt_key}</b> v{p.version}\n  {preview}...")
+        preview = html_escape(p.content[:80].replace("\n", " "))
+        lines.append(f"• <b>{html_escape(p.prompt_key)}</b> v{p.version}\n  {preview}...")
 
     await message.answer("\n".join(lines), parse_mode="HTML")
 
@@ -99,7 +101,7 @@ async def cmd_adduser(message: Message, command: CommandObject) -> None:
 
     if user_id not in settings.allowed_telegram_ids:
         settings.allowed_telegram_ids.append(user_id)
-        _persist_whitelist()
+        await _persist_whitelist()
 
     await message.answer(f"✅ Пользователь {user_id} добавлен в whitelist.")
 
@@ -123,7 +125,7 @@ async def cmd_removeuser(message: Message, command: CommandObject) -> None:
 
     if user_id in settings.allowed_telegram_ids:
         settings.allowed_telegram_ids.remove(user_id)
-        _persist_whitelist()
+        await _persist_whitelist()
 
     await message.answer(f"✅ Пользователь {user_id} удалён из whitelist.")
 
@@ -150,15 +152,16 @@ async def cmd_listusers(message: Message) -> None:
     await message.answer("\n".join(lines), parse_mode="HTML")
 
 
-def _persist_whitelist() -> None:
+async def _persist_whitelist() -> None:
     """Сохранить текущий whitelist в config.yaml."""
     config_path = BASE_DIR / "config.yaml"
     try:
-        with open(config_path, "r", encoding="utf-8") as f:
-            cfg = yaml.safe_load(f) or {}
+        async with await anyio.open_file(config_path, "r", encoding="utf-8") as f:
+            content = await f.read()
+        cfg = yaml.safe_load(content) or {}
         cfg.setdefault("bot", {})["allowed_telegram_ids"] = list(settings.allowed_telegram_ids)
-        with open(config_path, "w", encoding="utf-8") as f:
-            yaml.dump(cfg, f, default_flow_style=False, allow_unicode=True)
+        async with await anyio.open_file(config_path, "w", encoding="utf-8") as f:
+            await f.write(yaml.dump(cfg, default_flow_style=False, allow_unicode=True))
         logger.info("Whitelist сохранён в config.yaml: %s", settings.allowed_telegram_ids)
     except Exception as e:
         logger.error("Не удалось сохранить whitelist в config.yaml: %s", e)

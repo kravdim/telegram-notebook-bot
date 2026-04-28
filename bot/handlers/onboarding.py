@@ -158,6 +158,15 @@ async def onb_tz_change(callback: CallbackQuery, state: FSMContext) -> None:
 async def onb_tz_text(message: Message, state: FSMContext) -> None:
     """Пользователь ввёл часовой пояс."""
     tz = message.text.strip() if message.text else "Europe/Moscow"
+    try:
+        import pendulum
+        pendulum.now(tz)
+    except Exception:
+        await message.answer(
+            "Не удалось распознать часовой пояс. "
+            "Используй формат Continent/City, например: Europe/Moscow, Asia/Novosibirsk"
+        )
+        return
     await state.update_data(timezone=tz)
     await _send_digest_step(message, state)
 
@@ -384,24 +393,39 @@ async def _finish_onboarding(message: Message, user_id: int, state: FSMContext) 
 
     # Время дайджестов
     if morning := data.get("digest_morning"):
-        h, m = morning.split(":")
-        settings_update["digest_morning_time"] = dt_time(int(h), int(m))
+        try:
+            h, m = morning.split(":")
+            settings_update["digest_morning_time"] = dt_time(int(h), int(m))
+        except (ValueError, TypeError):
+            pass
     if evening := data.get("digest_evening"):
-        h, m = evening.split(":")
-        settings_update["digest_evening_time"] = dt_time(int(h), int(m))
+        try:
+            h, m = evening.split(":")
+            settings_update["digest_evening_time"] = dt_time(int(h), int(m))
+        except (ValueError, TypeError):
+            pass
     if memoir := data.get("memoir_prompt"):
-        h, m = memoir.split(":")
-        settings_update["memoir_prompt_time"] = dt_time(int(h), int(m))
+        try:
+            h, m = memoir.split(":")
+            settings_update["memoir_prompt_time"] = dt_time(int(h), int(m))
+        except (ValueError, TypeError):
+            pass
 
     # Рабочий график
     if work_days := data.get("work_days"):
         settings_update["work_days"] = work_days
     if work_start := data.get("work_start"):
-        h, m = work_start.split(":")
-        settings_update["work_start_time"] = dt_time(int(h), int(m))
+        try:
+            h, m = work_start.split(":")
+            settings_update["work_start_time"] = dt_time(int(h), int(m))
+        except (ValueError, TypeError):
+            pass
     if work_end := data.get("work_end"):
-        h, m = work_end.split(":")
-        settings_update["work_end_time"] = dt_time(int(h), int(m))
+        try:
+            h, m = work_end.split(":")
+            settings_update["work_end_time"] = dt_time(int(h), int(m))
+        except (ValueError, TypeError):
+            pass
 
     async with async_session() as session:
         await update_user_settings(session, user_id, **settings_update)

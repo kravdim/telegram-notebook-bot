@@ -19,22 +19,22 @@ async def sweep_missed_reminders(bot: Bot) -> None:
     async with async_session() as session:
         reminders = await get_pending_reminders(session, before=now)
 
-    if not reminders:
-        return
+        if not reminders:
+            return
 
-    logger.info("Sweep: найдено %d пропущенных напоминаний", len(reminders))
+        logger.info("Sweep: найдено %d пропущенных напоминаний", len(reminders))
 
-    for reminder in reminders:
-        try:
-            kb = build_snooze_keyboard(str(reminder.id))
-            await bot.send_message(
-                chat_id=reminder.user_id,
-                text=f"🔔 <b>Напоминание</b> (пропущенное):\n{reminder.message}",
-                parse_mode="HTML",
-                reply_markup=kb.as_markup(),
-            )
-            async with async_session() as session:
+        for reminder in reminders:
+            try:
+                kb = build_snooze_keyboard(str(reminder.id))
+                await bot.send_message(
+                    chat_id=reminder.user_id,
+                    text=f"🔔 <b>Напоминание</b> (пропущенное):\n{reminder.message}",
+                    parse_mode="HTML",
+                    reply_markup=kb.as_markup(),
+                )
                 await mark_sent(session, reminder.id)
-            logger.info("Sweep: напоминание %s отправлено", reminder.id)
-        except Exception as e:
-            logger.error("Sweep: ошибка отправки %s: %s", reminder.id, e, exc_info=True)
+                logger.info("Sweep: напоминание %s отправлено", reminder.id)
+            except Exception as e:
+                logger.error("Sweep: ошибка отправки %s: %s", reminder.id, e, exc_info=True)
+                await session.rollback()

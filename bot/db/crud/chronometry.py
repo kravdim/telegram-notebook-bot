@@ -96,10 +96,11 @@ async def get_week_stats(
     session: AsyncSession,
     user_id: int,
     tz: str = "Europe/Moscow",
+    days_back: int = 7,
 ) -> dict:
-    """Статистика за неделю."""
+    """Статистика за период (по умолчанию неделя)."""
     now = pendulum.now(tz)
-    start = now.start_of("week").in_tz("UTC")
+    start = now.subtract(days=days_back).start_of("day").in_tz("UTC")
     result = await session.execute(
         select(TimeTrackingEntry)
         .where(

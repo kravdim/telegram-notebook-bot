@@ -4,7 +4,7 @@ import uuid
 from datetime import date
 from typing import List, Optional
 
-from sqlalchemy import select, func, and_
+from sqlalchemy import select, func, and_, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from bot.db.models import MemoirEntry
@@ -103,3 +103,36 @@ async def get_value_stats(
         .order_by(func.count().desc())
     )
     return [{"value": row.value_tag, "count": row.cnt} for row in result.all()]
+
+
+async def hybrid_search_memoir(
+    session: AsyncSession,
+    user_id: int,
+    query: str,
+    query_embedding: Optional[str] = None,
+    limit: int = 5,
+) -> list:
+    """Гибридный поиск по мемуарнику (векторный + текстовый)."""
+    if query_embedding:
+        res = await session.execute(
+            text("""
+                SELECT id, content,
+                       COALESCE(1 - (embedding <=> CAST(:emb AS vector)), 0) * 0.6 +
+                       COALESCE(similarity(content, CAST(:query AS text)), 0) * 0.4 AS score
+                FROM memoir_entries
+                WHERE user_id = :uid
+                  AND (content % CAST(:query AS text) OR content ILIKE :pattern
+                       OR (embedding IS NOT NULL AND embedding <=> CAST(:emb AS vector) < 0.8))
+                ORDER BY score DESC
+                LIMIT :lim
+            """),
+            {"uid": user_id, "query": query, "pattern": f"%{query}%",
+             "emb": query_embedding, "lim": limit},
+        )
+    else:
+        res = await session.execute(
+            select(MemoirEntry)
+            .where(MemoirEntry.user_id == user_id, MemoirEntry.content.ilike(f"%{query}%"))
+            .limit(limit)
+        )
+    return res.fetchall()

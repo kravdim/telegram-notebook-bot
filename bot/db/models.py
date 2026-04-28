@@ -44,7 +44,7 @@ class User(Base):
     chronometry_interval_min: Mapped[int] = mapped_column(Integer, nullable=False, default=60)
     work_start_time: Mapped[time] = mapped_column(Time, nullable=False, default=time(9, 0))
     work_end_time: Mapped[time] = mapped_column(Time, nullable=False, default=time(18, 0))
-    work_days: Mapped[List[int]] = mapped_column(ARRAY(Integer), nullable=False, default=[1, 2, 3, 4, 5])
+    work_days: Mapped[List[int]] = mapped_column(ARRAY(Integer), nullable=False, default=lambda: [1, 2, 3, 4, 5])
     focus_until: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
     onboarding_completed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     digest_sent_date: Mapped[Optional[date]] = mapped_column(Date)
@@ -73,7 +73,7 @@ class Project(Base):
     description: Mapped[Optional[str]] = mapped_column(Text)
     category: Mapped[str] = mapped_column(Text, nullable=False, default="work")
     status: Mapped[str] = mapped_column(Text, nullable=False, default="active")
-    task_ids_ordered: Mapped[dict] = mapped_column(JSONB, default=[])
+    task_ids_ordered: Mapped[List] = mapped_column(JSONB, default=list)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default="now()"
     )

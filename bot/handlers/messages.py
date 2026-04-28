@@ -44,6 +44,11 @@ async def process_text_message(user_id: int, text: str, message: Message) -> Non
         )
         return
 
+    # Получаем пользователя один раз (используется для timezone во всех ветках)
+    async with async_session() as session:
+        user = await get_user(session, user_id)
+    user_tz = user.timezone if user else "Europe/Moscow"
+
     # Проверяем, ожидается ли ответ на мемуарник
     from bot.scheduler.memoir import is_awaiting_memoir, clear_awaiting_memoir, get_memoir_message_id
     if is_awaiting_memoir(user_id):
@@ -58,10 +63,6 @@ async def process_text_message(user_id: int, text: str, message: Message) -> Non
         if is_memoir_reply:
             clear_awaiting_memoir(user_id)
             await message.bot.send_chat_action(chat_id=message.chat.id, action="typing")
-
-            async with async_session() as session:
-                user = await get_user(session, user_id)
-            user_tz = user.timezone if user else "Europe/Moscow"
 
             await _save_memoir_answer(user_id, text, user_tz)
             await message.answer("📔 Записано в мемуарник! ✅")
@@ -86,10 +87,6 @@ async def process_text_message(user_id: int, text: str, message: Message) -> Non
             clear_awaiting(user_id)
             await message.bot.send_chat_action(chat_id=message.chat.id, action="typing")
 
-            async with async_session() as session:
-                user = await get_user(session, user_id)
-            user_tz = user.timezone if user else "Europe/Moscow"
-
             from bot.handlers.chronometry import process_chronometry_response
             result = await process_chronometry_response(user_id, text, user_tz)
             await message.answer(result)
@@ -98,12 +95,8 @@ async def process_text_message(user_id: int, text: str, message: Message) -> Non
     # Typing indicator
     await message.bot.send_chat_action(chat_id=message.chat.id, action="typing")
 
-    # Получаем данные пользователя для timezone
+    # Загружаем промпт
     async with async_session() as session:
-        user = await get_user(session, user_id)
-        user_tz = user.timezone if user else "Europe/Moscow"
-
-        # Загружаем промпт
         system_prompt = await get_prompt(session, "intent_detection")
 
     if not system_prompt:

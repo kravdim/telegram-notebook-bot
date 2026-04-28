@@ -8,6 +8,7 @@ alembic
 pyyaml
 pgvector
 openai
+anyio
 json-repair
 tiktoken
 httpx[socks]

@@ -32,13 +32,15 @@ async def reindex_missing_embeddings() -> None:
         )
         notes = list(result.scalars().all())
 
-        for note in notes:
+        for i, note in enumerate(notes, 1):
             try:
                 text = f"{note.title or ''} {note.content}"
                 embedding = await _embed_client.embed(text.strip())
                 note.embedding = embedding
             except Exception as e:
                 logger.warning("Ошибка embedding для note %s: %s", note.id, e)
+            if i % 10 == 0:
+                await session.commit()
 
         # Diary
         result = await session.execute(
@@ -46,12 +48,14 @@ async def reindex_missing_embeddings() -> None:
         )
         diaries = list(result.scalars().all())
 
-        for entry in diaries:
+        for i, entry in enumerate(diaries, 1):
             try:
                 embedding = await _embed_client.embed(entry.content)
                 entry.embedding = embedding
             except Exception as e:
                 logger.warning("Ошибка embedding для diary %s: %s", entry.id, e)
+            if i % 10 == 0:
+                await session.commit()
 
         # Memoir
         result = await session.execute(
@@ -59,12 +63,14 @@ async def reindex_missing_embeddings() -> None:
         )
         memoirs = list(result.scalars().all())
 
-        for entry in memoirs:
+        for i, entry in enumerate(memoirs, 1):
             try:
                 embedding = await _embed_client.embed(entry.content)
                 entry.embedding = embedding
             except Exception as e:
                 logger.warning("Ошибка embedding для memoir %s: %s", entry.id, e)
+            if i % 10 == 0:
+                await session.commit()
 
         await session.commit()
 

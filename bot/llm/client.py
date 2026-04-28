@@ -1,6 +1,7 @@
 """LLM-клиент с fallback: DeepSeek → MiniMax."""
 
 import logging
+import re
 import time
 from typing import Any, Dict, List, Optional
 
@@ -49,6 +50,7 @@ class LLMClient:
             "gemini": settings.gemini_api_key,
             "deepseek": settings.deepseek_api_key,
             "minimax": settings.minimax_api_key,
+            "zhipu": settings.zhipu_api_key,
             "openai": settings.openai_api_key,
         }
 
@@ -68,7 +70,6 @@ class LLMClient:
         self.fallback_model = fallback_cfg.get("model", "MiniMax-M2.5")
         self.fallback_max_retries = fallback_cfg.get("max_retries", 1)
 
-        self.active = "main"
         self._main_healthy = True
 
     async def chat(
@@ -123,7 +124,7 @@ class LLMClient:
             kwargs["timeout"] = timeout
 
         start = time.monotonic()
-        last_error = None
+        last_error: Exception = RuntimeError("unexpected: no attempts made")
 
         for attempt in range(max_retries + 1):
             try:
@@ -131,7 +132,7 @@ class LLMClient:
                 elapsed_ms = int((time.monotonic() - start) * 1000)
 
                 choice = response.choices[0]
-                content = choice.message.content
+                content = re.sub(r"<think>.*?</think>", "", choice.message.content or "", flags=re.DOTALL).strip() if choice.message.content else choice.message.content
                 function_call = None
                 function_calls = []
 

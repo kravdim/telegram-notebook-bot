@@ -1,8 +1,8 @@
 """Ежедневный бэкап БД через pg_dump + ротация."""
 
+import asyncio
 import logging
 import os
-import subprocess
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -28,7 +28,6 @@ async def run_backup() -> None:
 
     # Парсим DATABASE_URL для pg_dump
     db_url = settings.database_url
-    # postgresql+asyncpg://user:pass@host:port/dbname
     try:
         parts = db_url.replace("postgresql+asyncpg://", "").split("@")
         user_pass = parts[0]
@@ -45,29 +44,39 @@ async def run_backup() -> None:
     env["PGPASSWORD"] = password
 
     try:
-        pg_dump = subprocess.Popen(
-            ["pg_dump", "-h", host, "-p", port, "-U", user, "-d", dbname,
-             "--no-owner", "--no-acl"],
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env,
+        pg_dump = await asyncio.create_subprocess_exec(
+            "pg_dump", "-h", host, "-p", port, "-U", user, "-d", dbname,
+            "--no-owner", "--no-acl",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            env=env,
         )
-        with open(filepath, "wb") as out_f:
-            gzip_proc = subprocess.Popen(
-                ["gzip"], stdin=pg_dump.stdout, stdout=out_f, stderr=subprocess.PIPE,
-            )
-        pg_dump.stdout.close()
-        _, gzip_err = gzip_proc.communicate(timeout=300)
-        pg_dump.wait(timeout=10)
+        gzip_proc = await asyncio.create_subprocess_exec(
+            "gzip",
+            stdin=pg_dump.stdout,
+            stdout=open(filepath, "wb"),
+            stderr=asyncio.subprocess.PIPE,
+        )
+        if pg_dump.stdout:
+            pg_dump.stdout.close()
+
+        await asyncio.wait_for(gzip_proc.wait(), timeout=300)
+        await asyncio.wait_for(pg_dump.wait(), timeout=10)
 
         if pg_dump.returncode != 0:
-            stderr = pg_dump.stderr.read().decode() if pg_dump.stderr else ""
+            stderr = (await pg_dump.stderr.read()).decode() if pg_dump.stderr else ""
             logger.error("pg_dump failed (rc=%d): %s", pg_dump.returncode, stderr)
             filepath.unlink(missing_ok=True)
         elif gzip_proc.returncode != 0:
-            logger.error("gzip failed: %s", gzip_err.decode() if gzip_err else "")
+            gzip_err = (await gzip_proc.stderr.read()).decode() if gzip_proc.stderr else ""
+            logger.error("gzip failed: %s", gzip_err)
             filepath.unlink(missing_ok=True)
         else:
             size_mb = filepath.stat().st_size / (1024 * 1024)
             logger.info("Бэкап создан: %s (%.1f MB)", filename, size_mb)
+    except asyncio.TimeoutError:
+        logger.error("Таймаут бэкапа")
+        filepath.unlink(missing_ok=True)
     except Exception as e:
         logger.error("Ошибка бэкапа: %s", e)
         filepath.unlink(missing_ok=True)

@@ -1,7 +1,7 @@
 """Управление контекстом диалога: хранение истории + компрессия."""
 
 import logging
-from typing import Dict, List, Optional
+from typing import Dict, List
 
 import tiktoken
 
