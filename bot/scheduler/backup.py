@@ -51,17 +51,22 @@ async def run_backup() -> None:
             stderr=asyncio.subprocess.PIPE,
             env=env,
         )
-        gzip_proc = await asyncio.create_subprocess_exec(
-            "gzip",
-            stdin=pg_dump.stdout,
-            stdout=open(filepath, "wb"),
-            stderr=asyncio.subprocess.PIPE,
-        )
-        if pg_dump.stdout:
-            pg_dump.stdout.close()
+        with open(filepath, "wb") as backup_file:
+            gzip_proc = await asyncio.create_subprocess_exec(
+                "gzip",
+                stdin=asyncio.subprocess.PIPE,
+                stdout=backup_file,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            if pg_dump.stdout and gzip_proc.stdin:
+                while chunk := await pg_dump.stdout.read(1024 * 1024):
+                    gzip_proc.stdin.write(chunk)
+                    await gzip_proc.stdin.drain()
+                gzip_proc.stdin.close()
+                await gzip_proc.stdin.wait_closed()
 
-        await asyncio.wait_for(gzip_proc.wait(), timeout=300)
-        await asyncio.wait_for(pg_dump.wait(), timeout=10)
+            await asyncio.wait_for(gzip_proc.wait(), timeout=300)
+            await asyncio.wait_for(pg_dump.wait(), timeout=10)
 
         if pg_dump.returncode != 0:
             stderr = (await pg_dump.stderr.read()).decode() if pg_dump.stderr else ""

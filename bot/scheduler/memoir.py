@@ -9,6 +9,7 @@ from bot.db.crud.chronometry import get_today_entries
 from bot.db.crud.memoir import get_memoir_entries
 from bot.db.crud.users import get_all_users, update_user_settings
 from bot.db.engine import async_session
+from bot.formatters import split_message
 from bot.formatters.chronometry import format_day_timeline
 from bot.formatters.memoir import format_memoir_question, format_weekly_review
 
@@ -90,9 +91,10 @@ async def _send_day_timeline(bot: Bot, user, tz: str) -> None:
     if not entries:
         return
     text = format_day_timeline(entries, tz)
-    await bot.send_message(
-        chat_id=user.telegram_id, text=text, parse_mode="HTML"
-    )
+    for part in split_message(text):
+        await bot.send_message(
+            chat_id=user.telegram_id, text=part, parse_mode="HTML"
+        )
 
 
 async def _send_weekly_review(bot: Bot, user, tz: str) -> None:
@@ -101,9 +103,10 @@ async def _send_weekly_review(bot: Bot, user, tz: str) -> None:
         entries = await get_memoir_entries(session, user.telegram_id, limit=7)
 
     text = format_weekly_review(entries)
-    await bot.send_message(
-        chat_id=user.telegram_id, text=text, parse_mode="HTML"
-    )
+    for part in split_message(text):
+        await bot.send_message(
+            chat_id=user.telegram_id, text=part, parse_mode="HTML"
+        )
 
     # Также задаём вопрос дня
     sent = await bot.send_message(

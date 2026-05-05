@@ -1,11 +1,11 @@
-"""LLM-клиент с fallback: DeepSeek → MiniMax."""
+"""LLM-клиент: MiniMax M2.7 с опциональным fallback."""
 
 import logging
 import re
 import time
 from typing import Any, Dict, List, Optional
 
-from openai import AsyncOpenAI, APIError, APITimeoutError, RateLimitError
+from openai import APIConnectionError, APIError, APITimeoutError, AsyncOpenAI, RateLimitError
 
 from bot.config import settings
 
@@ -43,32 +43,35 @@ class LLMClient:
         yaml_cfg = settings.yaml_config
         llm_cfg = yaml_cfg.get("llm", {})
         main_cfg = llm_cfg.get("main", {})
-        fallback_cfg = llm_cfg.get("fallback", {})
+        fallback_cfg = llm_cfg.get("fallback")
 
         # API ключи по провайдеру
         api_keys = {
             "gemini": settings.gemini_api_key,
-            "deepseek": settings.deepseek_api_key,
             "minimax": settings.minimax_api_key,
             "zhipu": settings.zhipu_api_key,
             "openai": settings.openai_api_key,
         }
 
         self.main_client = AsyncOpenAI(
-            base_url=main_cfg.get("base_url", "https://api.deepseek.com/v1"),
-            api_key=api_keys.get(main_cfg.get("provider", "deepseek"), ""),
+            base_url=main_cfg.get("base_url", "https://api.minimax.io/v1"),
+            api_key=api_keys.get(main_cfg.get("provider", "minimax"), ""),
             timeout=main_cfg.get("timeout_sec", 15),
         )
-        self.main_model = main_cfg.get("model", "deepseek-chat")
+        self.main_model = main_cfg.get("model", "MiniMax-M2.7")
         self.main_max_retries = main_cfg.get("max_retries", 2)
 
-        self.fallback_client = AsyncOpenAI(
-            base_url=fallback_cfg.get("base_url", "https://api.minimax.chat/v1"),
-            api_key=api_keys.get(fallback_cfg.get("provider", "minimax"), ""),
-            timeout=fallback_cfg.get("timeout_sec", 15),
-        )
-        self.fallback_model = fallback_cfg.get("model", "MiniMax-M2.5")
-        self.fallback_max_retries = fallback_cfg.get("max_retries", 1)
+        self.fallback_client: Optional[AsyncOpenAI] = None
+        self.fallback_model = ""
+        self.fallback_max_retries = 0
+        if fallback_cfg:
+            self.fallback_client = AsyncOpenAI(
+                base_url=fallback_cfg.get("base_url", "https://api.minimax.io/v1"),
+                api_key=api_keys.get(fallback_cfg.get("provider", "minimax"), ""),
+                timeout=fallback_cfg.get("timeout_sec", 15),
+            )
+            self.fallback_model = fallback_cfg.get("model", "MiniMax-M2.7")
+            self.fallback_max_retries = fallback_cfg.get("max_retries", 1)
 
         self._main_healthy = True
 
@@ -79,17 +82,21 @@ class LLMClient:
         timeout: Optional[float] = None,
         prompt_key: Optional[str] = None,
     ) -> LLMResponse:
-        """Отправить запрос. При ошибке main — retry на fallback."""
-        # Попытка main (если здоров)
-        if self._main_healthy:
+        """Отправить запрос. При ошибке main — retry на fallback, если он настроен."""
+        # Попытка main. Если fallback не настроен, пробуем main на каждом запросе,
+        # даже после предыдущей временной ошибки.
+        if self._main_healthy or not self.fallback_client:
             try:
                 return await self._call(
                     self.main_client, self.main_model, messages, functions,
                     timeout, self.main_max_retries,
                 )
-            except (APIError, APITimeoutError, RateLimitError) as e:
-                logger.warning("Main LLM (%s) failed: %s. Switching to fallback.", self.main_model, e)
+            except (APIConnectionError, APIError, APITimeoutError, RateLimitError) as e:
+                logger.warning("Main LLM (%s) failed: %s.", self.main_model, e)
                 self._main_healthy = False
+
+        if not self.fallback_client:
+            raise LLMUnavailableError(f"Main LLM unavailable: {self.main_model}")
 
         # Fallback
         try:
@@ -154,7 +161,7 @@ class LLMClient:
                     total_tokens=response.usage.total_tokens if response.usage else 0,
                     latency_ms=elapsed_ms,
                 )
-            except (APITimeoutError, RateLimitError) as e:
+            except (APIConnectionError, APITimeoutError, RateLimitError) as e:
                 last_error = e
                 if attempt < max_retries:
                     logger.info("Retry %d/%d for %s: %s", attempt + 1, max_retries, model, e)

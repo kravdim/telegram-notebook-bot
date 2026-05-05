@@ -7,8 +7,8 @@ from typing import List, Optional
 from json_repair import repair_json
 
 from bot.db.crud.projects import get_project_by_id, update_project
-from bot.db.crud.tasks import create_task
 from bot.db.engine import async_session
+from bot.db.models import Task
 from bot.llm.client import LLMClient
 from bot.llm.queue import LLMQueue, PRIORITY_DECOMPOSE
 
@@ -82,23 +82,27 @@ async def create_project_tasks(
 
     async with async_session() as session:
         try:
+            project = await get_project_by_id(session, pid)
+            if not project:
+                return 0
+
             for title in task_titles:
-                await create_task(
-                    session,
+                task = Task(
                     user_id=user_id,
                     title=title,
                     category=category,
                     project_id=pid,
                 )
+                session.add(task)
                 created += 1
 
+            await session.flush()
+
             # Обновляем список задач проекта
-            project = await get_project_by_id(session, pid)
-            if project:
-                from bot.db.crud.projects import get_project_tasks
-                tasks = await get_project_tasks(session, pid)
-                project.task_ids_ordered = [str(t.id) for t in tasks]
-                await session.commit()
+            from bot.db.crud.projects import get_project_tasks
+            tasks = await get_project_tasks(session, pid)
+            project.task_ids_ordered = [str(t.id) for t in tasks]
+            await session.commit()
         except Exception:
             await session.rollback()
             logger.error("Ошибка при создании задач проекта %s, откат", project_id, exc_info=True)

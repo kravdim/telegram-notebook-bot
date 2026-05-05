@@ -18,12 +18,22 @@ _stt_client = None
 
 # Кэш транскрибации: user_id → текст (для подтверждения)
 _pending_transcripts: dict[int, str] = {}
+_awaiting_edit: set[int] = set()
 
 
 def init(stt_client) -> None:
     """Установить STT-клиент."""
     global _stt_client
     _stt_client = stt_client
+
+
+def consume_voice_edit(user_id: int) -> bool:
+    """Вернуть True, если следующий текст является исправлением голосового."""
+    if user_id not in _awaiting_edit:
+        return False
+    _awaiting_edit.discard(user_id)
+    _pending_transcripts.pop(user_id, None)
+    return True
 
 
 @router.message(F.voice)
@@ -108,7 +118,7 @@ async def cb_voice_edit(callback: CallbackQuery) -> None:
         "Введи исправленный текст — я обработаю его как обычное сообщение.",
         reply_markup=None,
     )
-    # Текст остаётся в _pending_transcripts, но будет обработан как обычное сообщение
+    _awaiting_edit.add(callback.from_user.id)
 
 
 @router.callback_query(F.data == "voice_cancel")
@@ -116,4 +126,5 @@ async def cb_voice_cancel(callback: CallbackQuery) -> None:
     """Отмена голосового."""
     await callback.answer()
     _pending_transcripts.pop(callback.from_user.id, None)
+    _awaiting_edit.discard(callback.from_user.id)
     await callback.message.edit_text("❌ Голосовое отменено.", reply_markup=None)

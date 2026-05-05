@@ -1,5 +1,6 @@
 """Форматирование мемуарника и аналитики ценностей."""
 
+from html import escape
 from typing import List
 
 from bot.db.models import MemoirEntry
@@ -34,9 +35,10 @@ def format_memoir_entries(entries: List[MemoirEntry]) -> str:
     for entry in entries:
         emoji = _VALUE_EMOJI.get(entry.value_tag, "🔹") if entry.value_tag else "🔹"
         tag = f" [{entry.value_tag}]" if entry.value_tag else ""
+        content = _format_multiline_text(entry.content)
         parts.append(
             f"📅 {entry.event_date.strftime('%d.%m')} {emoji}{tag}\n"
-            f"  {entry.content}"
+            f"{content}"
         )
     return "\n".join(parts)
 
@@ -70,7 +72,8 @@ def format_weekly_review(entries: List[MemoirEntry]) -> str:
         values[tag] = values.get(tag, 0) + 1
         emoji = _VALUE_EMOJI.get(tag, "🔹")
         parts.append(
-            f"  {entry.event_date.strftime('%d.%m')} {emoji} {entry.content[:60]}"
+            f"{entry.event_date.strftime('%d.%m')} {emoji}\n"
+            f"{_format_multiline_text(entry.content)}"
         )
 
     if values:
@@ -80,3 +83,9 @@ def format_weekly_review(entries: List[MemoirEntry]) -> str:
             parts.append(f"  {emoji} {v}: {cnt}")
 
     return "\n".join(parts)
+
+
+def _format_multiline_text(text: str) -> str:
+    """Сохранить полный многострочный текст и безопасно отформатировать для HTML."""
+    lines = (text or "").strip().splitlines() or [""]
+    return "\n".join(f"  {escape(line)}" for line in lines)

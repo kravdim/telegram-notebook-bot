@@ -1,6 +1,7 @@
 """Обработчик свободного текста → LLM → function call."""
 
 import logging
+import re
 from typing import Optional
 
 from aiogram import Router
@@ -19,6 +20,16 @@ from bot.llm.queue import LLMQueue, PRIORITY_INTENT
 logger = logging.getLogger(__name__)
 
 router = Router()
+
+_DONE_PATTERNS = [
+    re.compile(r"^\s*(?P<title>.+?)\s*[-—–]\s*(?:сделал|сделала|сделано|готово|выполнено|выполнил|выполнила|закрыл|закрыто|решено|решил|решила)\s*[.!)]*\s*$", re.IGNORECASE),
+    re.compile(r"^\s*(?:сделал|сделала|сделано|готово|выполнено|выполнил|выполнила|закрыл|решил|решила|решено)\s*[:\-—–]?\s*(?P<title>.+?)\s*[.!)]*\s*$", re.IGNORECASE),
+]
+
+_NON_CHRONO_PATTERNS = [
+    re.compile(r"^\s*(?:доброе\s+утро|добрый\s+день|добрый\s+вечер|привет|здравствуй|здравствуйте|салют|хай)[!.,\s]*$", re.IGNORECASE),
+    re.compile(r"^\s*(?:спасибо|ок|ладно|понял|поняла|ага|угу|да|нет)[!.,\s]*$", re.IGNORECASE),
+]
 
 # Глобальные экземпляры — инициализируются в main.py
 llm_client: Optional[LLMClient] = None
@@ -48,6 +59,23 @@ async def process_text_message(user_id: int, text: str, message: Message) -> Non
     async with async_session() as session:
         user = await get_user(session, user_id)
     user_tz = user.timezone if user else "Europe/Moscow"
+
+    from bot.handlers.voice import consume_voice_edit
+    consume_voice_edit(user_id)
+
+    done_query = _extract_done_query(text)
+    if done_query:
+        await message.bot.send_chat_action(chat_id=message.chat.id, action="typing")
+        result = await dispatch(
+            {"name": "complete_task", "arguments": {"search_query": done_query}},
+            user_id,
+            user_tz,
+        )
+        add_message(user_id, "user", text)
+        add_message(user_id, "assistant", result)
+        for part in split_message(result):
+            await message.answer(part)
+        return
 
     # Проверяем, ожидается ли ответ на мемуарник
     from bot.scheduler.memoir import is_awaiting_memoir, clear_awaiting_memoir, get_memoir_message_id
@@ -83,7 +111,7 @@ async def process_text_message(user_id: int, text: str, message: Message) -> Non
             # Пользователь ответил reply'ем на другое сообщение — это не хронометраж
             is_chrono_reply = False
 
-        if is_chrono_reply:
+        if is_chrono_reply and _looks_like_chronometry_answer(text):
             clear_awaiting(user_id)
             await message.bot.send_chat_action(chat_id=message.chat.id, action="typing")
 
@@ -298,3 +326,23 @@ def _default_intent_prompt() -> str:
         "respond_to_user — КОРОТКО, макс 2-3 предложения.\n"
         "Всегда отвечай на русском."
     )
+
+
+def _extract_done_query(text: str) -> Optional[str]:
+    """Быстрый путь для закрытия задач без LLM."""
+    for pattern in _DONE_PATTERNS:
+        match = pattern.match(text)
+        if match:
+            title = match.group("title").strip(" «»\"'")
+            return title or None
+    return None
+
+
+def _looks_like_chronometry_answer(text: str) -> bool:
+    """Отличить ответ хронометражу от обычной реплики без reply."""
+    stripped = text.strip()
+    if not stripped:
+        return False
+    if any(pattern.match(stripped) for pattern in _NON_CHRONO_PATTERNS):
+        return False
+    return True

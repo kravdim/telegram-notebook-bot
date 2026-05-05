@@ -38,7 +38,6 @@ class Settings(BaseSettings):
 
     # LLM
     gemini_api_key: str = ""
-    deepseek_api_key: str = ""
     minimax_api_key: str = ""
     zhipu_api_key: str = ""
     groq_api_key: str = ""

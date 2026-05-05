@@ -12,7 +12,7 @@
 - **PostgreSQL 15** + pgvector + pg_trgm
 - **SQLAlchemy 2.x** async + asyncpg
 - **APScheduler** (AsyncIOScheduler) — планировщик
-- **LLM**: облачные API напрямую — DeepSeek V3.2 (main), MiniMax M2.5 (fallback), OpenAI SDK
+- **LLM**: облачные API напрямую — MiniMax M2.7 (main), OpenAI SDK; fallback опционален
 - **Embedding**: Ollama + nomic-embed-text (macOS) / API провайдера (VPS)
 - **STT**: faster-whisper (macOS) / Groq или OpenAI Whisper API (VPS)
 - **Конфигурация**: Pydantic Settings, config.yaml (модели/параметры) + .env (секреты)
@@ -23,8 +23,8 @@
 ### Единая кодовая база, два деплоя
 Один репозиторий. Различия macOS/VPS — только в конфигурации, embedding-клиенте, STT-клиенте и способе запуска. Бизнес-логика идентична. Абстрактные интерфейсы для embedding и STT с двумя реализациями каждый.
 
-### LLM-клиент с fallback
-Один LLMClient на базе OpenAI Python SDK. Параметры main/fallback модели из config.yaml, ключи из .env. При ошибке main (таймаут, 5xx, rate limit) — автоматический retry на fallback. Логирование каждого переключения. Health check main каждые 5 минут — при восстановлении возврат.
+### LLM-клиент
+Один LLMClient на базе OpenAI Python SDK. Основной провайдер — MiniMax M2.7 из config.yaml, ключ из .env. Fallback можно добавить отдельной секцией `llm.fallback`, но по умолчанию он выключен. Health check main каждые 5 минут — при восстановлении возврат.
 
 ### Надёжность 24/7
 1. **Напоминания независимы от LLM** — если API лежит, дайджесты и напоминания отправляются из БД.
@@ -60,7 +60,7 @@ telegram-notebook-bot/
 │   │   └── evening_review.py       # Разбор невыполненных задач
 │   ├── llm/
 │   │   ├── __init__.py
-│   │   ├── client.py               # LLMClient с fallback (OpenAI SDK, base_url switching)
+│   │   ├── client.py               # LLMClient: MiniMax M2.7 + опциональный fallback
 │   │   ├── queue.py                # asyncio.PriorityQueue для LLM-запросов
 │   │   ├── functions.py            # JSON Schema всех function tools
 │   │   ├── prompts.py              # Загрузка из prompt_versions, кэширование
@@ -520,17 +520,11 @@ FUNCTIONS = [
 ```yaml
 llm:
   main:
-    provider: deepseek
-    model: deepseek-chat
-    base_url: https://api.deepseek.com/v1
-    timeout_sec: 15
-    max_retries: 2
-  fallback:
     provider: minimax
-    model: MiniMax-M2.5
-    base_url: https://api.minimax.chat/v1
-    timeout_sec: 15
-    max_retries: 1
+    model: MiniMax-M2.7
+    base_url: https://api.minimax.io/v1
+    timeout_sec: 25
+    max_retries: 2
 
 embedding:
   provider: ollama  # или "cloud"
@@ -630,7 +624,7 @@ DATABASE_URL=postgresql+asyncpg://notebook:password@localhost:5432/notebook_bot
 | Этап | Что делаем | Результат |
 |------|-----------|-----------|
 | 1 | Фундамент: окружение, БД, Telegram, whitelist, онбординг, launchd | Бот принимает сообщения |
-| 2 | LLM-клиент: DeepSeek/MiniMax fallback, function calling, валидация, промпты в БД, очередь | LLM работает с fallback |
+| 2 | LLM-клиент: MiniMax M2.7, function calling, валидация, промпты в БД, очередь | LLM работает |
 | 3 | Задачи + лягушка: CRUD, is_frog, приоритеты, confirm, snooze, двойной контур | Задачи надёжно |
 | 4 | Дайджесты: утренний, вечерний + разбор невыполненных, идемпотентность, выходные | Дайджесты стабильны |
 | 5 | Слоны: Project, декомпозиция LLM, бифштексы, дайджест, пауза | Слоны работают |

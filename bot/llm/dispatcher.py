@@ -13,7 +13,7 @@ from bot.db.crud.notes import create_note
 from bot.db.crud.projects import create_project as crud_create_project
 from bot.db.crud.reminders import create_reminder
 from bot.db.crud.tasks import (
-    count_similar_completed, create_task, complete_task, get_frog,
+    complete_task_by_id, count_similar_completed, create_task, get_frog,
     get_today_tasks, get_user_tasks, search_tasks,
     update_task as crud_update_task,
 )
@@ -56,7 +56,7 @@ async def dispatch(
         if name == "create_task":
             return await _handle_create_task(user_id, args, user_timezone)
         elif name == "complete_task":
-            return await _handle_complete_task(user_id, args)
+            return await _handle_complete_task(user_id, args, user_timezone)
         elif name == "create_note":
             return await _handle_create_note(user_id, args)
         elif name == "create_diary_entry":
@@ -237,10 +237,21 @@ async def _handle_create_task(
     return result
 
 
-async def _handle_complete_task(user_id: int, args: Dict[str, Any]) -> str:
+async def _handle_complete_task(user_id: int, args: Dict[str, Any], tz: str) -> str:
     query = args.get("search_query", "")
     async with async_session() as session:
-        task = await complete_task(session, user_id, query)
+        open_matches = await search_tasks(session, user_id, query, status="open")
+        if not open_matches:
+            all_matches = await search_tasks(session, user_id, query)
+            done_match = next((t for t in all_matches if t.status == "done"), None)
+            if done_match:
+                return (
+                    f"Задача «{done_match.title}» уже была выполнена.\n"
+                    + await _format_today_planner_state(user_id, tz)
+                )
+            return "Не нашёл такую задачу. Уточни название."
+
+        task = await complete_task_by_id(session, open_matches[0].id, user_id)
         if not task:
             return "Не нашёл такую задачу. Уточни название."
 
@@ -271,7 +282,31 @@ async def _handle_complete_task(user_id: int, args: Dict[str, Any]) -> str:
     elif similar_count >= 2:
         result += "\n" + _recurring_complete_comment(task_title, similar_count)
 
+    result += "\n" + await _format_today_planner_state(user_id, tz)
     return result
+
+
+async def _format_today_planner_state(user_id: int, tz: str = "Europe/Moscow") -> str:
+    """Короткий детерминированный статус ежедневника после изменения задач."""
+    today = pendulum.now(tz).date()
+    async with async_session() as session:
+        open_today = await get_today_tasks(session, user_id, today)
+    return _format_open_today_state(open_today)
+
+
+def _format_open_today_state(open_today) -> str:
+    """Форматировать остаток задач на сегодня без обращения к БД."""
+    if not open_today:
+        return "На сегодня открытых задач не осталось."
+
+    lines = [f"Осталось на сегодня: {len(open_today)}"]
+    for task in open_today[:5]:
+        icon = "🐸" if task.is_frog else ("🔴" if task.priority == "high" else "📌")
+        time_str = f" {task.due_time.strftime('%H:%M')}" if task.due_time else ""
+        lines.append(f"{icon} {task.title}{time_str}")
+    if len(open_today) > 5:
+        lines.append(f"... и ещё {len(open_today) - 5}")
+    return "\n".join(lines)
 
 
 async def _create_next_recurring_task(task_info: dict) -> Optional[dict]:

@@ -1,16 +1,10 @@
 llm:
   main:
-    provider: deepseek
-    model: deepseek-chat
-    base_url: https://api.deepseek.com/v1
-    timeout_sec: 15
-    max_retries: 2
-  fallback:
     provider: minimax
-    model: MiniMax-M2.5
-    base_url: https://api.minimax.chat/v1
-    timeout_sec: 15
-    max_retries: 1
+    model: MiniMax-M2.7
+    base_url: https://api.minimax.io/v1
+    timeout_sec: 25
+    max_retries: 2
 
 embedding:
   provider: ollama  # или "cloud"

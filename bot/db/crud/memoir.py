@@ -135,4 +135,5 @@ async def hybrid_search_memoir(
             .where(MemoirEntry.user_id == user_id, MemoirEntry.content.ilike(f"%{query}%"))
             .limit(limit)
         )
+        return list(res.scalars().all())
     return res.fetchall()

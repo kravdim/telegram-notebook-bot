@@ -62,4 +62,5 @@ async def hybrid_search_diary(
             .where(DiaryEntry.user_id == user_id, DiaryEntry.content.ilike(f"%{query}%"))
             .limit(limit)
         )
+        return list(res.scalars().all())
     return res.fetchall()

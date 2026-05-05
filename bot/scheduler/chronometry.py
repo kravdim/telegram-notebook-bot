@@ -14,6 +14,9 @@ logger = logging.getLogger(__name__)
 # user_id → message_id хронометражного вопроса (None = не ожидаем)
 _awaiting_response: dict[int, int] = {}
 
+# user_id → когда был задан текущий незакрытый вопрос
+_awaiting_since: dict[int, pendulum.DateTime] = {}
+
 # user_id → индекс последнего вопроса (чтобы не повторять подряд)
 _last_question_idx: dict[int, int] = {}
 
@@ -46,6 +49,7 @@ def get_chrono_message_id(user_id: int) -> int | None:
 def clear_awaiting(user_id: int) -> None:
     """Очистить флаг ожидания ответа."""
     _awaiting_response.pop(user_id, None)
+    _awaiting_since.pop(user_id, None)
 
 
 async def send_chronometry_prompts(bot: Bot) -> None:
@@ -69,11 +73,29 @@ async def send_chronometry_prompts(bot: Bot) -> None:
             if current_time < user.work_start_time or current_time > user.work_end_time:
                 continue
 
+            # Не перебиваем утренний дайджест и начало дня.
+            morning_time = user.digest_morning_time
+            morning_quiet_until = now.set(
+                hour=morning_time.hour, minute=morning_time.minute, second=0
+            ).add(minutes=10)
+            work_start_quiet_until = now.set(
+                hour=user.work_start_time.hour, minute=user.work_start_time.minute, second=0
+            ).add(minutes=10)
+            if now < max(morning_quiet_until, work_start_quiet_until):
+                continue
+
             # Режим фокуса
             if user.focus_until:
                 focus_until = pendulum.instance(user.focus_until)
                 if now < focus_until:
                     continue
+
+            if user.telegram_id in _awaiting_response:
+                if not _awaiting_is_stale(
+                    user.telegram_id, now, user.chronometry_interval_min
+                ):
+                    continue
+                clear_awaiting(user.telegram_id)
 
             # Проверяем интервал (из БД, переживает рестарты)
             interval_sec = user.chronometry_interval_min * 60
@@ -93,6 +115,7 @@ async def send_chronometry_prompts(bot: Bot) -> None:
                 text=_CHRONOMETRY_QUESTIONS[idx],
             )
             _awaiting_response[user.telegram_id] = sent.message_id
+            _awaiting_since[user.telegram_id] = now
 
             # Обновляем timestamp в БД только после успешной отправки
             async with async_session() as session:
@@ -107,3 +130,12 @@ async def send_chronometry_prompts(bot: Bot) -> None:
                 "Ошибка хронометража для %s: %s",
                 user.telegram_id, e, exc_info=True,
             )
+
+
+def _awaiting_is_stale(user_id: int, now: pendulum.DateTime, interval_min: int) -> bool:
+    """True, если старый незакрытый вопрос уже можно забыть."""
+    asked_at = _awaiting_since.get(user_id)
+    if not asked_at:
+        return True
+    stale_after = max(interval_min * 120, 3600)
+    return (now - asked_at).in_seconds() >= stale_after

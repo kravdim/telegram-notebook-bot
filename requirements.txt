@@ -13,5 +13,7 @@ json-repair
 tiktoken
 httpx[socks]
 aiohttp-socks
+pytest
+pytest-asyncio
 # Optional: local STT (macOS)
 faster-whisper

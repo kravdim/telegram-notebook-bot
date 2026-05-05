@@ -41,16 +41,9 @@ async def send_task_reminders(bot: Bot) -> None:
             if now.minute > 5:
                 continue
 
-            # Идемпотентность: не отправляем дважды за один слот
-            # tasks_reminder_last_hour хранит hour последней отправки (сбрасывается в 9)
-            last_hour = user.tasks_reminder_last_hour
-            if last_hour is not None and last_hour >= current_hour:
-                # Уже отправляли в этот или более поздний слот сегодня
-                # (сброс происходит автоматически: в 9 утра last_hour от вчера будет 17 > 9,
-                #  но мы проверяем дату через digest_sent_date логику...
-                #  Проще: если last_hour == 17 и сейчас 9 — нужно отправить)
-                if not (last_hour == _REMINDER_HOURS[-1] and current_hour == _REMINDER_HOURS[0]):
-                    continue
+            # Идемпотентность: не отправляем дважды за один слот в пределах даты.
+            if _task_reminder_already_sent(user, today, current_hour):
+                continue
 
             # Получаем задачи
             async with async_session() as session:
@@ -58,8 +51,8 @@ async def send_task_reminders(bot: Bot) -> None:
                 completed = await get_completed_today(session, user.telegram_id, today, tz)
                 frog = await get_frog(session, user.telegram_id)
 
-            if not tasks and not completed:
-                # Нет задач — не беспокоим
+            if not tasks:
+                # Нет открытых задач — не беспокоим периодическим списком.
                 continue
 
             text = _format_task_reminder(tasks, completed, frog, today, current_hour)
@@ -75,6 +68,7 @@ async def send_task_reminders(bot: Bot) -> None:
                 await update_user_settings(
                     session, user.telegram_id,
                     tasks_reminder_last_hour=current_hour,
+                    tasks_reminder_last_date=today,
                 )
 
             logger.info(
@@ -132,3 +126,10 @@ def _format_task_reminder(tasks, completed, frog, today, hour) -> str:
         lines.append("🎉 Все задачи выполнены! Отличная работа!")
 
     return "\n".join(lines)
+
+
+def _task_reminder_already_sent(user, today, current_hour: int) -> bool:
+    """Проверить, отправляли ли слот задач за текущую дату."""
+    last_hour = user.tasks_reminder_last_hour
+    last_date = getattr(user, "tasks_reminder_last_date", None)
+    return last_date == today and last_hour is not None and last_hour >= current_hour

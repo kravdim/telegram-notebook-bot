@@ -2,6 +2,7 @@
 
 import json
 import logging
+import re
 from typing import Optional
 
 from aiogram import F, Router
@@ -12,6 +13,7 @@ from bot.db.crud.users import get_user, update_user_settings
 from bot.db.engine import async_session
 from bot.formatters.chronometry import format_day_photo
 from bot.llm.client import LLMClient
+from bot.llm.prompts import get_prompt
 from bot.llm.queue import LLMQueue, PRIORITY_CHRONOMETRY
 
 logger = logging.getLogger(__name__)
@@ -36,15 +38,20 @@ async def process_chronometry_response(
     if not _llm_client:
         return "LLM не доступен для обработки хронометража."
 
-    prompt = (
-        "Ты анализируешь ответ пользователя на вопрос «Чем занимаешься сейчас?».\n"
-        "Верни JSON:\n"
-        '{"category": "work|personal|rest|waste|focus", '
-        '"is_planned": true/false, '
-        '"productivity_score": 1-5, '
-        '"reaction_text": "короткая дружелюбная реакция на русском"}\n\n'
-        f'Ответ пользователя: "{text}"'
-    )
+    async with async_session() as session:
+        prompt = await get_prompt(session, "chronometry_reaction")
+    if not prompt:
+        prompt = (
+            "Ты анализируешь ответ пользователя на вопрос «Чем занимаешься сейчас?».\n"
+            "Это контур фотографии рабочего дня, не ежедневник: не закрывай задачи, "
+            "не считай остаток дел, не выдумывай контекст.\n"
+            "Верни JSON:\n"
+            '{"category": "work|personal|rest|waste|focus", '
+            '"is_planned": true/false, '
+            '"productivity_score": 1-5, '
+            '"reaction_text": "очень короткое спокойное подтверждение на русском, до 1 предложения"}'
+        )
+    prompt = f'{prompt}\n\nОтвет пользователя: "{text}"'
 
     try:
         response = await _llm_queue.submit(
@@ -81,9 +88,19 @@ async def process_chronometry_response(
                 productivity_score=data.get("productivity_score"),
                 bot_reaction=data.get("reaction_text", ""),
             )
+            pause_minutes = _chrono_pause_minutes(text, category)
+            if pause_minutes:
+                import pendulum
+                await update_user_settings(
+                    session,
+                    user_id,
+                    chronometry_last_asked=pendulum.now(user_tz).add(minutes=pause_minutes),
+                )
 
         reaction = data.get("reaction_text", "Записал!")
-        return f"⏱ {reaction}"
+        if _is_plain_reaction(reaction):
+            return f"⏱ {reaction}"
+        return "⏱ Записал."
 
     except Exception as e:
         logger.error("Ошибка обработки хронометража: %s", e)
@@ -96,3 +113,21 @@ async def process_chronometry_response(
                 category="work",
             )
         return "Записал ✅"
+
+
+def _chrono_pause_minutes(text: str, category: str) -> int:
+    """Дополнительная тихая пауза после очевидно долгих активностей."""
+    normalized = text.lower()
+    tokens = set(re.findall(r"[а-яёa-z]+", normalized))
+    if category == "rest" or "ем" in tokens or any(word in normalized for word in ("обед", "перерыв")):
+        return 30
+    if any(word in normalized for word in ("созвон", "звон", "телефон", "встреч", "дорог", "еду")):
+        return 20
+    if any(word in normalized for word in ("воюю", "добиваю", "разбираюсь", "настраиваю", "переношу", "пытаюсь")):
+        return 15
+    return 0
+
+
+def _is_plain_reaction(text: str) -> bool:
+    """Отсекаем слишком болтливые реакции LLM в контуре хронометража."""
+    return bool(text and len(text) <= 180 and text.count("?") <= 1)

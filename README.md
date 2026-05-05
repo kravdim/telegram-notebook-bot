@@ -45,7 +45,7 @@
 | БД | PostgreSQL 15 + pgvector + pg_trgm |
 | ORM | SQLAlchemy 2.x async + asyncpg |
 | Миграции | Alembic |
-| LLM | Gemini 3.1 Pro Preview (main) + DeepSeek (fallback) через OpenAI SDK |
+| LLM | MiniMax M2.7 через OpenAI SDK |
 | Embedding | Ollama + nomic-embed-text (macOS) / API (VPS) |
 | STT | faster-whisper (macOS) / Groq API (VPS) |
 | Конфиг | Pydantic Settings + config.yaml + .env |
@@ -56,7 +56,7 @@
 
 - Python 3.12+
 - PostgreSQL 15+ с расширениями `pgvector`, `pg_trgm`, `uuid-ossp`
-- API-ключи: Telegram Bot Token, Gemini / DeepSeek
+- API-ключи: Telegram Bot Token, MiniMax
 
 ### Установка
 
@@ -133,7 +133,7 @@ bot/
 │   ├── voice.py                # Голосовые → STT → confirm → обработка (лимит 20 МБ)
 │   └── admin.py                # /status, /prompts, /adduser, /removeuser, /listusers
 ├── llm/
-│   ├── client.py               # LLMClient с fallback (Gemini → DeepSeek)
+│   ├── client.py               # LLMClient: MiniMax M2.7 + опциональный fallback
 │   ├── queue.py                # PriorityQueue для LLM-запросов
 │   ├── functions.py            # JSON Schema function tools (13 функций)
 │   ├── dispatcher.py           # Исполнение function calls + валидация
@@ -219,8 +219,8 @@ scripts/
 - **Напоминания независимы от LLM** — если API лежит, напоминания отправляются из БД
 - **Write-ahead** — сначала запись в БД, потом подтверждение, потом фон
 - **Двойной контур** — основной (30 сек) + sweep (5 мин) для пропущенных напоминаний
-- **LLM fallback** — при сбое Gemini автоматический переход на DeepSeek
-- **Health check** — восстановление main каждые 5 минут
+- **LLM** — основной провайдер MiniMax M2.7, fallback опционален через config.yaml
+- **Health check** — восстановление main каждые 5 минут, если он был помечен недоступным
 - **Идемпотентность** — `digest_sent_date`, `memoir_asked_date`, `chronometry_last_asked`, `tasks_reminder_last_hour`, `is_sent`
 - **json_repair** — автокоррекция невалидного JSON от LLM
 - **Бэкапы** — ежедневный pg_dump с ротацией 30 дней
@@ -262,15 +262,11 @@ scripts/
 ```yaml
 llm:
   main:
-    provider: gemini
-    model: gemini-3.1-pro-preview
-    base_url: https://generativelanguage.googleapis.com/v1beta/openai/
+    provider: minimax
+    model: MiniMax-M2.7
+    base_url: https://api.minimax.io/v1
     timeout_sec: 25
     max_retries: 2
-  fallback:
-    provider: deepseek
-    model: deepseek-chat
-    base_url: https://api.deepseek.com/v1
 
 embedding:
   provider: ollama          # или "cloud"

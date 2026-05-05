@@ -31,9 +31,6 @@ async def send_digests(bot: Bot) -> None:
             now = pendulum.now(tz)
             today = now.date()
 
-            # Идемпотентность: проверяем digest_sent_date
-            # Формат: "YYYY-MM-DD:morning" или "YYYY-MM-DD:evening"
-
             morning_time = user.digest_morning_time
             evening_time = user.digest_evening_time
 
@@ -44,18 +41,7 @@ async def send_digests(bot: Bot) -> None:
                 hour=evening_time.hour, minute=evening_time.minute, second=0
             )
 
-            sent_date = user.digest_sent_date
-
-            # Идемпотентность: digest_sent_date хранит дату последнего
-            # отправленного дайджеста. Формат: date.
-            # None или вчера → можно отправить утренний.
-            # == today → утренний отправлен, можно отправить вечерний.
-            # == today + 0.5 дня (tomorrow) → оба отправлены (используем tomorrow как маркер).
-
-            morning_sent = sent_date is not None and sent_date >= today
-            # Вечерний маркер: sent_date == завтра (today + 1)
-            tomorrow = today + pendulum.duration(days=1)
-            evening_sent = sent_date is not None and sent_date >= tomorrow
+            morning_sent, evening_sent = _digest_sent_flags(user, today)
 
             # Утренний дайджест (write-ahead: маркер до отправки)
             if now >= morning_target and not morning_sent:
@@ -77,15 +63,15 @@ async def send_digests(bot: Bot) -> None:
             if now >= evening_target and not evening_sent:
                 async with async_session() as session:
                     await update_user_settings(
-                        session, user.telegram_id, digest_sent_date=tomorrow
+                        session, user.telegram_id, digest_evening_sent_date=today
                     )
                 try:
                     await _send_evening(bot, user, today, tz)
                 except Exception:
-                    # Откат к утреннему маркеру при ошибке
+                    # Откатываем вечерний маркер при ошибке
                     async with async_session() as session:
                         await update_user_settings(
-                            session, user.telegram_id, digest_sent_date=today
+                            session, user.telegram_id, digest_evening_sent_date=None
                         )
                     raise
 
@@ -128,6 +114,16 @@ async def _send_morning(bot: Bot, user, today, tz: str) -> None:
             chat_id=user.telegram_id, text=part, parse_mode="HTML"
         )
     logger.info("Утренний дайджест отправлен: %s", user.telegram_id)
+
+
+def _digest_sent_flags(user, today) -> tuple[bool, bool]:
+    """Вернуть, отправлены ли утренний и вечерний дайджесты за дату."""
+    morning_sent = user.digest_sent_date is not None and user.digest_sent_date >= today
+    evening_sent = (
+        getattr(user, "digest_evening_sent_date", None) is not None
+        and user.digest_evening_sent_date >= today
+    )
+    return morning_sent, evening_sent
 
 
 async def _send_evening(bot: Bot, user, today, tz: str) -> None:

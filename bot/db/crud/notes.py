@@ -58,4 +58,5 @@ async def hybrid_search_notes(
             .where(Note.user_id == user_id, Note.content.ilike(f"%{query}%"))
             .limit(limit)
         )
+        return list(res.scalars().all())
     return res.fetchall()
