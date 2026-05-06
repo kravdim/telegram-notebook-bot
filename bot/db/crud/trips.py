@@ -39,10 +39,19 @@ async def get_active_trip(
     session: AsyncSession,
     user_id: int,
 ) -> Optional[Trip]:
-    """Получить активную командировку."""
+    """Получить текущую активную командировку.
+
+    Старые записи со статусом active, у которых уже прошёл end_date, не считаются
+    активными для дайджестов и команды /trip.
+    """
+    today = pendulum.today("Europe/Moscow").date()
     result = await session.execute(
         select(Trip)
-        .where(Trip.user_id == user_id, Trip.status == "active")
+        .where(
+            Trip.user_id == user_id,
+            Trip.status == "active",
+            Trip.end_date >= today,
+        )
         .order_by(Trip.start_date.desc())
         .limit(1)
     )

@@ -10,7 +10,11 @@ from json_repair import repair_json
 
 from bot.db.crud.diary import create_diary_entry
 from bot.db.crud.notes import create_note
-from bot.db.crud.projects import create_project as crud_create_project
+from bot.db.crud.projects import (
+    complete_project as crud_complete_project,
+    create_project as crud_create_project,
+    search_projects,
+)
 from bot.db.crud.reminders import create_reminder
 from bot.db.crud.tasks import (
     complete_task_by_id, count_similar_completed, create_task, get_frog,
@@ -79,6 +83,8 @@ async def dispatch(
             return await _handle_delete_task(user_id, args)
         elif name == "create_project":
             return await _handle_create_project(user_id, args)
+        elif name == "complete_project":
+            return await _handle_complete_project(user_id, args)
         else:
             logger.warning("Неизвестная функция: %s", name)
             return "Не удалось обработать команду. Попробуй переформулировать."
@@ -726,6 +732,34 @@ async def _handle_create_project(user_id: int, args: Dict[str, Any]) -> str:
         )
 
     return f"PROJECT_CREATED:{project.id}:{project.title}"
+
+
+async def _handle_complete_project(user_id: int, args: Dict[str, Any]) -> str:
+    query = args.get("search_query", "").strip()
+    if not query:
+        return "Какой слон закрываем? Напиши название проекта."
+
+    async with async_session() as session:
+        projects = await search_projects(session, user_id, query, status="active")
+        if not projects:
+            all_projects = await search_projects(session, user_id, query, status=None)
+            completed = next((p for p in all_projects if p.status == "done"), None)
+            if completed:
+                return f"Слон «{completed.title}» уже был закрыт ✅"
+            return f"Не нашёл активного слона «{query}»."
+
+        exact = next((p for p in projects if p.title.lower().strip() == query.lower()), None)
+        if len(projects) > 1 and not exact:
+            lines = [f"Нашёл несколько слонов по «{query}». Уточни название:"]
+            for p in projects[:3]:
+                lines.append(f"  • {p.title}")
+            return "\n".join(lines)
+
+        project = await crud_complete_project(session, (exact or projects[0]).id, user_id)
+
+    if not project:
+        return f"Не удалось закрыть слона «{query}»."
+    return f"Слон «{project.title}» закрыт ✅"
 
 
 async def _handle_add_birthday(user_id: int, args: Dict[str, Any], tz: str) -> str:

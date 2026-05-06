@@ -67,6 +67,35 @@ async def test_process_chronometry_response_records_entry_and_pause(monkeypatch)
 
 
 @pytest.mark.asyncio
+async def test_process_chronometry_response_updates_last_asked_without_pause(monkeypatch):
+    updates = []
+
+    async def fake_get_prompt(session, prompt_key):
+        return "Верни JSON"
+
+    async def fake_create_time_entry(session, **kwargs):
+        return None
+
+    async def fake_update_user_settings(session, user_id, **kwargs):
+        updates.append((user_id, kwargs))
+
+    chronometry._llm_client = FakeLLMClient(
+        '{"category":"work","is_planned":true,"productivity_score":4,'
+        '"reaction_text":"Записал."}'
+    )
+    chronometry._llm_queue = FakeQueue()
+    monkeypatch.setattr(chronometry, "async_session", lambda: FakeSessionContext())
+    monkeypatch.setattr(chronometry, "get_prompt", fake_get_prompt)
+    monkeypatch.setattr(chronometry, "create_time_entry", fake_create_time_entry)
+    monkeypatch.setattr(chronometry, "update_user_settings", fake_update_user_settings)
+
+    await chronometry.process_chronometry_response(42, "Доделываю бота ВБ", "Europe/Moscow")
+
+    assert updates[0][0] == 42
+    assert "chronometry_last_asked" in updates[0][1]
+
+
+@pytest.mark.asyncio
 async def test_process_chronometry_response_falls_back_on_bad_json(monkeypatch):
     created = []
 

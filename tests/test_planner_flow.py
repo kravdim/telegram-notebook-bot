@@ -1,7 +1,7 @@
 from datetime import time
 from types import SimpleNamespace
 
-from bot.handlers.messages import _extract_done_query
+from bot.handlers.messages import _extract_done_query, _extract_task_request
 from bot.llm.dispatcher import _format_open_today_state
 
 
@@ -30,6 +30,26 @@ def test_extract_done_query_prefix_forms():
 def test_extract_done_query_ignores_chronometry_text():
     assert _extract_done_query("Обедаю") is None
     assert _extract_done_query("воюю с почтой, что-то не работает") is None
+
+
+def test_extract_task_request_common_forms():
+    assert _extract_task_request("Надо купить смеситель", "Europe/Moscow") == {
+        "title": "Купить смеситель",
+        "category": "personal",
+        "priority": "normal",
+    }
+
+    today_task = _extract_task_request(
+        "Надо сегодня настроить почту altair-bot.ru", "Europe/Moscow"
+    )
+    assert today_task["title"] == "Настроить почту altair-bot.ru"
+    assert today_task["category"] == "work"
+    assert today_task["priority"] == "normal"
+    assert today_task["due_date"]
+
+
+def test_extract_task_request_ignores_activity():
+    assert _extract_task_request("Настраиваю компьютер на Силикатном", "Europe/Moscow") is None
 
 
 def test_format_open_today_state_empty():

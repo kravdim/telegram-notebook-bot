@@ -89,13 +89,15 @@ async def process_chronometry_response(
                 bot_reaction=data.get("reaction_text", ""),
             )
             pause_minutes = _chrono_pause_minutes(text, category)
+            import pendulum
+            last_asked = pendulum.now(user_tz)
             if pause_minutes:
-                import pendulum
-                await update_user_settings(
-                    session,
-                    user_id,
-                    chronometry_last_asked=pendulum.now(user_tz).add(minutes=pause_minutes),
-                )
+                last_asked = last_asked.add(minutes=pause_minutes)
+            await update_user_settings(
+                session,
+                user_id,
+                chronometry_last_asked=last_asked,
+            )
 
         reaction = data.get("reaction_text", "Записал!")
         if _is_plain_reaction(reaction):

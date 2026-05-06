@@ -144,6 +144,17 @@ FUNCTIONS = [
         },
     },
     {
+        "name": "complete_project",
+        "description": "Отметить слона/крупный проект завершённым",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "search_query": {"type": "string", "description": "Текст для поиска проекта"},
+            },
+            "required": ["search_query"],
+        },
+    },
+    {
         "name": "add_birthday",
         "description": "Запомнить день рождения. Используй когда пользователь говорит 'день рождения у Сергея 15 марта', 'запомни ДР Маши 5 мая', 'у мамы день рождения 22 сентября'",
         "parameters": {

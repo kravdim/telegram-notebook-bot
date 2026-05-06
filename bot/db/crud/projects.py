@@ -54,6 +54,35 @@ async def get_user_projects(
     return list(result.scalars().all())
 
 
+async def search_projects(
+    session: AsyncSession,
+    user_id: int,
+    query: str,
+    status: Optional[str] = "active",
+) -> List[Project]:
+    """Поиск проектов пользователя по названию."""
+    q = select(Project).where(Project.user_id == user_id, Project.title.ilike(f"%{query}%"))
+    if status is not None:
+        q = q.where(Project.status == status)
+    result = await session.execute(q.order_by(Project.created_at.desc()).limit(10))
+    return list(result.scalars().all())
+
+
+async def complete_project(
+    session: AsyncSession,
+    project_id: uuid.UUID,
+    user_id: int,
+) -> Optional[Project]:
+    """Отметить проект завершённым."""
+    project = await get_project_by_id(session, project_id)
+    if not project or project.user_id != user_id:
+        return None
+    project.status = "done"
+    await session.commit()
+    await session.refresh(project)
+    return project
+
+
 async def get_project_tasks(
     session: AsyncSession,
     project_id: uuid.UUID,

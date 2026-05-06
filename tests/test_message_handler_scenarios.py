@@ -37,10 +37,12 @@ def reset_message_globals():
     old_queue = messages.llm_queue
     messages.llm_client = FakeLLMClient()
     messages.llm_queue = FakeLLMQueue()
+    messages._pending_project_completion.clear()
     clear_all()
     yield
     messages.llm_client = old_client
     messages.llm_queue = old_queue
+    messages._pending_project_completion.clear()
     clear_all()
 
 
@@ -173,6 +175,107 @@ async def test_greeting_does_not_get_captured_by_pending_chronometry(monkeypatch
     await messages.process_text_message(42, msg.text, msg)
 
     assert msg.answers[-1][0] == "И тебе доброе утро."
+
+
+@pytest.mark.asyncio
+async def test_task_request_bypasses_pending_chronometry(monkeypatch):
+    calls = []
+
+    async def fake_get_user(session, user_id):
+        return SimpleNamespace(timezone="Europe/Moscow")
+
+    async def fake_dispatch(function_call, user_id, user_tz):
+        calls.append(function_call)
+        return "Задача создана: Купить смеситель ✅"
+
+    async def forbidden_chrono(*args, **kwargs):
+        raise AssertionError("Task request must not be routed to chronometry")
+
+    monkeypatch.setattr(messages, "async_session", lambda: FakeSessionContext())
+    monkeypatch.setattr(messages, "get_user", fake_get_user)
+    monkeypatch.setattr(messages, "dispatch", fake_dispatch)
+    monkeypatch.setattr(chronometry_scheduler, "is_awaiting_response", lambda user_id: True)
+    monkeypatch.setattr(chronometry_scheduler, "get_chrono_message_id", lambda user_id: 100)
+    monkeypatch.setattr(chronometry_handler, "process_chronometry_response", forbidden_chrono)
+
+    msg = FakeMessage("Надо купить смеситель", user_id=42)
+    await messages.process_text_message(42, msg.text, msg)
+
+    assert calls == [
+        {
+            "name": "create_task",
+            "arguments": {
+                "title": "Купить смеситель",
+                "category": "personal",
+                "priority": "normal",
+            },
+        }
+    ]
+    assert msg.answers[-1][0] == "Задача создана: Купить смеситель ✅"
+
+
+@pytest.mark.asyncio
+async def test_project_completion_waits_for_title_and_dispatches(monkeypatch):
+    calls = []
+
+    async def fake_get_user(session, user_id):
+        return SimpleNamespace(timezone="Europe/Moscow")
+
+    async def fake_dispatch(function_call, user_id, user_tz):
+        calls.append(function_call)
+        return "Слон «Настройка Телеграм бота DailyPlanner» закрыт ✅"
+
+    monkeypatch.setattr(messages, "async_session", lambda: FakeSessionContext())
+    monkeypatch.setattr(messages, "get_user", fake_get_user)
+    monkeypatch.setattr(messages, "dispatch", fake_dispatch)
+    monkeypatch.setattr(chronometry_scheduler, "is_awaiting_response", lambda user_id: False)
+
+    first = FakeMessage("Слона тоже закрыли", user_id=42)
+    await messages.process_text_message(42, first.text, first)
+    assert first.answers[-1][0] == "Какой слон закрываем? Напиши название проекта."
+
+    second = FakeMessage("Настройка Телеграм бота DailyPlanner", user_id=42)
+    await messages.process_text_message(42, second.text, second)
+
+    assert calls == [
+        {
+            "name": "complete_project",
+            "arguments": {"search_query": "Настройка Телеграм бота DailyPlanner"},
+        }
+    ]
+    assert second.answers[-1][0] == "Слон «Настройка Телеграм бота DailyPlanner» закрыт ✅"
+
+
+@pytest.mark.asyncio
+async def test_free_text_fake_task_creation_is_blocked(monkeypatch):
+    class Queue:
+        async def submit(self, priority, coro):
+            try:
+                await coro
+            except AssertionError:
+                pass
+            return FakeResponse(content="Создаю задачу: Настройка почты ✅\n\nВсё верно?")
+
+    async def fake_get_user(session, user_id):
+        return SimpleNamespace(timezone="Europe/Moscow")
+
+    async def fake_get_prompt(session, prompt_key):
+        return "prompt {now} {timezone}"
+
+    async def fake_log(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(messages, "async_session", lambda: FakeSessionContext())
+    monkeypatch.setattr(messages, "get_user", fake_get_user)
+    monkeypatch.setattr(messages, "get_prompt", fake_get_prompt)
+    monkeypatch.setattr(messages, "llm_queue", Queue())
+    monkeypatch.setattr("bot.db.crud.llm_logs.log_llm_request", fake_log)
+    monkeypatch.setattr(chronometry_scheduler, "is_awaiting_response", lambda user_id: False)
+
+    msg = FakeMessage("какая-то сложная формулировка", user_id=42)
+    await messages.process_text_message(42, msg.text, msg)
+
+    assert "Я не сохранил это" in msg.answers[-1][0]
 
 
 @pytest.mark.asyncio

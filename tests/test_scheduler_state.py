@@ -4,6 +4,7 @@ from types import SimpleNamespace
 import pendulum
 
 from bot.scheduler.chronometry import _awaiting_is_stale, _awaiting_since
+from bot.formatters.digest import format_morning_digest
 from bot.scheduler.digest import _digest_sent_flags
 from bot.scheduler.task_reminders import _format_task_reminder, _task_reminder_already_sent
 
@@ -77,3 +78,21 @@ def test_task_reminder_format_omits_noise_when_tasks_exist():
     assert "✅ Уже сделано: 1" in text
     assert "🔴 Подключить онлайн-кассу" in text
     assert "Все задачи выполнены" not in text
+
+
+def test_morning_digest_with_project_is_not_free_day():
+    project = SimpleNamespace(id="p1", title="Настройка Телеграм бота DailyPlanner")
+    text = format_morning_digest(
+        today=date(2026, 5, 6),
+        tasks=[],
+        frog=None,
+        projects=[project],
+        project_progress={"p1": {"percent": 0}},
+        is_weekend=False,
+        active_trip=None,
+        birthdays=[],
+    )
+
+    assert "Слоны" in text
+    assert "Сегодня свободный день" not in text
+    assert "Задач на сегодня нет" in text

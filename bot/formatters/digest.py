@@ -79,8 +79,10 @@ def format_morning_digest(
             bar = _progress_bar(pct)
             parts.append(f"  {p.title} {bar} {pct}%")
 
-    if not tasks and not frog:
+    if not tasks and not frog and not projects:
         parts.append("\n🎉 Сегодня свободный день! Отдыхай или запланируй что-нибудь.")
+    elif not tasks and not frog and projects:
+        parts.append("\n📋 Задач на сегодня нет. Можно взять один маленький шаг по слону.")
 
     return "\n".join(parts)
 
