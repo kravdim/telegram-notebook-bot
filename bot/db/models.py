@@ -129,6 +129,7 @@ class Task(Base):
     category: Mapped[str] = mapped_column(Text, nullable=False, default="work")
     priority: Mapped[str] = mapped_column(Text, nullable=False, default="normal")
     is_frog: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    scheduled_date: Mapped[Optional[date]] = mapped_column(Date)
     due_date: Mapped[Optional[date]] = mapped_column(Date)
     due_time: Mapped[Optional[time]] = mapped_column(Time)
     remind_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
@@ -151,8 +152,32 @@ class Task(Base):
             name="ck_tasks_resolution",
         ),
         Index("idx_tasks_user_status", "user_id", "status"),
+        Index("idx_tasks_scheduled_date", "scheduled_date", postgresql_where="status = 'open'"),
         Index("idx_tasks_due_date", "due_date", postgresql_where="status = 'open'"),
         Index("idx_tasks_frog", "user_id", postgresql_where="is_frog = TRUE AND status = 'open'"),
+    )
+
+
+class InteractionState(Base):
+    """Persisted user interaction state for multi-step flows."""
+
+    __tablename__ = "interaction_states"
+
+    user_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("users.telegram_id", ondelete="CASCADE"), primary_key=True
+    )
+    state_type: Mapped[str] = mapped_column(Text, nullable=False)
+    payload: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default="now()"
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default="now()"
+    )
+
+    __table_args__ = (
+        Index("idx_interaction_states_expires", "expires_at"),
     )
 
 

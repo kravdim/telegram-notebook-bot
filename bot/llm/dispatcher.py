@@ -143,11 +143,13 @@ async def _handle_create_task(
     if err:
         return err
 
+    scheduled_date = _parse_date(args.get("scheduled_date"), tz)
     due_date = _parse_date(args.get("due_date"), tz)
     due_time = _parse_time(args.get("due_time"))
     remind_at = _parse_datetime(args.get("remind_at"), tz)
 
-    # Проверка: due_date не в прошлом
+    if scheduled_date and scheduled_date < pendulum.now(tz).date():
+        return "Дата планирования в прошлом. Уточни дату."
     if due_date and due_date < pendulum.now(tz).date():
         return "Дата дедлайна в прошлом. Уточни дату."
 
@@ -168,7 +170,8 @@ async def _handle_create_task(
         for t in existing:
             if t.title.lower().strip() == title.lower().strip():
                 dup_info = {
-                    "id": t.id, "title": t.title, "due_date": t.due_date,
+                    "id": t.id, "title": t.title,
+                    "scheduled_date": t.scheduled_date, "due_date": t.due_date,
                     "due_time": t.due_time, "is_frog": t.is_frog, "priority": t.priority,
                 }
                 break
@@ -176,6 +179,8 @@ async def _handle_create_task(
     if dup_info:
         # Обновляем существующую задачу вместо создания дубликата
         updates = {}
+        if scheduled_date and scheduled_date != dup_info["scheduled_date"]:
+            updates["scheduled_date"] = scheduled_date
         if due_date and due_date != dup_info["due_date"]:
             updates["due_date"] = due_date
         if due_time and due_time != dup_info["due_time"]:
@@ -192,8 +197,10 @@ async def _handle_create_task(
                 from bot.db.crud.tasks import update_task as crud_update
                 await crud_update(session, dup_info["id"], user_id, **updates)
             changes = []
+            if "scheduled_date" in updates:
+                changes.append(f"📅 {scheduled_date.strftime('%d.%m.%Y')}")
             if "due_date" in updates:
-                changes.append(f"📅 {due_date.strftime('%d.%m.%Y')}")
+                changes.append(f"⏳ до {due_date.strftime('%d.%m.%Y')}")
             if "due_time" in updates:
                 changes.append(f"⏰ {due_time.strftime('%H:%M')}")
             if "remind_at" in updates:
@@ -212,6 +219,7 @@ async def _handle_create_task(
             category=category,
             priority=priority,
             is_frog=is_frog,
+            scheduled_date=scheduled_date,
             due_date=due_date,
             due_time=due_time,
             remind_at=remind_at,
@@ -223,8 +231,10 @@ async def _handle_create_task(
         similar_count, last_at = await count_similar_completed(session, user_id, title)
 
     parts = [f"Задача создана: {task.title}"]
+    if scheduled_date:
+        parts.append(f"📅 {scheduled_date.strftime('%d.%m.%Y')}")
     if due_date:
-        parts.append(f"📅 {due_date.strftime('%d.%m.%Y')}")
+        parts.append(f"⏳ до {due_date.strftime('%d.%m.%Y')}")
     if due_time:
         parts.append(f"⏰ {due_time.strftime('%H:%M')}")
     if remind_at:
@@ -562,8 +572,9 @@ async def _handle_list_tasks(
                 icon = "🐸" if t.is_frog else ("🔴" if t.priority == "high" else "📌")
                 time_str = f" ⏰ {t.due_time.strftime('%H:%M')}" if t.due_time else ""
                 date_str = ""
-                if t.due_date and t.due_date < today:
-                    date_str = f" ⚠️ просрочена с {t.due_date.strftime('%d.%m')}"
+                plan_date = getattr(t, "scheduled_date", None) or t.due_date
+                if plan_date and plan_date < today:
+                    date_str = f" ⚠️ с {plan_date.strftime('%d.%m')}"
                 lines.append(f"{icon} {t.title}{time_str}{date_str}")
             return "\n".join(lines)
 
@@ -579,12 +590,17 @@ async def _handle_list_tasks(
 
         elif scope == "overdue":
             all_tasks = await get_user_tasks(session, user_id, status="open")
-            overdue = [t for t in all_tasks if t.due_date and t.due_date < today]
+            overdue = [
+                t for t in all_tasks
+                if (getattr(t, "scheduled_date", None) or t.due_date)
+                and (getattr(t, "scheduled_date", None) or t.due_date) < today
+            ]
             if not overdue:
                 return "Просроченных задач нет 👍"
             lines = ["⚠️ Просроченные задачи:\n"]
             for t in overdue:
-                lines.append(f"📌 {t.title} (дедлайн {t.due_date.strftime('%d.%m')})")
+                plan_date = getattr(t, "scheduled_date", None) or t.due_date
+                lines.append(f"📌 {t.title} ({plan_date.strftime('%d.%m')})")
             return "\n".join(lines)
 
         else:  # all
@@ -594,7 +610,8 @@ async def _handle_list_tasks(
             lines = ["📋 Все открытые задачи:\n"]
             for t in tasks:
                 icon = "🐸" if t.is_frog else ("🔴" if t.priority == "high" else "📌")
-                date_str = f" 📅 {t.due_date.strftime('%d.%m')}" if t.due_date else ""
+                plan_date = getattr(t, "scheduled_date", None) or t.due_date
+                date_str = f" 📅 {plan_date.strftime('%d.%m')}" if plan_date else ""
                 lines.append(f"{icon} {t.title}{date_str}")
             return "\n".join(lines)
 
@@ -668,13 +685,15 @@ async def _handle_update_task(user_id: int, args: Dict[str, Any], tz: str = "Eur
 
         task = tasks[0]
         # Фильтруем допустимые поля
-        allowed = {"title", "priority", "is_frog", "due_date", "due_time", "status"}
+        allowed = {"title", "priority", "is_frog", "scheduled_date", "due_date", "due_time", "status"}
         clean_updates = {k: v for k, v in updates.items() if k in allowed}
 
         if not clean_updates:
             return "Нет допустимых полей для обновления."
 
         # Парсим даты/время из строк
+        if "scheduled_date" in clean_updates and isinstance(clean_updates["scheduled_date"], str):
+            clean_updates["scheduled_date"] = _parse_date(clean_updates["scheduled_date"], tz)
         if "due_date" in clean_updates and isinstance(clean_updates["due_date"], str):
             clean_updates["due_date"] = _parse_date(clean_updates["due_date"], tz)
         if "due_time" in clean_updates and isinstance(clean_updates["due_time"], str):
@@ -683,7 +702,17 @@ async def _handle_update_task(user_id: int, args: Dict[str, Any], tz: str = "Eur
         updated = await crud_update_task(session, task.id, user_id, **clean_updates)
 
     if updated:
-        return f"Задача «{updated.title}» обновлена ✅"
+        if clean_updates.get("status") == "cancelled":
+            return f"Задача «{updated.title}» отменена ✅"
+        if clean_updates.get("status") == "done":
+            return f"Задача «{updated.title}» выполнена ✅"
+        details = []
+        if "scheduled_date" in clean_updates and updated.scheduled_date:
+            details.append(f"📅 {updated.scheduled_date.strftime('%d.%m.%Y')}")
+        if "due_date" in clean_updates and updated.due_date:
+            details.append(f"⏳ до {updated.due_date.strftime('%d.%m.%Y')}")
+        suffix = " " + " ".join(details) if details else ""
+        return f"Задача «{updated.title}» обновлена{suffix} ✅"
     return "Не удалось обновить задачу."
 
 

@@ -62,7 +62,12 @@ async def get_today_tasks(
     user_id: int,
     today: date,
 ) -> List[Task]:
-    """Получить задачи на сегодня: due_date = today или лягушки или без даты."""
+    """Получить задачи плана дня.
+
+    scheduled_date — дата, на которую задача запланирована.
+    due_date остаётся дедлайном. Задачи без дат больше не попадают в каждый день
+    автоматически; это бэклог, пока пользователь не запланирует их.
+    """
     result = await session.execute(
         select(Task)
         .where(
@@ -72,19 +77,20 @@ async def get_today_tasks(
         .order_by(
             Task.is_frog.desc(),  # лягушки первые
             Task.priority.asc(),  # high < medium < normal
+            Task.scheduled_date.asc().nullslast(),
             Task.due_date.asc().nullslast(),
             Task.created_at.asc(),
         )
     )
     tasks = list(result.scalars().all())
-    # Фильтруем: due_date == today, или due_date <= today (просроченные), или лягушки
     today_tasks = []
     for t in tasks:
         if t.is_frog:
             today_tasks.append(t)
-        elif t.due_date and t.due_date <= today:
-            today_tasks.append(t)
-        elif not t.due_date:
+            continue
+
+        plan_date = t.scheduled_date or t.due_date
+        if plan_date and plan_date <= today:
             today_tasks.append(t)
     return today_tasks
 
@@ -208,6 +214,12 @@ async def update_task(
     for key, value in updates.items():
         if hasattr(task, key):
             setattr(task, key, value)
+    if updates.get("status") == "cancelled":
+        task.resolution = "cancelled"
+        task.completed_at = pendulum.now("UTC")
+    elif updates.get("status") == "done":
+        task.resolution = "completed"
+        task.completed_at = pendulum.now("UTC")
 
     await session.commit()
     await session.refresh(task)
@@ -286,15 +298,20 @@ async def count_similar_completed(
 
     Ищет по ключевым словам из заголовка (ILIKE по каждому слову длиннее 3 символов).
     """
-    # Извлекаем значимые слова
-    words = [w for w in title.lower().split() if len(w) > 3]
+    # Извлекаем значимые слова. Общие глаголы вроде "настроить" не должны
+    # превращать разные задачи в "повторяющиеся".
+    stop_words = {
+        "надо", "нужно", "сделать", "настроить", "написать", "купить",
+        "решить", "разобраться", "заплатить", "выплатить", "оплатить",
+    }
+    words = [w for w in title.lower().split() if len(w) > 3 and w not in stop_words]
     if not words:
         return 0, None
 
     from sqlalchemy import func, or_
 
     # Ищем задачи, содержащие хотя бы одно ключевое слово
-    conditions = [func.lower(Task.title).contains(w) for w in words[:3]]
+    conditions = [func.lower(Task.title).contains(w) for w in words[:4]]
 
     result = await session.execute(
         select(Task)
@@ -306,6 +323,11 @@ async def count_similar_completed(
         .order_by(Task.completed_at.desc().nullslast())
     )
     tasks = list(result.scalars().all())
+    min_overlap = min(2, len(words))
+    tasks = [
+        task for task in tasks
+        if sum(1 for w in words if w in task.title.lower()) >= min_overlap
+    ]
 
     if not tasks:
         return 0, None

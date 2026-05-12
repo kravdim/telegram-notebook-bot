@@ -1,4 +1,4 @@
-from bot.handlers.chronometry import _chrono_pause_minutes, _is_plain_reaction
+from bot.handlers.chronometry import _chrono_pause_minutes, _is_plain_reaction, _sanitize_reaction
 from bot.handlers.voice import _awaiting_edit, _pending_transcripts, consume_voice_edit
 
 
@@ -13,6 +13,17 @@ def test_plain_reaction_filter_limits_boltliness():
     assert _is_plain_reaction("Записал: работа.") is True
     assert _is_plain_reaction("Что именно делал? Как давно? Почему так?") is False
     assert _is_plain_reaction("x" * 181) is False
+
+
+def test_chronometry_reaction_sanitizes_unknown_results():
+    assert (
+        _sanitize_reaction(
+            "Планировали с коллегами командировку в Вологду",
+            "Хорошо, командировку оформили.",
+        )
+        == "Планирование командировки записал."
+    )
+    assert _sanitize_reaction("Отвез ФФ", "Хорошо, значит ФФ отправлен.") == "Записал."
 
 
 def test_voice_edit_state_is_consumed_once():

@@ -99,7 +99,7 @@ async def process_chronometry_response(
                 chronometry_last_asked=last_asked,
             )
 
-        reaction = data.get("reaction_text", "Записал!")
+        reaction = _sanitize_reaction(text, data.get("reaction_text", "Записал!"))
         if _is_plain_reaction(reaction):
             return f"⏱ {reaction}"
         return "⏱ Записал."
@@ -128,6 +128,21 @@ def _chrono_pause_minutes(text: str, category: str) -> int:
     if any(word in normalized for word in ("воюю", "добиваю", "разбираюсь", "настраиваю", "переношу", "пытаюсь")):
         return 15
     return 0
+
+
+def _sanitize_reaction(user_text: str, reaction: str) -> str:
+    """Убрать из реакции хронометража утверждения о результате, которого бот не знает."""
+    normalized_user = user_text.lower()
+    normalized_reaction = (reaction or "").lower()
+    risky_markers = (
+        "оформили", "оформлена", "оформлено", "отправлен", "отправили",
+        "закрыт", "закрыли", "готово", "сделано",
+    )
+    if any(marker in normalized_reaction for marker in risky_markers):
+        if "командиров" in normalized_user and "план" in normalized_user:
+            return "Планирование командировки записал."
+        return "Записал."
+    return reaction or "Записал."
 
 
 def _is_plain_reaction(text: str) -> bool:

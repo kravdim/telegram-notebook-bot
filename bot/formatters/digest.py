@@ -49,24 +49,24 @@ def format_morning_digest(
         parts.append(f"\n🐸 <b>Лягушка дня:</b> {frog.title}")
         parts.append("Съешь её первой!")
 
-    # Задачи на сегодня
-    today_tasks = [t for t in tasks if t.due_date and t.due_date <= today]
-    no_date_tasks = [t for t in tasks if not t.due_date and not t.is_frog]
-
     if is_weekend:
         # В выходные — только personal + напоминания
-        today_tasks = [t for t in today_tasks if t.category == "personal"]
-        no_date_tasks = []
+        tasks = [t for t in tasks if t.category == "personal"]
 
-    if today_tasks:
+    if tasks:
         parts.append("\n📋 <b>Задачи на сегодня:</b>")
-        for t in today_tasks:
+        for t in tasks:
             emoji = _PRIORITY_EMOJI.get(t.priority, "⚪")
             time_str = f" ⏰ {t.due_time.strftime('%H:%M')}" if t.due_time else ""
             parts.append(f"  {emoji} {t.title}{time_str}")
 
     if not is_weekend:
-        overdue = [t for t in tasks if t.due_date and t.due_date < today and t.status == "open"]
+        overdue = [
+            t for t in tasks
+            if (getattr(t, "scheduled_date", None) or t.due_date)
+            and (getattr(t, "scheduled_date", None) or t.due_date) < today
+            and t.status == "open"
+        ]
         if overdue:
             parts.append(f"\n⚠️ Просроченных: {len(overdue)}")
 

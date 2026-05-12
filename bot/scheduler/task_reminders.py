@@ -12,7 +12,7 @@ from bot.db.engine import async_session
 logger = logging.getLogger(__name__)
 
 # Часы отправки (в локальном времени пользователя)
-_REMINDER_HOURS = [9, 11, 13, 15, 17]
+_REMINDER_HOURS = [11, 13, 15, 17]
 
 
 async def send_task_reminders(bot: Bot) -> None:
@@ -118,7 +118,8 @@ def _format_task_reminder(tasks, completed, frog, today, hour) -> str:
             icon = "🔴" if t.priority == "high" else "📌"
             time_str = f" ⏰ {t.due_time.strftime('%H:%M')}" if t.due_time else ""
             overdue = ""
-            if t.due_date and t.due_date < today:
+            plan_date = getattr(t, "scheduled_date", None) or t.due_date
+            if plan_date and plan_date < today:
                 overdue = " ⚠️"
             lines.append(f"{icon} {t.title}{time_str}{overdue}")
 

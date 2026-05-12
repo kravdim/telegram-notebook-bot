@@ -80,6 +80,105 @@ async def test_done_message_routes_directly_to_dispatch(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_conversational_done_bypasses_pending_chronometry(monkeypatch):
+    calls = []
+
+    async def fake_get_user(session, user_id):
+        return SimpleNamespace(timezone="Europe/Moscow")
+
+    async def fake_dispatch(function_call, user_id, user_tz):
+        calls.append(function_call)
+        return "Задача закрыта"
+
+    async def forbidden_chrono(*args, **kwargs):
+        raise AssertionError("Done message must not be routed to chronometry")
+
+    monkeypatch.setattr(messages, "async_session", lambda: FakeSessionContext())
+    monkeypatch.setattr(messages, "get_user", fake_get_user)
+    monkeypatch.setattr(messages, "dispatch", fake_dispatch)
+    monkeypatch.setattr(chronometry_scheduler, "is_awaiting_response", lambda user_id: True)
+    monkeypatch.setattr(chronometry_scheduler, "get_chrono_message_id", lambda user_id: 100)
+    monkeypatch.setattr(chronometry_handler, "process_chronometry_response", forbidden_chrono)
+
+    msg = FakeMessage("Денег Фокусу заплатили", user_id=42)
+    await messages.process_text_message(42, msg.text, msg)
+
+    assert calls == [
+        {
+            "name": "complete_task",
+            "arguments": {"search_query": "Заплатить деньги Фокусу"},
+        }
+    ]
+    assert msg.answers[-1][0] == "Задача закрыта"
+
+
+@pytest.mark.asyncio
+async def test_reschedule_bypasses_pending_chronometry(monkeypatch):
+    calls = []
+
+    async def fake_get_user(session, user_id):
+        return SimpleNamespace(timezone="Europe/Moscow")
+
+    async def fake_dispatch(function_call, user_id, user_tz):
+        calls.append(function_call)
+        return "Задача обновлена ✅"
+
+    async def forbidden_chrono(*args, **kwargs):
+        raise AssertionError("Reschedule message must not be routed to chronometry")
+
+    monkeypatch.setattr(messages, "async_session", lambda: FakeSessionContext())
+    monkeypatch.setattr(messages, "get_user", fake_get_user)
+    monkeypatch.setattr(messages, "dispatch", fake_dispatch)
+    monkeypatch.setattr(chronometry_scheduler, "is_awaiting_response", lambda user_id: True)
+    monkeypatch.setattr(chronometry_scheduler, "get_chrono_message_id", lambda user_id: 100)
+    monkeypatch.setattr(chronometry_handler, "process_chronometry_response", forbidden_chrono)
+
+    msg = FakeMessage("Купить смеситель - это на воскресенье же перенесли", user_id=42)
+    await messages.process_text_message(42, msg.text, msg)
+
+    assert calls[0]["name"] == "update_task"
+    assert calls[0]["arguments"]["search_query"] == "Купить смеситель"
+    assert calls[0]["arguments"]["updates"]["scheduled_date"]
+    assert msg.answers[-1][0] == "Задача обновлена ✅"
+
+
+@pytest.mark.asyncio
+async def test_cancel_bypasses_pending_chronometry(monkeypatch):
+    calls = []
+
+    async def fake_get_user(session, user_id):
+        return SimpleNamespace(timezone="Europe/Moscow")
+
+    async def fake_dispatch(function_call, user_id, user_tz):
+        calls.append(function_call)
+        return "Задача отменена ✅"
+
+    async def forbidden_chrono(*args, **kwargs):
+        raise AssertionError("Cancel message must not be routed to chronometry")
+
+    monkeypatch.setattr(messages, "async_session", lambda: FakeSessionContext())
+    monkeypatch.setattr(messages, "get_user", fake_get_user)
+    monkeypatch.setattr(messages, "dispatch", fake_dispatch)
+    monkeypatch.setattr(chronometry_scheduler, "is_awaiting_response", lambda user_id: True)
+    monkeypatch.setattr(chronometry_scheduler, "get_chrono_message_id", lambda user_id: 100)
+    monkeypatch.setattr(chronometry_handler, "process_chronometry_response", forbidden_chrono)
+
+    msg = FakeMessage("Купить смеситель тоже пока не надо, вроде этот получилось сделать", user_id=42)
+    await messages.process_text_message(42, msg.text, msg)
+
+    assert calls == [
+        {
+            "name": "update_task",
+            "arguments": {
+                "search_query": "Купить смеситель",
+                "updates": {"status": "cancelled"},
+            },
+        }
+    ]
+    assert msg.answers[-1][0] == "Задача отменена ✅"
+
+
+@pytest.mark.asyncio
 async def test_chronometry_reply_routes_to_chronometry_handler(monkeypatch):
     async def fake_get_user(session, user_id):
         return SimpleNamespace(timezone="Europe/Moscow")

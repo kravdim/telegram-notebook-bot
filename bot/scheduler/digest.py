@@ -136,7 +136,11 @@ async def _send_evening(bot: Bot, user, today, tz: str) -> None:
     # Оставшиеся на сегодня
     remaining = [
         t for t in all_tasks
-        if (t.due_date and t.due_date <= today) or t.is_frog
+        if (
+            ((getattr(t, "scheduled_date", None) or t.due_date)
+             and (getattr(t, "scheduled_date", None) or t.due_date) <= today)
+            or t.is_frog
+        )
     ]
 
     frog_done = frog is None or (frog and frog.status == "done")

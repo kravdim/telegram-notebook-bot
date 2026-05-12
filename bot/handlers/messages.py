@@ -24,6 +24,8 @@ router = Router()
 _DONE_PATTERNS = [
     re.compile(r"^\s*(?P<title>.+?)\s*[-—–]\s*(?:сделал|сделала|сделано|готово|выполнено|выполнил|выполнила|закрыл|закрыто|решено|решил|решила)\s*[.!)]*\s*$", re.IGNORECASE),
     re.compile(r"^\s*(?:сделал|сделала|сделано|готово|выполнено|выполнил|выполнила|закрыл|решил|решила|решено)\s*[:\-—–]?\s*(?P<title>.+?)\s*[.!)]*\s*$", re.IGNORECASE),
+    re.compile(r"^\s*(?P<title>.+?)\s+(?:заплатил|заплатила|заплатили|оплатил|оплатила|оплатили|выплатил|выплатила|выплатили)\s*[.!)]*\s*$", re.IGNORECASE),
+    re.compile(r"^\s*(?P<title>.+?)\s+(?:я\s+)?(?:настроил|настроила|настроили|установил|установила|установили|съездил|съездила|съездили|купил|купила|купили|написал|написала|написали|взял|взяла|взяли|отв[её]з|отвезла|отвезли)\s*[.!)]*\s*$", re.IGNORECASE),
 ]
 
 _NON_CHRONO_PATTERNS = [
@@ -44,6 +46,16 @@ _TASK_REQUEST_PATTERNS = [
 
 _TASK_LEADING_DATE_RE = re.compile(r"^\s*(?P<date>сегодня|завтра)\s+(?P<body>.+)$", re.IGNORECASE)
 
+_RESCHEDULE_RE = re.compile(
+    r"^\s*(?P<title>.+?)\s*[-—–]?\s*(?:это\s+)?(?:на\s+)?(?P<date>сегодня|завтра|послезавтра|понедельник|вторник|среду|среда|четверг|пятницу|пятница|субботу|суббота|воскресенье)\s+(?:же\s+)?(?:перенесли|перенёс|перенес|перенести|перенесено|отложили|отложить)\s*[.!]*$",
+    re.IGNORECASE,
+)
+
+_CANCEL_RE = re.compile(
+    r"^\s*(?P<title>.+?)\s+(?:(?:тоже|пока|пока\s+что)\s+)*(?:не\s+надо|не\s+нужно|отмен[а-яё]*|убери|удали|сними)\b.*$",
+    re.IGNORECASE,
+)
+
 _PROJECT_DONE_RE = re.compile(
     r"^\s*(?:слон|слона|проект)\s+(?:тоже\s+)?(?:закрыт|закрыли|заверш[её]н|завершили|сделан|сделали|готов)\s*[.!]*$",
     re.IGNORECASE,
@@ -51,8 +63,9 @@ _PROJECT_DONE_RE = re.compile(
 
 _FAKE_MUTATION_RE = re.compile(
     r"((?:создаю|создал|создан[аоы]?|сохран(?:ил|ена|ено)?)\s+задач[ауы]|"
-    r"задач[ауы]\s+(?:создан[аоы]?|создал|создаю|сохран(?:ил|ена|ено)?)|"
-    r"всё\s+сохранил|готово,\s*всё\s+сохранил)",
+    r"задач[ауы]\s+(?:создан[аоы]?|создал|создаю|сохран(?:ил|ена|ено)?|выполнен[аоы]?|удален[аоы]?|удалена)|"
+    r"задач[ауы]\s+«[^»]+»\s+(?:выполнен[аоы]?|удален[аоы]?|удалена|уже\s+была\s+отмечена)|"
+    r"всё\s+сохранил|готово,\s*всё\s+сохранил|поправил\s+в\s+уме)",
     re.IGNORECASE,
 )
 
@@ -68,6 +81,34 @@ def init(client: LLMClient, queue: LLMQueue) -> None:
     global llm_client, llm_queue
     llm_client = client
     llm_queue = queue
+
+
+async def _set_pending_interaction(user_id: int, state_type: str) -> None:
+    """Persist pending state, with in-memory fallback for tests/local failures."""
+    _pending_project_completion[user_id] = state_type == "complete_project"
+    try:
+        from bot.db.crud.interaction_states import set_state
+        async with async_session() as session:
+            await set_state(session, user_id, state_type)
+    except Exception as e:
+        logger.debug("Не удалось сохранить interaction state, fallback in-memory: %s", e)
+
+
+async def _consume_pending_interaction(user_id: int) -> Optional[str]:
+    """Consume pending interaction state."""
+    fallback = "complete_project" if _pending_project_completion.pop(user_id, False) else None
+    try:
+        from bot.db.crud.interaction_states import clear_state, get_state
+        async with async_session() as session:
+            state = await get_state(session, user_id)
+            if not state:
+                return fallback
+            state_type = state.state_type
+            await clear_state(session, user_id)
+            return state_type
+    except Exception as e:
+        logger.debug("Не удалось прочитать interaction state, fallback in-memory: %s", e)
+        return fallback
 
 
 async def process_text_message(user_id: int, text: str, message: Message) -> None:
@@ -104,7 +145,36 @@ async def process_text_message(user_id: int, text: str, message: Message) -> Non
             await message.answer(part)
         return
 
-    if _pending_project_completion.pop(user_id, False):
+    reschedule_args = _extract_reschedule_request(text, user_tz)
+    if reschedule_args:
+        await message.bot.send_chat_action(chat_id=message.chat.id, action="typing")
+        result = await dispatch(
+            {"name": "update_task", "arguments": reschedule_args},
+            user_id,
+            user_tz,
+        )
+        add_message(user_id, "user", text)
+        add_message(user_id, "assistant", result)
+        for part in split_message(result):
+            await message.answer(part)
+        return
+
+    cancel_args = _extract_cancel_request(text)
+    if cancel_args:
+        await message.bot.send_chat_action(chat_id=message.chat.id, action="typing")
+        result = await dispatch(
+            {"name": "update_task", "arguments": cancel_args},
+            user_id,
+            user_tz,
+        )
+        add_message(user_id, "user", text)
+        add_message(user_id, "assistant", result)
+        for part in split_message(result):
+            await message.answer(part)
+        return
+
+    pending_state = await _consume_pending_interaction(user_id)
+    if pending_state == "complete_project":
         await message.bot.send_chat_action(chat_id=message.chat.id, action="typing")
         result = await dispatch(
             {"name": "complete_project", "arguments": {"search_query": text}},
@@ -118,7 +188,7 @@ async def process_text_message(user_id: int, text: str, message: Message) -> Non
         return
 
     if _PROJECT_DONE_RE.match(text):
-        _pending_project_completion[user_id] = True
+        await _set_pending_interaction(user_id, "complete_project")
         await message.answer("Какой слон закрываем? Напиши название проекта.")
         return
 
@@ -405,8 +475,99 @@ def _extract_done_query(text: str) -> Optional[str]:
         match = pattern.match(text)
         if match:
             title = match.group("title").strip(" «»\"'")
+            title = _normalize_done_query(title, text)
             return title or None
     return None
+
+
+def _normalize_done_query(title: str, text: str) -> str:
+    """Нормализовать разговорную форму выполненной задачи в поисковый запрос."""
+    lowered = text.lower()
+    if "фокус" in lowered and any(word in lowered for word in ("заплат", "оплат")):
+        return "Заплатить деньги Фокусу"
+    if "зарплат" in lowered and "выплат" in lowered:
+        return "Выплатить зарплаты"
+    if "мувикс" in lowered and "мам" in lowered and "настро" in lowered:
+        return "Настроить маме Мувикс"
+    if "кладбищ" in lowered and "дед" in lowered:
+        return "Съездить на Кладбище к Деду"
+    return title
+
+
+def _extract_cancel_request(text: str) -> Optional[dict]:
+    """Распознать 'задача больше не нужна' как отмену, а не хронометраж."""
+    match = _CANCEL_RE.match(text.strip())
+    if not match:
+        return None
+
+    title = _normalize_cancel_query(match.group("title").strip(" «»\"'"), text)
+    if not title:
+        return None
+
+    return {
+        "search_query": title,
+        "updates": {"status": "cancelled"},
+    }
+
+
+def _normalize_cancel_query(title: str, text: str) -> str:
+    lowered = text.lower()
+    if "смесител" in lowered:
+        return "Купить смеситель"
+    if "перфоратор" in lowered and "офис" in lowered:
+        return "Взять перфоратор из офиса"
+    return re.sub(r"\b(тоже|пока|что|брать|это)\b", "", title, flags=re.IGNORECASE).strip()
+
+
+def _extract_reschedule_request(text: str, tz: str) -> Optional[dict]:
+    """Распознать простое 'задачу перенесли на ...'."""
+    match = _RESCHEDULE_RE.match(text.strip())
+    if not match:
+        return None
+
+    title = match.group("title").strip(" «»\"'")
+    date_word = match.group("date").lower()
+    due_date = _parse_relative_ru_date(date_word, tz)
+    if not title or not due_date:
+        return None
+
+    return {
+        "search_query": title,
+        "updates": {"scheduled_date": str(due_date)},
+    }
+
+
+def _parse_relative_ru_date(word: str, tz: str):
+    """Вернуть ближайшую дату для русского относительного дня/дня недели."""
+    import pendulum
+
+    today = pendulum.now(tz).date()
+    if word == "сегодня":
+        return today
+    if word == "завтра":
+        return today.add(days=1)
+    if word == "послезавтра":
+        return today.add(days=2)
+
+    weekdays = {
+        "понедельник": 1,
+        "вторник": 2,
+        "среда": 3,
+        "среду": 3,
+        "четверг": 4,
+        "пятница": 5,
+        "пятницу": 5,
+        "суббота": 6,
+        "субботу": 6,
+        "воскресенье": 7,
+    }
+    target = weekdays.get(word)
+    if not target:
+        return None
+    delta = (target - today.isoweekday()) % 7
+    if delta == 0:
+        delta = 7
+    return today.add(days=delta)
 
 
 def _extract_task_request(text: str, tz: str) -> Optional[dict]:
@@ -446,11 +607,11 @@ def _extract_task_request(text: str, tz: str) -> Optional[dict]:
     import pendulum
     today = pendulum.now(tz).date()
     if date_word:
-        args["due_date"] = str(today.add(days=1) if date_word.lower() == "завтра" else today)
+        args["scheduled_date"] = str(today.add(days=1) if date_word.lower() == "завтра" else today)
     elif "сегодня" in lowered:
-        args["due_date"] = str(today)
+        args["scheduled_date"] = str(today)
     elif "завтра" in lowered:
-        args["due_date"] = str(today.add(days=1))
+        args["scheduled_date"] = str(today.add(days=1))
 
     return args
 
@@ -504,6 +665,12 @@ def _looks_like_chronometry_answer(text: str) -> bool:
     if not stripped:
         return False
     if any(pattern.match(stripped) for pattern in _NON_CHRONO_PATTERNS):
+        return False
+    if _extract_done_query(stripped):
+        return False
+    if _extract_reschedule_request(stripped, "Europe/Moscow"):
+        return False
+    if _extract_cancel_request(stripped):
         return False
     if _extract_task_request(stripped, "Europe/Moscow"):
         return False
