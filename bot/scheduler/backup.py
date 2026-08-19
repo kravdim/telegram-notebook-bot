@@ -4,10 +4,12 @@ import asyncio
 import hashlib
 import logging
 import os
+import shutil
 from datetime import datetime, timedelta
 from pathlib import Path
 
 import pendulum
+from sqlalchemy.engine import make_url
 
 from bot.config import settings
 
@@ -29,18 +31,24 @@ async def run_backup() -> None:
     filename = f"notebook_bot_{now.format('YYYY-MM-DD_HHmm')}.sql.gz"
     filepath = _BACKUP_DIR / filename
 
-    # Парсим DATABASE_URL для pg_dump
-    db_url = settings.database_url
     try:
-        parts = db_url.replace("postgresql+asyncpg://", "").split("@")
-        user_pass = parts[0]
-        host_db = parts[1]
-        user, password = user_pass.split(":", 1)
-        host_port, dbname = host_db.split("/", 1)
-        host = host_port.split(":")[0]
-        port = host_port.split(":")[1] if ":" in host_port else "5432"
-    except (IndexError, ValueError) as e:
+        db_url = make_url(settings.database_url)
+        user = db_url.username or ""
+        password = db_url.password or ""
+        host = db_url.host or "localhost"
+        port = str(db_url.port or 5432)
+        dbname = db_url.database or ""
+        if not user or not dbname:
+            raise ValueError("username or database is empty")
+    except (TypeError, ValueError) as e:
         logger.error("Не удалось распарсить DATABASE_URL: %s", e)
+        return
+
+    pg_dump_bin = _find_pg_dump()
+    if not pg_dump_bin:
+        logger.error(
+            "pg_dump не найден; установите PostgreSQL client или задайте PG_DUMP_BIN"
+        )
         return
 
     env = os.environ.copy()
@@ -48,7 +56,7 @@ async def run_backup() -> None:
 
     try:
         pg_dump = await asyncio.create_subprocess_exec(
-            "pg_dump", "-h", host, "-p", port, "-U", user, "-d", dbname,
+            pg_dump_bin, "-h", host, "-p", port, "-U", user, "-d", dbname,
             "--no-owner", "--no-acl",
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
@@ -99,6 +107,24 @@ async def run_backup() -> None:
 
     # Ротация
     _rotate_backups(retention_days)
+
+
+def _find_pg_dump() -> str | None:
+    """Найти pg_dump в PATH, явной настройке или keg-only Homebrew."""
+    configured = os.environ.get("PG_DUMP_BIN")
+    if configured and Path(configured).is_file():
+        return configured
+    in_path = shutil.which("pg_dump")
+    if in_path:
+        return in_path
+    homebrew_opt = Path("/opt/homebrew/opt")
+    if homebrew_opt.exists():
+        candidates = sorted(
+            homebrew_opt.glob("postgresql*/bin/pg_dump"), reverse=True
+        )
+        if candidates:
+            return str(candidates[0])
+    return None
 
 
 def _rotate_backups(retention_days: int) -> None:
