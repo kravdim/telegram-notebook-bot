@@ -1,6 +1,8 @@
 import pendulum
+import pytest
 
 from bot.db.crud.reminders import _calc_next_occurrence
+from bot.db.crud import reminders as reminder_crud
 from bot.llm.client import LLMClient
 
 
@@ -30,3 +32,31 @@ def test_llm_client_defaults_to_minimax_without_fallback():
     assert client.main_model == "MiniMax-M2.7"
     assert str(client.main_client.base_url) == "https://api.minimax.io/v1/"
     assert client.fallback_client is None
+
+
+@pytest.mark.asyncio
+async def test_mark_sent_is_idempotent_for_recurring_reminder(monkeypatch):
+    class Reminder:
+        id = "r1"
+        is_sent = True
+        repeat_rule = "daily"
+
+    class Result:
+        def scalar_one_or_none(self):
+            return Reminder()
+
+    class Session:
+        added = []
+
+        async def execute(self, _query):
+            return Result()
+
+        def add(self, value):
+            self.added.append(value)
+
+        async def commit(self):
+            raise AssertionError("already sent reminder must not be committed again")
+
+    session = Session()
+    await reminder_crud.mark_sent(session, "r1")
+    assert session.added == []

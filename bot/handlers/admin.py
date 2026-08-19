@@ -147,7 +147,7 @@ async def cmd_listusers(message: Message) -> None:
     lines = ["<b>Пользователи:</b>\n"]
     for u in users:
         role = "👑" if u.role == "admin" else "👤"
-        lines.append(f"{role} {u.username} ({u.telegram_id})")
+        lines.append(f"{role} {html_escape(u.username or '—')} ({u.telegram_id})")
 
     await message.answer("\n".join(lines), parse_mode="HTML")
 

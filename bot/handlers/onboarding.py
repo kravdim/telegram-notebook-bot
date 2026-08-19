@@ -47,7 +47,8 @@ async def cmd_start(message: Message, state: FSMContext) -> None:
     if user and user.onboarding_completed:
         await message.answer(
             f"С возвращением, {user.username}! Чем могу помочь?\n"
-            "Напиши задачу или используй /help для списка команд."
+            "Напиши задачу или используй /help для списка команд.",
+            parse_mode=None,
         )
         return
 
@@ -62,7 +63,7 @@ async def cmd_start(message: Message, state: FSMContext) -> None:
     first_name = message.from_user.first_name or "друг"
 
     kb = InlineKeyboardBuilder()
-    kb.button(text=f"Использовать \"{first_name}\"", callback_data=f"onb_name_use:{first_name}")
+    kb.button(text=f"Использовать \"{first_name[:30]}\"", callback_data="onb_name_use")
     kb.button(text="Ввести другое", callback_data="onb_name_custom")
     kb.adjust(1)
 
@@ -72,13 +73,15 @@ async def cmd_start(message: Message, state: FSMContext) -> None:
         "Как тебя зовут? Или подтверди имя из профиля:",
         reply_markup=kb.as_markup(),
     )
+    await state.update_data(suggested_name=first_name)
     await state.set_state(OnboardingStates.step_name)
 
 
-@router.callback_query(OnboardingStates.step_name, F.data.startswith("onb_name_use:"))
+@router.callback_query(OnboardingStates.step_name, F.data == "onb_name_use")
 async def onb_name_use(callback: CallbackQuery, state: FSMContext) -> None:
     """Пользователь подтвердил имя из профиля."""
-    name = callback.data.split(":", 1)[1]
+    data = await state.get_data()
+    name = str(data.get("suggested_name") or "друг")
     await _save_name_and_proceed(callback, state, name)
 
 
@@ -131,6 +134,7 @@ async def _send_timezone_step(message: Message, state: FSMContext, username: str
     await message.answer(
         f"Отлично, {username}! Настроим часовой пояс.\n"
         "Предполагаю Europe/Moscow — верно?",
+        parse_mode=None,
         reply_markup=kb.as_markup(),
     )
     await state.set_state(OnboardingStates.step_timezone)

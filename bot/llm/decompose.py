@@ -62,7 +62,15 @@ async def decompose_project(
         if not isinstance(tasks, list):
             return []
 
-        return [str(t).strip() for t in tasks if t]
+        cleaned = []
+        seen = set()
+        for item in tasks[:10]:
+            title = str(item).strip()[:500]
+            key = title.casefold()
+            if title and key not in seen:
+                cleaned.append(title)
+                seen.add(key)
+        return cleaned
 
     except Exception as e:
         logger.error("Ошибка декомпозиции: %s", e)
@@ -83,7 +91,7 @@ async def create_project_tasks(
     async with async_session() as session:
         try:
             project = await get_project_by_id(session, pid)
-            if not project:
+            if not project or project.user_id != user_id:
                 return 0
 
             for title in task_titles:
@@ -96,12 +104,6 @@ async def create_project_tasks(
                 session.add(task)
                 created += 1
 
-            await session.flush()
-
-            # Обновляем список задач проекта
-            from bot.db.crud.projects import get_project_tasks
-            tasks = await get_project_tasks(session, pid)
-            project.task_ids_ordered = [str(t.id) for t in tasks]
             await session.commit()
         except Exception:
             await session.rollback()

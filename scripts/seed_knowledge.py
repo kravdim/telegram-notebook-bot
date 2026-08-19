@@ -4,6 +4,7 @@ import asyncio
 import logging
 import sys
 import os
+import argparse
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -232,7 +233,7 @@ CHUNKS = [
 ]
 
 
-async def seed():
+async def seed(force: bool = False):
     """Загрузить базу знаний в БД."""
     # Инициализируем embedding-клиент
     try:
@@ -251,10 +252,8 @@ async def seed():
         from bot.db.models import KnowledgeChunk
         count = await session.scalar(select(func.count()).select_from(KnowledgeChunk))
         if count and count > 0:
-            print(f"База знаний уже содержит {count} чанков. Очистить и перезагрузить? (y/n)")
-            answer = input().strip().lower()
-            if answer != "y":
-                print("Отмена.")
+            if not force:
+                print(f"База знаний уже содержит {count} чанков. Пропуск.")
                 return
             from sqlalchemy import delete
             await session.execute(delete(KnowledgeChunk))
@@ -282,4 +281,7 @@ async def seed():
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
-    asyncio.run(seed())
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--force", action="store_true", help="очистить и загрузить заново")
+    args = parser.parse_args()
+    asyncio.run(seed(force=args.force))

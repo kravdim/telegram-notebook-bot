@@ -11,9 +11,10 @@ from aiogram.exceptions import TelegramBadRequest
 from aiogram.types import CallbackQuery
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
-from bot.db.crud.reminders import get_reminder_by_id, mark_sent, snooze_reminder
+from bot.db.crud.reminders import get_reminder_by_id, resolve_reminder, snooze_reminder
 from bot.db.crud.tasks import complete_task_by_id, delete_task, get_task_by_id
 from bot.db.crud.users import get_user
+from bot.db.crud.projects import complete_project_and_cancel_open_tasks
 from bot.db.engine import async_session
 
 logger = logging.getLogger(__name__)
@@ -67,9 +68,11 @@ async def cb_snooze_done(callback: CallbackQuery) -> None:
     result_text = "✅ Готово!"
     try:
         async with async_session() as session:
-            reminder = await get_reminder_by_id(session, uuid.UUID(reminder_id))
+            reminder = await get_reminder_by_id(
+                session, uuid.UUID(reminder_id), callback.from_user.id
+            )
             if reminder:
-                await mark_sent(session, reminder.id)
+                await resolve_reminder(session, reminder.id, callback.from_user.id)
                 if reminder.task_id:
                     task = await complete_task_by_id(session, reminder.task_id, callback.from_user.id)
                     if task:
@@ -100,7 +103,12 @@ async def _do_snooze(
 
     try:
         async with async_session() as session:
-            reminder = await snooze_reminder(session, uuid.UUID(reminder_id), new_time)
+            reminder = await snooze_reminder(
+                session,
+                uuid.UUID(reminder_id),
+                new_time,
+                callback.from_user.id,
+            )
 
         if not reminder:
             await callback.message.edit_text("Напоминание не найдено.", reply_markup=None)
@@ -111,6 +119,7 @@ async def _do_snooze(
                 f"⚠️ Это напоминание уже откладывалось {reminder.snooze_count} раз.\n"
                 f"Напоминание: {reminder.message}\n\n"
                 "Может, пора взяться за это дело?",
+                parse_mode=None,
                 reply_markup=None,
             )
             return
@@ -118,6 +127,7 @@ async def _do_snooze(
         time_str = new_time.strftime("%d.%m %H:%M") if hasattr(new_time, 'strftime') else str(new_time)
         await callback.message.edit_text(
             f"⏰ Напомню: {time_str}\n{reminder.message}",
+            parse_mode=None,
             reply_markup=None,
         )
     except TelegramBadRequest:
@@ -165,4 +175,40 @@ def build_delete_confirm_keyboard(task_id: str) -> InlineKeyboardBuilder:
     kb.button(text="🗑 Да, удалить", callback_data=f"task_delete_yes:{task_id}")
     kb.button(text="❌ Отмена", callback_data=f"task_delete_no:{task_id}")
     kb.adjust(2)
+    return kb
+
+
+@router.callback_query(F.data.startswith("project_complete_yes:"))
+async def cb_project_complete_yes(callback: CallbackQuery) -> None:
+    """Закрыть проект и отменить оставшиеся открытые бифштексы."""
+    project_id = callback.data.split(":", 1)[1]
+    await callback.answer()
+    async with async_session() as session:
+        project = await complete_project_and_cancel_open_tasks(
+            session, uuid.UUID(project_id), callback.from_user.id
+        )
+    text = (
+        f"🐘 Слон «{project.title}» закрыт; оставшиеся задачи отменены ✅"
+        if project else "Не удалось закрыть слона. Возможно, он уже закрыт."
+    )
+    await callback.message.edit_text(text, parse_mode=None, reply_markup=None)
+
+
+@router.callback_query(F.data.startswith("project_complete_no:"))
+async def cb_project_complete_no(callback: CallbackQuery) -> None:
+    await callback.answer()
+    await callback.message.edit_text(
+        "Закрытие слона отменено. Сначала заверши или перенеси оставшиеся задачи.",
+        reply_markup=None,
+    )
+
+
+def build_project_complete_keyboard(project_id: str) -> InlineKeyboardBuilder:
+    kb = InlineKeyboardBuilder()
+    kb.button(
+        text="✅ Закрыть и отменить задачи",
+        callback_data=f"project_complete_yes:{project_id}",
+    )
+    kb.button(text="Назад", callback_data=f"project_complete_no:{project_id}")
+    kb.adjust(1)
     return kb

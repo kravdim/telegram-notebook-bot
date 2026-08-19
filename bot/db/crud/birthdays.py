@@ -3,7 +3,7 @@
 from datetime import date, timedelta
 from typing import List, Optional
 
-from sqlalchemy import select, extract, and_
+from sqlalchemy import select, extract, and_, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from bot.db.models import Birthday
@@ -15,12 +15,29 @@ async def add_birthday(
     name: str,
     birth_date: date,
     note: Optional[str] = None,
+    year_known: bool = True,
 ) -> Birthday:
     """Добавить день рождения."""
+    result = await session.execute(
+        select(Birthday).where(
+            Birthday.user_id == user_id,
+            func.lower(Birthday.name) == name.casefold(),
+            Birthday.birth_date == birth_date,
+        )
+    )
+    existing = result.scalar_one_or_none()
+    if existing:
+        if note is not None:
+            existing.note = note
+        existing.year_known = year_known
+        await session.commit()
+        await session.refresh(existing)
+        return existing
     birthday = Birthday(
         user_id=user_id,
         name=name,
         birth_date=birth_date,
+        year_known=year_known,
         note=note,
     )
     session.add(birthday)

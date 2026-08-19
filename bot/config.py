@@ -35,6 +35,7 @@ class Settings(BaseSettings):
 
     # Telegram
     bot_token: str = ""
+    allow_all_users: bool = False
 
     # LLM
     gemini_api_key: str = ""
@@ -65,6 +66,41 @@ class Settings(BaseSettings):
     def yaml_config(self) -> dict[str, Any]:
         """Доступ к полному config.yaml."""
         return _yaml
+
+    @property
+    def access_control_configured(self) -> bool:
+        return bool(self.allowed_telegram_ids or self.admin_telegram_ids or self.allow_all_users)
+
+    def runtime_config_errors(self) -> list[str]:
+        """Критичные ошибки конфигурации, при которых запуск небезопасен."""
+        errors: list[str] = []
+        if not self.database_url.startswith("postgresql+asyncpg://"):
+            errors.append("DATABASE_URL must use postgresql+asyncpg://")
+        try:
+            import pendulum
+            pendulum.now(self.default_timezone)
+        except Exception:
+            errors.append(f"invalid default timezone: {self.default_timezone}")
+
+        main = self.yaml_config.get("llm", {}).get("main", {})
+        provider = main.get("provider", "minimax")
+        provider_keys = {
+            "gemini": self.gemini_api_key,
+            "minimax": self.minimax_api_key,
+            "zhipu": self.zhipu_api_key,
+            "openai": self.openai_api_key,
+        }
+        if provider not in provider_keys:
+            errors.append(f"unsupported LLM provider: {provider}")
+        elif not provider_keys[provider]:
+            errors.append(f"API key is missing for LLM provider: {provider}")
+        if not main.get("model"):
+            errors.append("LLM model is empty")
+
+        dimensions = self.yaml_config.get("embedding", {}).get("dimensions", 768)
+        if dimensions != 768:
+            errors.append("embedding dimensions must match Vector(768)")
+        return errors
 
 
 settings = Settings()

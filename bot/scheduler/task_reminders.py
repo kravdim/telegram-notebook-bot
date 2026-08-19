@@ -1,12 +1,15 @@
 """Периодическое напоминание актуальных задач в течение рабочего дня."""
 
 import logging
+from html import escape
 
 import pendulum
 from aiogram import Bot
 
 from bot.db.crud.tasks import get_completed_today, get_frog, get_today_tasks
-from bot.db.crud.users import get_all_users, update_user_settings
+from bot.db.crud.users import (
+    claim_task_reminder_slot, get_all_users, release_task_reminder_slot,
+)
 from bot.db.engine import async_session
 
 logger = logging.getLogger(__name__)
@@ -34,11 +37,9 @@ async def send_task_reminders(bot: Bot) -> None:
             if now.isoweekday() not in user.work_days:
                 continue
 
-            # Ищем подходящий слот: текущий час должен совпадать с одним из _REMINDER_HOURS
-            # и мы в 5-минутном окне от начала часа
+            # Весь текущий час относится к слоту: краткий простой приложения
+            # не должен навсегда терять периодическое напоминание.
             if current_hour not in _REMINDER_HOURS:
-                continue
-            if now.minute > 5:
                 continue
 
             # Идемпотентность: не отправляем дважды за один слот в пределах даты.
@@ -55,21 +56,27 @@ async def send_task_reminders(bot: Bot) -> None:
                 # Нет открытых задач — не беспокоим периодическим списком.
                 continue
 
+            async with async_session() as session:
+                claimed = await claim_task_reminder_slot(
+                    session, user.telegram_id, today, current_hour
+                )
+            if not claimed:
+                continue
+
             text = _format_task_reminder(tasks, completed, frog, today, current_hour)
 
-            await bot.send_message(
-                chat_id=user.telegram_id,
-                text=text,
-                parse_mode="HTML",
-            )
-
-            # Обновляем маркер
-            async with async_session() as session:
-                await update_user_settings(
-                    session, user.telegram_id,
-                    tasks_reminder_last_hour=current_hour,
-                    tasks_reminder_last_date=today,
+            try:
+                await bot.send_message(
+                    chat_id=user.telegram_id,
+                    text=text,
+                    parse_mode="HTML",
                 )
+            except Exception:
+                async with async_session() as session:
+                    await release_task_reminder_slot(
+                        session, user.telegram_id, today, current_hour
+                    )
+                raise
 
             logger.info(
                 "Напоминание задач (%d:00) отправлено: %s",
@@ -101,14 +108,14 @@ def _format_task_reminder(tasks, completed, frog, today, hour) -> str:
     if completed:
         lines.append(f"✅ Уже сделано: {len(completed)}")
         for t in completed[:3]:
-            lines.append(f"  ✓ <s>{t.title}</s>")
+            lines.append(f"  ✓ <s>{escape(t.title)}</s>")
         if len(completed) > 3:
             lines.append(f"  ... и ещё {len(completed) - 3}")
         lines.append("")
 
     # Лягушка
     if frog:
-        lines.append(f"🐸 Лягушка: <b>{frog.title}</b>")
+        lines.append(f"🐸 Лягушка: <b>{escape(frog.title)}</b>")
         lines.append("")
 
     # Открытые задачи
@@ -121,7 +128,7 @@ def _format_task_reminder(tasks, completed, frog, today, hour) -> str:
             plan_date = getattr(t, "scheduled_date", None) or t.due_date
             if plan_date and plan_date < today:
                 overdue = " ⚠️"
-            lines.append(f"{icon} {t.title}{time_str}{overdue}")
+            lines.append(f"{icon} {escape(t.title)}{time_str}{overdue}")
 
     if not tasks and completed:
         lines.append("🎉 Все задачи выполнены! Отличная работа!")

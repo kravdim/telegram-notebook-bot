@@ -7,10 +7,18 @@ Type=simple
 User=notebook
 Group=notebook
 WorkingDirectory=/opt/notebook-bot
+EnvironmentFile=/opt/notebook-bot/.env
+ExecStartPre=/opt/notebook-bot/.venv/bin/alembic upgrade head
+ExecStartPre=/opt/notebook-bot/.venv/bin/python /opt/notebook-bot/scripts/seed_knowledge.py
 ExecStart=/opt/notebook-bot/.venv/bin/python -m bot.main
 Restart=always
 RestartSec=10
 Environment=PYTHONPATH=/opt/notebook-bot
+Environment=BACKUP_DIR=/var/lib/notebook-bot/backups
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/opt/notebook-bot /var/lib/notebook-bot
 
 [Install]
 WantedBy=multi-user.target

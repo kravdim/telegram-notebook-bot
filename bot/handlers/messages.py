@@ -1,5 +1,7 @@
 """Обработчик свободного текста → LLM → function call."""
 
+import asyncio
+import hashlib
 import logging
 import re
 from typing import Optional
@@ -70,6 +72,7 @@ _FAKE_MUTATION_RE = re.compile(
 )
 
 _pending_project_completion: dict[int, bool] = {}
+_user_locks: dict[int, asyncio.Lock] = {}
 
 # Глобальные экземпляры — инициализируются в main.py
 llm_client: Optional[LLMClient] = None
@@ -103,6 +106,8 @@ async def _consume_pending_interaction(user_id: int) -> Optional[str]:
             state = await get_state(session, user_id)
             if not state:
                 return fallback
+            if state.state_type != "complete_project":
+                return fallback
             state_type = state.state_type
             await clear_state(session, user_id)
             return state_type
@@ -111,7 +116,106 @@ async def _consume_pending_interaction(user_id: int) -> Optional[str]:
         return fallback
 
 
+async def _get_persisted_interaction(user_id: int, state_type: str):
+    """Получить состояние нужного типа без удаления."""
+    try:
+        from bot.db.crud.interaction_states import get_state
+        async with async_session() as session:
+            state = await get_state(session, user_id)
+            if state and state.state_type == state_type:
+                return state
+    except Exception as e:
+        logger.debug("Не удалось прочитать persisted state %s: %s", state_type, e)
+    return None
+
+
+async def _clear_persisted_interaction(user_id: int, state_type: str) -> None:
+    try:
+        from bot.db.crud.interaction_states import clear_state, get_state
+        async with async_session() as session:
+            state = await get_state(session, user_id)
+            if state and state.state_type == state_type:
+                await clear_state(session, user_id)
+    except Exception as e:
+        logger.debug("Не удалось очистить persisted state %s: %s", state_type, e)
+
+
 async def process_text_message(user_id: int, text: str, message: Message) -> None:
+    """Сериализовать полный pipeline сообщений одного пользователя."""
+    lock = _user_locks.setdefault(user_id, asyncio.Lock())
+    async with lock:
+        request_key = _request_key(user_id, text, message)
+        claimed = await _claim_request(request_key, user_id)
+        if claimed is False:
+            await message.answer("Это сообщение уже обработано.")
+            return
+        try:
+            await _process_text_message_unlocked(user_id, text, message)
+            await _finish_request(request_key, "completed")
+        except Exception:
+            await _finish_request(request_key, "failed")
+            raise
+
+
+def _request_key(user_id: int, text: str, message: Message) -> str:
+    chat_id = getattr(getattr(message, "chat", None), "id", user_id)
+    message_id = getattr(message, "message_id", None)
+    raw = f"{user_id}:{chat_id}:{message_id}:{text}"
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+async def _claim_request(request_key: str, user_id: int) -> Optional[bool]:
+    """True — новый запрос, False — дубль, None — DB недоступна."""
+    try:
+        from sqlalchemy import select
+        from bot.db.models import ProcessedRequest
+        async with async_session() as session:
+            result = await session.execute(
+                select(ProcessedRequest).where(ProcessedRequest.request_key == request_key)
+            )
+            existing = result.scalar_one_or_none()
+            if existing:
+                import pendulum
+                is_stale = (
+                    existing.status == "processing"
+                    and existing.created_at
+                    and pendulum.instance(existing.created_at)
+                    < pendulum.now("UTC").subtract(minutes=5)
+                )
+                if existing.status == "failed" or is_stale:
+                    existing.status = "processing"
+                    existing.completed_at = None
+                    existing.created_at = pendulum.now("UTC")
+                    await session.commit()
+                    return True
+                return False
+            session.add(ProcessedRequest(request_key=request_key, user_id=user_id))
+            await session.commit()
+            return True
+    except Exception as e:
+        logger.debug("Не удалось зарезервировать request_id: %s", e)
+        return None
+
+
+async def _finish_request(request_key: str, status: str) -> None:
+    try:
+        import pendulum
+        from sqlalchemy import select
+        from bot.db.models import ProcessedRequest
+        async with async_session() as session:
+            result = await session.execute(
+                select(ProcessedRequest).where(ProcessedRequest.request_key == request_key)
+            )
+            row = result.scalar_one_or_none()
+            if row:
+                row.status = status
+                row.completed_at = pendulum.now("UTC")
+                await session.commit()
+    except Exception as e:
+        logger.debug("Не удалось завершить request_id: %s", e)
+
+
+async def _process_text_message_unlocked(user_id: int, text: str, message: Message) -> None:
     """Обработка текста: LLM → function call / ответ.
 
     Вызывается из handle_text и из voice confirm callback.
@@ -128,8 +232,12 @@ async def process_text_message(user_id: int, text: str, message: Message) -> Non
         user = await get_user(session, user_id)
     user_tz = user.timezone if user else "Europe/Moscow"
 
-    from bot.handlers.voice import consume_voice_edit
-    consume_voice_edit(user_id)
+    from bot.handlers.voice import consume_voice_edit, _load_voice_state, _clear_voice_state
+    voice_edit = consume_voice_edit(user_id)
+    if not voice_edit:
+        voice_edit = bool(await _load_voice_state(user_id, "voice_edit"))
+    if voice_edit:
+        await _clear_voice_state(user_id)
 
     done_query = _extract_done_query(text)
     if done_query:
@@ -142,7 +250,7 @@ async def process_text_message(user_id: int, text: str, message: Message) -> Non
         add_message(user_id, "user", text)
         add_message(user_id, "assistant", result)
         for part in split_message(result):
-            await message.answer(part)
+            await message.answer(part, parse_mode=None)
         return
 
     reschedule_args = _extract_reschedule_request(text, user_tz)
@@ -156,7 +264,7 @@ async def process_text_message(user_id: int, text: str, message: Message) -> Non
         add_message(user_id, "user", text)
         add_message(user_id, "assistant", result)
         for part in split_message(result):
-            await message.answer(part)
+            await message.answer(part, parse_mode=None)
         return
 
     cancel_args = _extract_cancel_request(text)
@@ -170,7 +278,7 @@ async def process_text_message(user_id: int, text: str, message: Message) -> Non
         add_message(user_id, "user", text)
         add_message(user_id, "assistant", result)
         for part in split_message(result):
-            await message.answer(part)
+            await message.answer(part, parse_mode=None)
         return
 
     pending_state = await _consume_pending_interaction(user_id)
@@ -184,7 +292,7 @@ async def process_text_message(user_id: int, text: str, message: Message) -> Non
         add_message(user_id, "user", text)
         add_message(user_id, "assistant", result)
         for part in split_message(result):
-            await message.answer(part)
+            await message.answer(part, parse_mode=None)
         return
 
     if _PROJECT_DONE_RE.match(text):
@@ -203,13 +311,16 @@ async def process_text_message(user_id: int, text: str, message: Message) -> Non
         add_message(user_id, "user", text)
         add_message(user_id, "assistant", result)
         for part in split_message(result):
-            await message.answer(part)
+            await message.answer(part, parse_mode=None)
         return
 
     # Проверяем, ожидается ли ответ на мемуарник
     from bot.scheduler.memoir import is_awaiting_memoir, clear_awaiting_memoir, get_memoir_message_id
-    if is_awaiting_memoir(user_id):
+    persisted_memoir = await _get_persisted_interaction(user_id, "memoir")
+    if is_awaiting_memoir(user_id) or persisted_memoir:
         memoir_msg_id = get_memoir_message_id(user_id)
+        if not memoir_msg_id and persisted_memoir:
+            memoir_msg_id = persisted_memoir.payload.get("message_id")
         reply_to = message.reply_to_message
 
         # Reply на другое сообщение → не мемуарник
@@ -219,6 +330,7 @@ async def process_text_message(user_id: int, text: str, message: Message) -> Non
 
         if is_memoir_reply:
             clear_awaiting_memoir(user_id)
+            await _clear_persisted_interaction(user_id, "memoir")
             await message.bot.send_chat_action(chat_id=message.chat.id, action="typing")
 
             await _save_memoir_answer(user_id, text, user_tz)
@@ -227,12 +339,15 @@ async def process_text_message(user_id: int, text: str, message: Message) -> Non
 
     # Проверяем, ожидается ли ответ на хронометраж
     from bot.scheduler.chronometry import is_awaiting_response, clear_awaiting, get_chrono_message_id
-    if is_awaiting_response(user_id):
+    persisted_chrono = await _get_persisted_interaction(user_id, "chronometry")
+    if is_awaiting_response(user_id) or persisted_chrono:
         # Определяем, куда направлять сообщение:
         # - Reply на хронометражный вопрос → хронометраж
         # - Reply на другое сообщение → обычная обработка (LLM)
         # - Без reply → хронометраж (обратная совместимость)
         chrono_msg_id = get_chrono_message_id(user_id)
+        if not chrono_msg_id and persisted_chrono:
+            chrono_msg_id = persisted_chrono.payload.get("message_id")
         reply_to = message.reply_to_message
 
         is_chrono_reply = True
@@ -242,6 +357,7 @@ async def process_text_message(user_id: int, text: str, message: Message) -> Non
 
         if is_chrono_reply and _looks_like_chronometry_answer(text):
             clear_awaiting(user_id)
+            await _clear_persisted_interaction(user_id, "chronometry")
             await message.bot.send_chat_action(chat_id=message.chat.id, action="typing")
 
             from bot.handlers.chronometry import process_chronometry_response
@@ -299,6 +415,7 @@ async def process_text_message(user_id: int, text: str, message: Message) -> Non
             input_messages=messages,
             output_content=response.content,
             function_call=response.function_call,
+            function_calls=response.function_calls,
             total_tokens=response.total_tokens,
             latency_ms=response.latency_ms,
         )
@@ -319,6 +436,20 @@ async def process_text_message(user_id: int, text: str, message: Message) -> Non
                 kb = build_delete_confirm_keyboard(task_id)
                 await message.answer(
                     f"Нашёл задачу «{task_title}». Удалить?",
+                    parse_mode=None,
+                    reply_markup=kb.as_markup(),
+                )
+                continue
+
+            if result.startswith("CONFIRM_PROJECT_COMPLETE:"):
+                parts = result.split(":", 3)
+                project_id, project_title, open_count = parts[1:]
+                from bot.handlers.callbacks import build_project_complete_keyboard
+                kb = build_project_complete_keyboard(project_id)
+                await message.answer(
+                    f"У слона «{project_title}» осталось открытых задач: {open_count}. "
+                    "Закрыть слона и отменить эти задачи?",
+                    parse_mode=None,
                     reply_markup=kb.as_markup(),
                 )
                 continue
@@ -330,21 +461,36 @@ async def process_text_message(user_id: int, text: str, message: Message) -> Non
                 project_title = parts[2]
                 await message.answer(
                     f"🐘 Слон «{project_title}» создан!\n"
-                    "Сейчас нарезаю на бифштексы..."
+                    "Сейчас нарезаю на бифштексы...",
+                    parse_mode=None,
                 )
                 await message.bot.send_chat_action(chat_id=message.chat.id, action="typing")
 
                 from bot.llm.decompose import decompose_project, create_project_tasks
+                from bot.db.crud.projects import get_project_by_id
+                import uuid
+                async with async_session() as session:
+                    project = await get_project_by_id(session, uuid.UUID(project_id))
+                project_description = project.description if project else ""
+                project_category = project.category if project else "work"
                 task_titles = await decompose_project(
-                    llm_client, llm_queue, user_id, project_id, project_title,
+                    llm_client,
+                    llm_queue,
+                    user_id,
+                    project_id,
+                    project_title,
+                    project_description,
                 )
                 if task_titles:
-                    created = await create_project_tasks(user_id, project_id, task_titles)
+                    created = await create_project_tasks(
+                        user_id, project_id, task_titles, project_category
+                    )
                     tasks_list = "\n".join(f"  • {t}" for t in task_titles)
                     all_results.append(f"Слон создан, нарезан на {created} бифштексов")
                     await message.answer(
                         f"🔪 Нарезано {created} бифштексов:\n{tasks_list}\n\n"
-                        "Смотри /projects для прогресса."
+                        "Смотри /projects для прогресса.",
+                        parse_mode=None,
                     )
                 else:
                     all_results.append("Слон создан")
@@ -361,7 +507,7 @@ async def process_text_message(user_id: int, text: str, message: Message) -> Non
             combined = "\n\n".join(all_results)
             add_message(user_id, "assistant", combined)
             for part in split_message(combined):
-                await message.answer(part)
+                await message.answer(part, parse_mode=None)
 
     elif response.content:
         # Ограничиваем длину свободного ответа (защита от prompt injection)
@@ -379,7 +525,7 @@ async def process_text_message(user_id: int, text: str, message: Message) -> Non
         if len(content) > 1000:
             content = content[:1000] + "..."
         add_message(user_id, "assistant", content)
-        await message.answer(content)
+        await message.answer(content, parse_mode=None)
     else:
         await message.answer("Не удалось обработать сообщение. Попробуй переформулировать.")
 
@@ -412,10 +558,12 @@ async def _save_memoir_answer(user_id: int, text: str, tz: str) -> None:
             session, user_id=user_id,
             event_date=today, content=text,
             value_tag=value_tag, period_type="day",
+            commit=False,
         )
-
-    async with async_session() as session:
-        await create_diary_entry(session, user_id, content=text, tz=tz)
+        await create_diary_entry(
+            session, user_id, content=text, entry_date=today, tz=tz, commit=False
+        )
+        await session.commit()
 
     logger.info("Мемуарник сохранён: user=%s, date=%s, value=%s", user_id, today, value_tag)
 
@@ -481,16 +629,7 @@ def _extract_done_query(text: str) -> Optional[str]:
 
 
 def _normalize_done_query(title: str, text: str) -> str:
-    """Нормализовать разговорную форму выполненной задачи в поисковый запрос."""
-    lowered = text.lower()
-    if "фокус" in lowered and any(word in lowered for word in ("заплат", "оплат")):
-        return "Заплатить деньги Фокусу"
-    if "зарплат" in lowered and "выплат" in lowered:
-        return "Выплатить зарплаты"
-    if "мувикс" in lowered and "мам" in lowered and "настро" in lowered:
-        return "Настроить маме Мувикс"
-    if "кладбищ" in lowered and "дед" in lowered:
-        return "Съездить на Кладбище к Деду"
+    """Вернуть извлечённое название без персональных подстановок."""
     return title
 
 
@@ -511,11 +650,6 @@ def _extract_cancel_request(text: str) -> Optional[dict]:
 
 
 def _normalize_cancel_query(title: str, text: str) -> str:
-    lowered = text.lower()
-    if "смесител" in lowered:
-        return "Купить смеситель"
-    if "перфоратор" in lowered and "офис" in lowered:
-        return "Взять перфоратор из офиса"
     return re.sub(r"\b(тоже|пока|что|брать|это)\b", "", title, flags=re.IGNORECASE).strip()
 
 

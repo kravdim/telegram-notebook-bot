@@ -2,12 +2,15 @@
 
 import logging
 import tempfile
+from html import escape
 from pathlib import Path
 from typing import Optional
 
 from aiogram import F, Router
 from aiogram.types import CallbackQuery, Message
 from aiogram.utils.keyboard import InlineKeyboardBuilder
+
+from bot.db.engine import async_session
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +37,36 @@ def consume_voice_edit(user_id: int) -> bool:
     _awaiting_edit.discard(user_id)
     _pending_transcripts.pop(user_id, None)
     return True
+
+
+async def _persist_voice_state(user_id: int, state_type: str, payload: dict) -> None:
+    try:
+        from bot.db.crud.interaction_states import set_state
+        async with async_session() as session:
+            await set_state(session, user_id, state_type, payload=payload, ttl_minutes=30)
+    except Exception as e:
+        logger.debug("Не удалось сохранить voice state: %s", e)
+
+
+async def _load_voice_state(user_id: int, state_type: str):
+    try:
+        from bot.db.crud.interaction_states import get_state
+        async with async_session() as session:
+            state = await get_state(session, user_id)
+            if state and state.state_type == state_type:
+                return state
+    except Exception as e:
+        logger.debug("Не удалось прочитать voice state: %s", e)
+    return None
+
+
+async def _clear_voice_state(user_id: int) -> None:
+    try:
+        from bot.db.crud.interaction_states import clear_state
+        async with async_session() as session:
+            await clear_state(session, user_id)
+    except Exception as e:
+        logger.debug("Не удалось очистить voice state: %s", e)
 
 
 @router.message(F.voice)
@@ -78,6 +111,11 @@ async def handle_voice(message: Message) -> None:
 
     # Сохраняем и показываем для подтверждения
     _pending_transcripts[message.from_user.id] = text
+    await _persist_voice_state(
+        message.from_user.id,
+        "voice_confirm",
+        {"transcript": text},
+    )
 
     kb = InlineKeyboardBuilder()
     kb.button(text="✅ Да, верно", callback_data="voice_confirm")
@@ -86,7 +124,7 @@ async def handle_voice(message: Message) -> None:
     kb.adjust(2, 1)
 
     await message.answer(
-        f"🎤 Распознано:\n\n<i>{text}</i>\n\nВсё верно?",
+        f"🎤 Распознано:\n\n<i>{escape(text)}</i>\n\nВсё верно?",
         parse_mode="HTML",
         reply_markup=kb.as_markup(),
     )
@@ -98,12 +136,18 @@ async def cb_voice_confirm(callback: CallbackQuery) -> None:
     await callback.answer()
     user_id = callback.from_user.id
     text = _pending_transcripts.pop(user_id, None)
+    if not text:
+        state = await _load_voice_state(user_id, "voice_confirm")
+        if state:
+            text = state.payload.get("transcript")
 
     if not text:
         await callback.message.edit_text("Сессия истекла. Отправь голосовое ещё раз.")
         return
 
-    await callback.message.edit_text(f"🎤 {text}")
+    await _clear_voice_state(user_id)
+
+    await callback.message.edit_text(f"🎤 {text}", parse_mode=None)
 
     # Обрабатываем распознанный текст через LLM
     from bot.handlers.messages import process_text_message
@@ -119,6 +163,7 @@ async def cb_voice_edit(callback: CallbackQuery) -> None:
         reply_markup=None,
     )
     _awaiting_edit.add(callback.from_user.id)
+    await _persist_voice_state(callback.from_user.id, "voice_edit", {})
 
 
 @router.callback_query(F.data == "voice_cancel")
@@ -127,4 +172,5 @@ async def cb_voice_cancel(callback: CallbackQuery) -> None:
     await callback.answer()
     _pending_transcripts.pop(callback.from_user.id, None)
     _awaiting_edit.discard(callback.from_user.id)
+    await _clear_voice_state(callback.from_user.id)
     await callback.message.edit_text("❌ Голосовое отменено.", reply_markup=None)

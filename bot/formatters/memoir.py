@@ -34,7 +34,7 @@ def format_memoir_entries(entries: List[MemoirEntry]) -> str:
     parts = ["📔 <b>Мемуарник</b> (последние записи):\n"]
     for entry in entries:
         emoji = _VALUE_EMOJI.get(entry.value_tag, "🔹") if entry.value_tag else "🔹"
-        tag = f" [{entry.value_tag}]" if entry.value_tag else ""
+        tag = f" [{escape(entry.value_tag)}]" if entry.value_tag else ""
         content = _format_multiline_text(entry.content)
         parts.append(
             f"📅 {entry.event_date.strftime('%d.%m')} {emoji}{tag}\n"
@@ -55,7 +55,7 @@ def format_value_stats(stats: List[dict]) -> str:
         emoji = _VALUE_EMOJI.get(s["value"], "🔹")
         pct = int(s["count"] / total * 100)
         bar = "█" * max(1, pct // 5)
-        parts.append(f"{emoji} {s['value']}: {bar} {pct}% ({s['count']})")
+        parts.append(f"{emoji} {escape(str(s['value']))}: {bar} {pct}% ({s['count']})")
 
     return "\n".join(parts)
 
@@ -80,7 +80,7 @@ def format_weekly_review(entries: List[MemoirEntry]) -> str:
         parts.append("\n<b>Ценности недели:</b>")
         for v, cnt in sorted(values.items(), key=lambda x: -x[1]):
             emoji = _VALUE_EMOJI.get(v, "🔹")
-            parts.append(f"  {emoji} {v}: {cnt}")
+            parts.append(f"  {emoji} {escape(str(v))}: {cnt}")
 
     return "\n".join(parts)
 

@@ -11,15 +11,16 @@ from tests.fakes import FakeCallback, FakeSessionContext
 async def test_snooze_done_marks_reminder_and_task(monkeypatch):
     reminder_id = uuid4()
     task_id = uuid4()
-    marked = []
+    resolved = []
     completed = []
 
-    async def fake_get_reminder(session, rid):
+    async def fake_get_reminder(session, rid, user_id):
         assert rid == reminder_id
+        assert user_id == 42
         return SimpleNamespace(id=reminder_id, task_id=task_id)
 
-    async def fake_mark_sent(session, rid):
-        marked.append(rid)
+    async def fake_resolve(session, rid, user_id):
+        resolved.append((rid, user_id))
 
     async def fake_complete_task(session, tid, user_id):
         completed.append((tid, user_id))
@@ -27,14 +28,14 @@ async def test_snooze_done_marks_reminder_and_task(monkeypatch):
 
     monkeypatch.setattr(callbacks, "async_session", lambda: FakeSessionContext())
     monkeypatch.setattr(callbacks, "get_reminder_by_id", fake_get_reminder)
-    monkeypatch.setattr(callbacks, "mark_sent", fake_mark_sent)
+    monkeypatch.setattr(callbacks, "resolve_reminder", fake_resolve)
     monkeypatch.setattr(callbacks, "complete_task_by_id", fake_complete_task)
 
     callback = FakeCallback(user_id=42)
     callback.data = f"snooze_done:{reminder_id}"
     await callbacks.cb_snooze_done(callback)
 
-    assert marked == [reminder_id]
+    assert resolved == [(reminder_id, 42)]
     assert completed == [(task_id, 42)]
     assert callback.message.edits[0][0] == "✅ Задача «Подключить кассу» выполнена!"
 
@@ -43,8 +44,9 @@ async def test_snooze_done_marks_reminder_and_task(monkeypatch):
 async def test_snooze_limit_message(monkeypatch):
     reminder_id = uuid4()
 
-    async def fake_snooze(session, rid, new_time):
+    async def fake_snooze(session, rid, new_time, user_id):
         assert rid == reminder_id
+        assert user_id == 42
         return SimpleNamespace(snooze_count=5, message="Позвонить")
 
     monkeypatch.setattr(callbacks, "async_session", lambda: FakeSessionContext())
@@ -76,3 +78,23 @@ async def test_delete_confirm_yes(monkeypatch):
 
     assert deleted == [(task_id, 42)]
     assert callback.message.edits[0][0] == "🗑 Задача удалена."
+
+
+@pytest.mark.asyncio
+async def test_project_completion_is_scoped_to_callback_user(monkeypatch):
+    project_id = uuid4()
+    calls = []
+
+    async def fake_complete(session, pid, user_id):
+        calls.append((pid, user_id))
+        return SimpleNamespace(title="Запуск продукта")
+
+    monkeypatch.setattr(callbacks, "async_session", lambda: FakeSessionContext())
+    monkeypatch.setattr(callbacks, "complete_project_and_cancel_open_tasks", fake_complete)
+
+    callback = FakeCallback(user_id=42)
+    callback.data = f"project_complete_yes:{project_id}"
+    await callbacks.cb_project_complete_yes(callback)
+
+    assert calls == [(project_id, 42)]
+    assert "оставшиеся задачи отменены" in callback.message.edits[0][0]

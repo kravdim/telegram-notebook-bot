@@ -12,6 +12,7 @@ _CATEGORY_EMOJI = {
     "rest": "☕",
     "waste": "🕳",
     "focus": "🎯",
+    "unknown": "❔",
 }
 
 _CATEGORY_RU = {
@@ -20,6 +21,7 @@ _CATEGORY_RU = {
     "rest": "Отдых",
     "waste": "Потери",
     "focus": "Фокус",
+    "unknown": "Не разобрано",
 }
 
 
@@ -35,7 +37,7 @@ def format_day_photo(stats: dict) -> str:
 
     parts = [f"⏱ <b>Фотография дня</b> ({count} записей)\n"]
 
-    for cat in ("work", "focus", "personal", "rest", "waste"):
+    for cat in ("work", "focus", "personal", "rest", "waste", "unknown"):
         minutes = cats.get(cat, 0)
         if minutes > 0:
             emoji = _CATEGORY_EMOJI.get(cat, "")
@@ -80,7 +82,7 @@ def format_week_summary(stats: dict) -> str:
     total = sum(cats.values())
     parts = [f"⏱ <b>Неделя</b> ({count} записей)\n"]
 
-    for cat in ("work", "focus", "personal", "rest", "waste"):
+    for cat in ("work", "focus", "personal", "rest", "waste", "unknown"):
         minutes = cats.get(cat, 0)
         if minutes > 0:
             emoji = _CATEGORY_EMOJI.get(cat, "")

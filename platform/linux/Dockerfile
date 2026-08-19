@@ -13,8 +13,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # Application code
 COPY . .
+RUN chmod +x /app/platform/linux/docker-entrypoint.sh
 
 ENV PYTHONPATH=/app
 ENV PYTHONUNBUFFERED=1
 
-CMD ["python", "-m", "bot.main"]
+ENTRYPOINT ["/app/platform/linux/docker-entrypoint.sh"]

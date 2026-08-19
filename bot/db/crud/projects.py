@@ -83,6 +83,26 @@ async def complete_project(
     return project
 
 
+async def complete_project_and_cancel_open_tasks(
+    session: AsyncSession,
+    project_id: uuid.UUID,
+    user_id: int,
+) -> Optional[Project]:
+    """Закрыть проект и атомарно отменить его незавершённые задачи."""
+    project = await get_project_by_id(session, project_id)
+    if not project or project.user_id != user_id or project.status != "active":
+        return None
+    tasks = await get_project_tasks(session, project_id)
+    for task in tasks:
+        if task.status == "open":
+            task.status = "cancelled"
+            task.resolution = "cancelled"
+    project.status = "done"
+    await session.commit()
+    await session.refresh(project)
+    return project
+
+
 async def get_project_tasks(
     session: AsyncSession,
     project_id: uuid.UUID,

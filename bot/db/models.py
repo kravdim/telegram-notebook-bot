@@ -39,7 +39,6 @@ class User(Base):
     digest_evening_time: Mapped[time] = mapped_column(Time, nullable=False, default=time(21, 0))
     memoir_prompt_time: Mapped[time] = mapped_column(Time, nullable=False, default=time(20, 45))
     digest_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
-    frog_prompt_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     chronometry_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     chronometry_interval_min: Mapped[int] = mapped_column(Integer, nullable=False, default=60)
     work_start_time: Mapped[time] = mapped_column(Time, nullable=False, default=time(9, 0))
@@ -53,6 +52,7 @@ class User(Base):
     chronometry_last_asked: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
     tasks_reminder_last_hour: Mapped[Optional[int]] = mapped_column(Integer)
     tasks_reminder_last_date: Mapped[Optional[date]] = mapped_column(Date)
+    weekly_review_sent_date: Mapped[Optional[date]] = mapped_column(Date)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default="now()"
     )
@@ -75,7 +75,6 @@ class Project(Base):
     description: Mapped[Optional[str]] = mapped_column(Text)
     category: Mapped[str] = mapped_column(Text, nullable=False, default="work")
     status: Mapped[str] = mapped_column(Text, nullable=False, default="active")
-    task_ids_ordered: Mapped[List] = mapped_column(JSONB, default=list)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default="now()"
     )
@@ -181,6 +180,42 @@ class InteractionState(Base):
     )
 
 
+class FsmState(Base):
+    """Персистентное состояние aiogram FSM."""
+
+    __tablename__ = "fsm_states"
+
+    storage_key: Mapped[str] = mapped_column(Text, primary_key=True)
+    state: Mapped[Optional[str]] = mapped_column(Text)
+    data: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default="now()"
+    )
+
+
+class ProcessedRequest(Base):
+    """Идемпотентность входящих Telegram-сообщений."""
+
+    __tablename__ = "processed_requests"
+
+    request_key: Mapped[str] = mapped_column(Text, primary_key=True)
+    user_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("users.telegram_id", ondelete="CASCADE"), nullable=False
+    )
+    status: Mapped[str] = mapped_column(Text, nullable=False, default="processing")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default="now()"
+    )
+    completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('processing', 'completed', 'failed')",
+            name="ck_processed_requests_status",
+        ),
+    )
+
+
 class MemoirEntry(Base):
     __tablename__ = "memoir_entries"
 
@@ -238,7 +273,7 @@ class TimeTrackingEntry(Base):
 
     __table_args__ = (
         CheckConstraint(
-            "category IN ('work', 'personal', 'rest', 'waste', 'focus')",
+            "category IN ('work', 'personal', 'rest', 'waste', 'focus', 'unknown')",
             name="ck_time_tracking_category",
         ),
         CheckConstraint(
@@ -288,7 +323,6 @@ class DiaryEntry(Base):
     )
     content: Mapped[str] = mapped_column(Text, nullable=False)
     entry_date: Mapped[date] = mapped_column(Date, nullable=False)
-    summary: Mapped[Optional[str]] = mapped_column(Text)
     embedding = mapped_column(Vector(768))
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default="now()"
@@ -319,12 +353,24 @@ class Reminder(Base):
     remind_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     repeat_rule: Mapped[Optional[str]] = mapped_column(Text)
     is_sent: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    status: Mapped[str] = mapped_column(Text, nullable=False, default="pending")
+    series_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), nullable=False, default=uuid.uuid4
+    )
+    occurrence_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     snooze_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    delivery_attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    last_error: Mapped[Optional[str]] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default="now()"
     )
 
     __table_args__ = (
+        CheckConstraint(
+            "status IN ('pending', 'delivered', 'snoozed', 'resolved', 'cancelled')",
+            name="ck_reminders_status",
+        ),
+        UniqueConstraint("series_id", "occurrence_at", name="uq_reminder_series_occurrence"),
         Index("idx_reminders_pending", "remind_at", postgresql_where="is_sent = FALSE"),
     )
 
@@ -341,6 +387,7 @@ class Birthday(Base):
     )
     name: Mapped[str] = mapped_column(Text, nullable=False)
     birth_date: Mapped[date] = mapped_column(Date, nullable=False)
+    year_known: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     note: Mapped[Optional[str]] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default="now()"
@@ -373,25 +420,6 @@ class KnowledgeChunk(Base):
             postgresql_ops={"content": "gin_trgm_ops"},
         ),
     )
-
-
-class LlmQueueItem(Base):
-    __tablename__ = "llm_queue"
-
-    id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
-    )
-    user_id: Mapped[int] = mapped_column(
-        BigInteger, ForeignKey("users.telegram_id", ondelete="CASCADE"), nullable=False
-    )
-    raw_message: Mapped[str] = mapped_column(Text, nullable=False)
-    voice_transcript: Mapped[Optional[str]] = mapped_column(Text)
-    priority: Mapped[int] = mapped_column(Integer, nullable=False, default=5)
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False, server_default="now()"
-    )
-    processed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
-    error: Mapped[Optional[str]] = mapped_column(Text)
 
 
 class PromptVersion(Base):

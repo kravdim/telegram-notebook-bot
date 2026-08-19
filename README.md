@@ -32,7 +32,10 @@
 - **Rate limiting** — анти-флуд middleware: макс. 20 сообщений/минуту на пользователя
 - **Prompt injection protection** — жёсткие границы роли, игнорирование попыток смены поведения, лимит длины ответов
 - **Валидация LLM-вывода** — json_repair + проверка допустимых полей и значений в dispatcher
-- **user_id** проверяется во всех CRUD-операциях
+- **user_id** проверяется во всех пользовательских мутациях по UUID
+- **Fail-closed доступ** — production-запуск прекращается при пустом whitelist;
+  `ALLOW_ALL_USERS=true` допускается только как явный режим разработки
+- **Приватные LLM-логи** — тексты запросов и ответов по умолчанию не сохраняются
 - **SQL injection** — параметризованные запросы SQLAlchemy
 - **API-ключи** — .env + Pydantic Settings, вне репозитория
 
@@ -55,7 +58,7 @@
 ### Требования
 
 - Python 3.12+
-- PostgreSQL 15+ с расширениями `pgvector`, `pg_trgm`, `uuid-ossp`
+- PostgreSQL 15+ с расширениями `pgvector`, `pg_trgm`, `pgcrypto`
 - API-ключи: Telegram Bot Token, MiniMax
 
 ### Установка
@@ -78,7 +81,7 @@ cp config.yaml.example config.yaml
 
 # База данных
 createdb notebook_bot
-psql -d notebook_bot -c "CREATE EXTENSION IF NOT EXISTS vector; CREATE EXTENSION IF NOT EXISTS pg_trgm; CREATE EXTENSION IF NOT EXISTS \"uuid-ossp\";"
+psql -d notebook_bot -c "CREATE EXTENSION IF NOT EXISTS vector; CREATE EXTENSION IF NOT EXISTS pg_trgm; CREATE EXTENSION IF NOT EXISTS pgcrypto;"
 
 # Миграции
 PYTHONPATH=. alembic upgrade head
@@ -103,14 +106,14 @@ chmod +x platform/macos/install.sh
 
 ```bash
 cd platform/linux
-docker-compose up -d
+POSTGRES_PASSWORD='replace-with-a-long-random-password' docker compose up -d
 ```
 
 Или через systemd:
 
 ```bash
 chmod +x platform/linux/install.sh
-sudo ./platform/linux/install.sh
+NOTEBOOK_DB_PASSWORD='replace-with-a-long-random-password' sudo -E ./platform/linux/install.sh
 ```
 
 ## Структура проекта
@@ -190,7 +193,10 @@ scripts/
 
 ## Модель данных
 
-14 таблиц: `users`, `tasks`, `projects`, `trips`, `memoir_entries`, `time_tracking_entries`, `notes`, `diary_entries`, `reminders`, `knowledge_base`, `birthdays`, `llm_queue`, `prompt_versions`, `llm_logs`.
+16 таблиц, включая доменные данные, `interaction_states`, DB-backed FSM,
+`processed_requests`, версии промптов и обезличенные LLM-логи. Неиспользуемая
+таблица `llm_queue` удалена; runtime-очередь живёт в процессе, а входящие
+Telegram-сообщения дедуплицируются в PostgreSQL.
 
 Подробная схема — в [CLAUDE.md](CLAUDE.md).
 
@@ -222,8 +228,14 @@ scripts/
 - **LLM** — основной провайдер MiniMax M2.7, fallback опционален через config.yaml
 - **Health check** — восстановление main каждые 5 минут, если он был помечен недоступным
 - **Идемпотентность** — `digest_sent_date`, `memoir_asked_date`, `chronometry_last_asked`, `tasks_reminder_last_hour`, `is_sent`
+- **Последовательность** — полный pipeline одного пользователя защищён per-user lock;
+  разные пользователи обрабатываются параллельно
+- **Persistent UX** — onboarding, мемуарник, хронометраж и голосовые подтверждения
+  переживают рестарт за счёт PostgreSQL-backed state
+- **Повторения** — единый формат: `daily`, `weekdays`, `weekly:1,3`,
+  `monthly:15`, `every:3d`, `every:2w`, `every:1m`
 - **json_repair** — автокоррекция невалидного JSON от LLM
-- **Бэкапы** — ежедневный pg_dump с ротацией 30 дней
+- **Бэкапы** — ежедневный pg_dump, SHA-256 checksum и ротация 30 дней
 - **Graceful shutdown** — корректное завершение при SIGTERM
 
 ## Команды бота
@@ -300,6 +312,21 @@ DATABASE_URL=postgresql+asyncpg://notebook:password@localhost:5432/notebook_bot
 
 ### VPS (Docker)
 `docker-compose.yml` с PostgreSQL (pgvector) + ботом. Или standalone через systemd.
+
+Перед Docker-запуском задайте `POSTGRES_PASSWORD` в `.env`; compose больше не
+содержит пароль по умолчанию. Контейнер сам ждёт БД, применяет миграции и
+идемпотентно загружает базу знаний.
+
+Бэкапы сохраняются вместе с SHA-256 checksum. Проверенное восстановление:
+
+```bash
+DATABASE_URL=postgresql://user:password@host/database \
+  scripts/restore_backup.sh /path/to/notebook_bot_YYYY-MM-DD_HHmm.sql.gz
+```
+
+Скрипт проверяет checksum и требует явно ввести `RESTORE` перед изменением БД.
+Для standalone-установки передайте пароль через
+`NOTEBOOK_DB_PASSWORD=... sudo -E platform/linux/install.sh`.
 
 ## Лицензия
 

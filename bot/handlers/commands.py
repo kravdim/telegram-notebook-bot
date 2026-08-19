@@ -140,7 +140,7 @@ async def cmd_frog(message: Message) -> None:
         kb = InlineKeyboardBuilder()
         kb.button(text="✅ Съедена!", callback_data=f"frog_done:{frog.id}")
         await message.answer(
-            f"🐸 <b>Лягушка дня:</b>\n{frog.title}",
+            f"🐸 <b>Лягушка дня:</b>\n{html.escape(frog.title)}",
             parse_mode="HTML",
             reply_markup=kb.as_markup(),
         )
@@ -307,9 +307,9 @@ async def cmd_notes(message: Message) -> None:
 
     lines = ["📝 <b>Последние заметки:</b>\n"]
     for note in notes:
-        title = note.title or note.content[:50]
+        title = html.escape(note.title or note.content[:50])
         date_str = note.created_at.strftime("%d.%m") if note.created_at else ""
-        tags = " ".join(f"#{t}" for t in note.tags) if note.tags else ""
+        tags = " ".join(f"#{html.escape(t)}" for t in note.tags) if note.tags else ""
         lines.append(f"• {title} <i>{date_str}</i> {tags}")
 
     await message.answer("\n".join(lines), parse_mode="HTML")
@@ -866,7 +866,7 @@ async def cmd_birthdays(message: Message) -> None:
     for b in all_bdays:
         date_str = b.birth_date.strftime("%d.%m")
         age = ""
-        if b.birth_date.year > 1900:
+        if b.year_known:
             years = today.year - b.birth_date.year
             # Если ДР ещё не было в этом году
             this_year_bday = b.birth_date.replace(year=today.year)
@@ -875,8 +875,8 @@ async def cmd_birthdays(message: Message) -> None:
             else:
                 years_now = years - 1
             age = f" ({years_now} лет)"
-        note = f" — {b.note}" if b.note else ""
-        lines.append(f"  🎁 {b.name} — {date_str}{age}{note}")
+        note = f" — {html.escape(b.note)}" if b.note else ""
+        lines.append(f"  🎁 {html.escape(b.name)} — {date_str}{age}{note}")
 
     await message.answer("\n".join(lines), parse_mode="HTML")
 

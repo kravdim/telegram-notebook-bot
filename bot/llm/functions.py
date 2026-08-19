@@ -127,7 +127,10 @@ FUNCTIONS = [
             "properties": {
                 "message": {"type": "string"},
                 "remind_at": {"type": "string", "description": "ISO datetime"},
-                "repeat_rule": {"type": "string", "description": "RRULE или null"},
+                "repeat_rule": {
+                    "type": "string",
+                    "description": "Правило: daily, weekdays, weekly:1, weekly:1,3, monthly:15, every:3d, every:2w, every:1m; null если не повторяется",
+                },
             },
             "required": ["message", "remind_at"],
         },
@@ -163,7 +166,8 @@ FUNCTIONS = [
             "type": "object",
             "properties": {
                 "name": {"type": "string", "description": "Имя человека"},
-                "date": {"type": "string", "description": "Дата рождения YYYY-MM-DD (год может быть приблизительным)"},
+                "date": {"type": "string", "description": "Дата рождения YYYY-MM-DD; если год не назван, используй 1900"},
+                "year_known": {"type": "boolean", "description": "true, только если пользователь явно назвал год рождения"},
                 "note": {"type": "string", "description": "Заметка (что подарить, кто это и т.д.)"},
             },
             "required": ["name", "date"],

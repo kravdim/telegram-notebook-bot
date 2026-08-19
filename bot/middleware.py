@@ -28,7 +28,7 @@ class WhitelistMiddleware(BaseMiddleware):
         event: TelegramObject,
         data: dict[str, Any],
     ) -> Any:
-        if not settings.allowed_telegram_ids:
+        if settings.allow_all_users:
             return await handler(event, data)
 
         user_id: int | None = None
@@ -40,7 +40,8 @@ class WhitelistMiddleware(BaseMiddleware):
         if user_id is None:
             return await handler(event, data)
 
-        if user_id not in settings.allowed_telegram_ids:
+        allowed = set(settings.allowed_telegram_ids) | set(settings.admin_telegram_ids)
+        if user_id not in allowed:
             logger.info("Отклонён пользователь %s — не в whitelist", user_id)
             if isinstance(event, Message):
                 await event.answer(

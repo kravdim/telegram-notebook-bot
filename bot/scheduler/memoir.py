@@ -7,9 +7,9 @@ from aiogram import Bot
 
 from bot.db.crud.chronometry import get_today_entries
 from bot.db.crud.memoir import get_memoir_entries
-from bot.db.crud.users import get_all_users, update_user_settings
+from bot.db.crud.users import claim_date_marker, get_all_users, release_date_marker
 from bot.db.engine import async_session
-from bot.formatters import split_message
+from bot.formatters import split_html_message
 from bot.formatters.chronometry import format_day_timeline
 from bot.formatters.memoir import format_memoir_question, format_weekly_review
 
@@ -52,29 +52,38 @@ async def send_memoir_prompts(bot: Bot) -> None:
             if user.memoir_asked_date == today:
                 continue
 
-            if now >= target and now <= target.add(minutes=5):
+            if now >= target:
+                async with async_session() as session:
+                    claimed = await claim_date_marker(
+                        session, user.telegram_id, "memoir_asked_date", today
+                    )
+                if not claimed:
+                    continue
                 # Сначала — список дел дня по трекеру
-                await _send_day_timeline(bot, user, tz)
+                try:
+                    await _send_day_timeline(bot, user, tz)
 
                 # Воскресенье — недельный ревью
-                if now.day_of_week == pendulum.SUNDAY:
-                    await _send_weekly_review(bot, user, tz)
-                else:
-                    sent = await bot.send_message(
-                        chat_id=user.telegram_id,
-                        text=format_memoir_question(),
-                        parse_mode="HTML",
-                    )
-                    _awaiting_memoir[user.telegram_id] = sent.message_id
+                    if now.day_of_week == pendulum.SUNDAY:
+                        await _send_weekly_review(bot, user, tz)
+                    else:
+                        sent = await bot.send_message(
+                            chat_id=user.telegram_id,
+                            text=format_memoir_question(),
+                            parse_mode="HTML",
+                        )
+                        _awaiting_memoir[user.telegram_id] = sent.message_id
+                        await _persist_memoir_state(user.telegram_id, sent.message_id)
 
                 # Последний день месяца — месячный ревью
-                if now.day == now.days_in_month:
-                    await _send_monthly_review(bot, user, tz)
-
-                async with async_session() as session:
-                    await update_user_settings(
-                        session, user.telegram_id, memoir_asked_date=today
-                    )
+                    if now.day == now.days_in_month:
+                        await _send_monthly_review(bot, user, tz)
+                except Exception:
+                    async with async_session() as session:
+                        await release_date_marker(
+                            session, user.telegram_id, "memoir_asked_date", today
+                        )
+                    raise
                 logger.info("Мемуарник отправлен: %s", user.telegram_id)
 
         except Exception as e:
@@ -91,7 +100,7 @@ async def _send_day_timeline(bot: Bot, user, tz: str) -> None:
     if not entries:
         return
     text = format_day_timeline(entries, tz)
-    for part in split_message(text):
+    for part in split_html_message(text):
         await bot.send_message(
             chat_id=user.telegram_id, text=part, parse_mode="HTML"
         )
@@ -103,7 +112,7 @@ async def _send_weekly_review(bot: Bot, user, tz: str) -> None:
         entries = await get_memoir_entries(session, user.telegram_id, limit=7)
 
     text = format_weekly_review(entries)
-    for part in split_message(text):
+    for part in split_html_message(text):
         await bot.send_message(
             chat_id=user.telegram_id, text=part, parse_mode="HTML"
         )
@@ -115,6 +124,23 @@ async def _send_weekly_review(bot: Bot, user, tz: str) -> None:
         parse_mode="HTML",
     )
     _awaiting_memoir[user.telegram_id] = sent.message_id
+    await _persist_memoir_state(user.telegram_id, sent.message_id)
+
+
+async def _persist_memoir_state(user_id: int, message_id: int) -> None:
+    """Сохранить ожидание ответа так, чтобы оно пережило рестарт."""
+    try:
+        from bot.db.crud.interaction_states import set_state
+        async with async_session() as session:
+            await set_state(
+                session,
+                user_id,
+                "memoir",
+                payload={"message_id": message_id},
+                ttl_minutes=12 * 60,
+            )
+    except Exception as e:
+        logger.warning("Не удалось сохранить ожидание мемуарника: %s", e)
 
 
 async def _send_monthly_review(bot: Bot, user, tz: str) -> None:

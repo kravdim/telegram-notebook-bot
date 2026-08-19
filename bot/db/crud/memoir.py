@@ -17,6 +17,7 @@ async def create_memoir_entry(
     content: str,
     value_tag: Optional[str] = None,
     period_type: str = "day",
+    commit: bool = True,
 ) -> MemoirEntry:
     """Создать запись мемуарника (upsert по user_id + event_date + period_type)."""
     result = await session.execute(
@@ -39,7 +40,10 @@ async def create_memoir_entry(
             period_type=period_type,
         )
         session.add(entry)
-    await session.commit()
+    if commit:
+        await session.commit()
+    else:
+        await session.flush()
     await session.refresh(entry)
     return entry
 

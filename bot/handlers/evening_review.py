@@ -41,7 +41,7 @@ async def cb_review_tomorrow(callback: CallbackQuery) -> None:
         tomorrow = pendulum.tomorrow(tz).date()
 
         task = await update_task(
-            session, task_id, callback.from_user.id, due_date=tomorrow
+            session, task_id, callback.from_user.id, scheduled_date=tomorrow
         )
 
     if task:

@@ -5,6 +5,7 @@ import pytest
 import bot.handlers.chronometry as chronometry_handler
 import bot.handlers.callbacks as callbacks
 import bot.handlers.messages as messages
+import bot.handlers.voice as voice
 import bot.scheduler.chronometry as chronometry_scheduler
 from bot.llm.client import LLMUnavailableError
 from bot.llm.context import clear_all, get_history
@@ -32,13 +33,44 @@ class FakeResponse:
 
 
 @pytest.fixture(autouse=True)
-def reset_message_globals():
+def reset_message_globals(monkeypatch):
     old_client = messages.llm_client
     old_queue = messages.llm_queue
     messages.llm_client = FakeLLMClient()
     messages.llm_queue = FakeLLMQueue()
     messages._pending_project_completion.clear()
     clear_all()
+
+    async def no_claim(*args, **kwargs):
+        return None
+
+    async def no_finish(*args, **kwargs):
+        return None
+
+    async def no_state(*args, **kwargs):
+        return None
+
+    async def no_clear(*args, **kwargs):
+        return None
+
+    async def consume_memory(user_id):
+        return (
+            "complete_project"
+            if messages._pending_project_completion.pop(user_id, False)
+            else None
+        )
+
+    async def set_memory(user_id, state_type):
+        messages._pending_project_completion[user_id] = state_type == "complete_project"
+
+    monkeypatch.setattr(messages, "_claim_request", no_claim)
+    monkeypatch.setattr(messages, "_finish_request", no_finish)
+    monkeypatch.setattr(messages, "_get_persisted_interaction", no_state)
+    monkeypatch.setattr(messages, "_clear_persisted_interaction", no_clear)
+    monkeypatch.setattr(messages, "_consume_pending_interaction", consume_memory)
+    monkeypatch.setattr(messages, "_set_pending_interaction", set_memory)
+    monkeypatch.setattr(voice, "_load_voice_state", no_state)
+    monkeypatch.setattr(voice, "_clear_voice_state", no_clear)
     yield
     messages.llm_client = old_client
     messages.llm_queue = old_queue
@@ -106,7 +138,7 @@ async def test_conversational_done_bypasses_pending_chronometry(monkeypatch):
     assert calls == [
         {
             "name": "complete_task",
-            "arguments": {"search_query": "Заплатить деньги Фокусу"},
+            "arguments": {"search_query": "Денег Фокусу"},
         }
     ]
     assert msg.answers[-1][0] == "Задача закрыта"

@@ -44,3 +44,7 @@ search:
 context:
   max_tokens: 3000
   keep_recent_pairs: 5
+
+privacy:
+  # Не хранить пользовательские тексты и ответы модели в LLM-логах.
+  store_llm_payloads: false

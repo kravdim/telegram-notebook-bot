@@ -1,6 +1,7 @@
 """Еженедельный обзор (Sunday Review) — отправка в воскресенье в 21:00."""
 
 import logging
+from html import escape
 
 import pendulum
 from aiogram import Bot
@@ -9,7 +10,7 @@ from bot.db.crud.chronometry import get_week_stats
 from bot.db.crud.memoir import get_memoir_entries, get_value_stats
 from bot.db.crud.projects import get_user_projects, get_project_progress
 from bot.db.crud.tasks import get_completed_in_range, get_frogs_in_range
-from bot.db.crud.users import get_all_users, update_user_settings
+from bot.db.crud.users import claim_date_marker, get_all_users, release_date_marker
 from bot.db.engine import async_session
 
 logger = logging.getLogger(__name__)
@@ -28,11 +29,11 @@ _VALUE_EMOJI = {
 # Категории хронометража
 _CATEGORY_EMOJI = {
     "work": "💼", "personal": "👤", "rest": "☕",
-    "waste": "🕳", "focus": "🎯",
+    "waste": "🕳", "focus": "🎯", "unknown": "❔",
 }
 _CATEGORY_RU = {
     "work": "Работа", "personal": "Личное", "rest": "Отдых",
-    "waste": "Хронофаги", "focus": "Фокус",
+    "waste": "Хронофаги", "focus": "Фокус", "unknown": "Не разобрано",
 }
 
 
@@ -53,41 +54,36 @@ async def send_weekly_review(bot: Bot) -> None:
             if now.day_of_week != pendulum.SUNDAY:
                 continue
 
-            # Окно 21:00 - 21:05
+            # После 21:00 догоняем обзор до конца воскресенья.
             target = now.set(hour=21, minute=0, second=0)
-            if not (now >= target and now <= target.add(minutes=5)):
+            if now < target:
                 continue
 
-            # Идемпотентность: используем memoir_asked_date
-            # Если memoir_asked_date == сегодня → обзор уже отправлен
-            # (Это не идеально, но мемуарник спрашивается в 20:45, а обзор в 21:00)
-            # Используем отдельную проверку: weekly_review через digest_sent_date не годится.
-            # Простой вариант: проверяем, что сегодня воскресенье и час == 21
-            # Повторный вызов в ту же минуту не страшен — loop каждые 60 сек
-            # Но на всякий случай добавим простой in-memory guard
-            if _already_sent(user.telegram_id, now.date()):
+            if user.weekly_review_sent_date == now.date():
                 continue
 
-            await _send_review(bot, user, tz)
-            _mark_sent(user.telegram_id, now.date())
+            # Write-ahead marker с откатом при ошибке защищает от дублей после
+            # рестарта и допускает повторную попытку при ошибке Telegram.
+            async with async_session() as session:
+                claimed = await claim_date_marker(
+                    session, user.telegram_id, "weekly_review_sent_date", now.date()
+                )
+            if not claimed:
+                continue
+            try:
+                await _send_review(bot, user, tz)
+            except Exception:
+                async with async_session() as session:
+                    await release_date_marker(
+                        session, user.telegram_id, "weekly_review_sent_date", now.date()
+                    )
+                raise
 
         except Exception as e:
             logger.error(
                 "Ошибка weekly review для %s: %s",
                 user.telegram_id, e, exc_info=True,
             )
-
-
-# In-memory идемпотентность (сбрасывается при рестарте, но это ок — воскресенье раз в неделю)
-_sent_dates: dict = {}
-
-
-def _already_sent(user_id: int, today) -> bool:
-    return _sent_dates.get(user_id) == today
-
-
-def _mark_sent(user_id: int, today) -> None:
-    _sent_dates[user_id] = today
 
 
 async def _send_review(bot: Bot, user, tz: str) -> None:
@@ -162,7 +158,7 @@ def _format_review(
 
     if entries > 0:
         parts.append("⏱ <b>Распределение времени:</b>")
-        for cat in ("work", "focus", "personal", "rest", "waste"):
+        for cat in ("work", "focus", "personal", "rest", "waste", "unknown"):
             minutes = cats.get(cat, 0)
             if minutes > 0:
                 emoji = _CATEGORY_EMOJI.get(cat, "")
@@ -184,10 +180,10 @@ def _format_review(
     parts.append(f"✅ <b>Выполнено задач:</b> {len(completed_tasks)}")
     if completed_tasks and len(completed_tasks) <= 15:
         for t in completed_tasks:
-            parts.append(f"  • {t.title}")
+            parts.append(f"  • {escape(t.title)}")
     elif len(completed_tasks) > 15:
         for t in completed_tasks[:10]:
-            parts.append(f"  • {t.title}")
+            parts.append(f"  • {escape(t.title)}")
         parts.append(f"  ... и ещё {len(completed_tasks) - 10}")
     parts.append("")
 
@@ -215,7 +211,7 @@ def _format_review(
         parts.append("📔 <b>Ценности недели</b> (из мемуарника):")
         for vs in value_stats[:5]:
             emoji = _VALUE_EMOJI.get(vs["value"], "🔹")
-            parts.append(f"  {emoji} {vs['value']}: {vs['count']} раз")
+            parts.append(f"  {emoji} {escape(str(vs['value']))}: {vs['count']} раз")
         parts.append("")
 
     # --- Прогресс по слонам ---
@@ -227,7 +223,7 @@ def _format_review(
             total = progress.get("total", 0)
             bar_len = max(1, pct // 5) if pct > 0 else 0
             bar = "▓" * bar_len + "░" * (20 - bar_len) if total > 0 else "░" * 20
-            parts.append(f"  {title}: {bar} {pct}% ({done}/{total})")
+            parts.append(f"  {escape(title)}: {bar} {pct}% ({done}/{total})")
 
     # Подпись
     parts.append("\n🔄 Новая неделя — новые возможности!")

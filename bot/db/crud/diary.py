@@ -16,6 +16,7 @@ async def create_diary_entry(
     content: str,
     entry_date: Optional[date] = None,
     tz: str = "Europe/Moscow",
+    commit: bool = True,
 ) -> DiaryEntry:
     """Создать запись в дневнике."""
     if entry_date is None:
@@ -27,7 +28,10 @@ async def create_diary_entry(
         entry_date=entry_date,
     )
     session.add(entry)
-    await session.commit()
+    if commit:
+        await session.commit()
+    else:
+        await session.flush()
     await session.refresh(entry)
     return entry
 

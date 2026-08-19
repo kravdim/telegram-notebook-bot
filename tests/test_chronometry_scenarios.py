@@ -22,9 +22,18 @@ class FakeQueue:
 
 
 @pytest.fixture(autouse=True)
-def reset_chrono_globals():
+def reset_chrono_globals(monkeypatch):
     old_client = chronometry._llm_client
     old_queue = chronometry._llm_queue
+    async def fake_get_user(session, user_id):
+        return SimpleNamespace(
+            chronometry_interval_min=60,
+            chronometry_last_asked=None,
+        )
+    async def fake_get_today_tasks(session, user_id, today):
+        return []
+    monkeypatch.setattr(chronometry, "get_user", fake_get_user)
+    monkeypatch.setattr(chronometry, "get_today_tasks", fake_get_today_tasks)
     yield
     chronometry._llm_client = old_client
     chronometry._llm_queue = old_queue
@@ -114,4 +123,4 @@ async def test_process_chronometry_response_falls_back_on_bad_json(monkeypatch):
     result = await chronometry.process_chronometry_response(42, "Пишу код", "Europe/Moscow")
 
     assert result == "Записал ✅"
-    assert created[0]["category"] == "work"
+    assert created[0]["category"] == "unknown"

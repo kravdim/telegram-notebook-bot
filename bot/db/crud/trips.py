@@ -38,21 +38,51 @@ async def create_trip(
 async def get_active_trip(
     session: AsyncSession,
     user_id: int,
+    today: Optional[date] = None,
 ) -> Optional[Trip]:
     """Получить текущую активную командировку.
 
     Старые записи со статусом active, у которых уже прошёл end_date, не считаются
     активными для дайджестов и команды /trip.
     """
-    today = pendulum.today("Europe/Moscow").date()
+    today = today or pendulum.today("UTC").date()
     result = await session.execute(
         select(Trip)
         .where(
             Trip.user_id == user_id,
             Trip.status == "active",
+            Trip.start_date <= today,
             Trip.end_date >= today,
         )
         .order_by(Trip.start_date.desc())
+        .limit(1)
+    )
+    return result.scalar_one_or_none()
+
+
+async def get_open_trip(
+    session: AsyncSession,
+    user_id: int,
+    today: Optional[date] = None,
+) -> Optional[Trip]:
+    """Получить незавершённую поездку, завершив просроченные записи."""
+    today = today or pendulum.today("UTC").date()
+    expired_result = await session.execute(
+        select(Trip).where(
+            Trip.user_id == user_id,
+            Trip.status == "active",
+            Trip.end_date < today,
+        )
+    )
+    expired = list(expired_result.scalars().all())
+    for trip in expired:
+        trip.status = "completed"
+    if expired:
+        await session.commit()
+    result = await session.execute(
+        select(Trip)
+        .where(Trip.user_id == user_id, Trip.status == "active")
+        .order_by(Trip.start_date.asc())
         .limit(1)
     )
     return result.scalar_one_or_none()

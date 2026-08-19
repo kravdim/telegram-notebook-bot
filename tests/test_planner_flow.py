@@ -33,10 +33,10 @@ def test_extract_done_query_prefix_forms():
 
 
 def test_extract_done_query_conversational_payment_forms():
-    assert _extract_done_query("Денег Фокусу заплатили") == "Заплатить деньги Фокусу"
-    assert _extract_done_query("Зарплаты выплатили") == "Выплатить зарплаты"
-    assert _extract_done_query("Мувикс маме настроил") == "Настроить маме Мувикс"
-    assert _extract_done_query("Мувикс маме я настроил") == "Настроить маме Мувикс"
+    assert _extract_done_query("Денег Фокусу заплатили") == "Денег Фокусу"
+    assert _extract_done_query("Зарплаты выплатили") == "Зарплаты"
+    assert _extract_done_query("Мувикс маме настроил") == "Мувикс маме"
+    assert _extract_done_query("Мувикс маме я настроил") == "Мувикс маме"
 
 
 def test_extract_done_query_ignores_chronometry_text():
@@ -79,7 +79,7 @@ def test_extract_cancel_request_common_forms():
         "updates": {"status": "cancelled"},
     }
     assert _extract_cancel_request("перфоратор из офиса брать пока что не надо") == {
-        "search_query": "Взять перфоратор из офиса",
+        "search_query": "перфоратор из офиса",
         "updates": {"status": "cancelled"},
     }
 

@@ -117,6 +117,16 @@ async def send_chronometry_prompts(bot: Bot) -> None:
             _awaiting_response[user.telegram_id] = sent.message_id
             _awaiting_since[user.telegram_id] = now
 
+            from bot.db.crud.interaction_states import set_state
+            async with async_session() as session:
+                await set_state(
+                    session,
+                    user.telegram_id,
+                    "chronometry",
+                    payload={"message_id": sent.message_id},
+                    ttl_minutes=max(user.chronometry_interval_min * 2, 60),
+                )
+
             # Обновляем timestamp в БД только после успешной отправки
             async with async_session() as session:
                 await update_user_settings(

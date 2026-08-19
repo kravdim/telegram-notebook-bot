@@ -10,10 +10,11 @@ from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.enums import ParseMode
-from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import BotCommand, BotCommandScopeAllPrivateChats
 
 from bot.config import settings
+from bot.db.fsm_storage import DatabaseFSMStorage
+from bot.db.engine import engine
 from bot.handlers import (
     admin, callbacks, commands, evening_review,
     messages, onboarding, trip, voice,
@@ -92,6 +93,16 @@ async def main() -> None:
     if not settings.bot_token or settings.bot_token == "your_telegram_bot_token":
         logger.error("BOT_TOKEN не задан в .env!")
         sys.exit(1)
+    if not settings.access_control_configured:
+        logger.error(
+            "Доступ не настроен: добавьте allowed_telegram_ids/admin_telegram_ids "
+            "или явно установите ALLOW_ALL_USERS=true для development."
+        )
+        sys.exit(1)
+    config_errors = settings.runtime_config_errors()
+    if config_errors:
+        logger.error("Некорректная конфигурация: %s", "; ".join(config_errors))
+        sys.exit(1)
 
     # Прокси для Telegram API (из env: ALL_PROXY или HTTPS_PROXY)
     proxy_url = os.environ.get("ALL_PROXY") or os.environ.get("HTTPS_PROXY")
@@ -102,7 +113,7 @@ async def main() -> None:
         default=DefaultBotProperties(parse_mode=ParseMode.HTML),
         session=session,
     )
-    dp = Dispatcher(storage=MemoryStorage())
+    dp = Dispatcher(storage=DatabaseFSMStorage())
 
     # LLM
     llm_client = LLMClient()
@@ -276,6 +287,7 @@ async def main() -> None:
     finally:
         await llm_queue.stop()
         await bot.session.close()
+        await engine.dispose()
         logger.info("Бот остановлен.")
 
 

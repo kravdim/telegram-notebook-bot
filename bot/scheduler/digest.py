@@ -9,9 +9,11 @@ from bot.db.crud.birthdays import get_birthdays_on_date
 from bot.db.crud.projects import get_project_progress, get_user_projects
 from bot.db.crud.tasks import get_completed_today, get_frog, get_today_tasks, get_user_tasks
 from bot.db.crud.trips import get_active_trip
-from bot.db.crud.users import get_all_users, update_user_settings
+from bot.db.crud.users import (
+    claim_date_marker, get_all_users, release_date_marker,
+)
 from bot.db.engine import async_session
-from bot.formatters import split_message
+from bot.formatters import split_html_message
 from bot.formatters.digest import format_evening_digest, format_morning_digest
 
 logger = logging.getLogger(__name__)
@@ -44,34 +46,42 @@ async def send_digests(bot: Bot) -> None:
             morning_sent, evening_sent = _digest_sent_flags(user, today)
 
             # Утренний дайджест (write-ahead: маркер до отправки)
-            if now >= morning_target and not morning_sent:
+            if (
+                now >= morning_target
+                and now <= morning_target.add(hours=4)
+                and not morning_sent
+            ):
                 async with async_session() as session:
-                    await update_user_settings(
-                        session, user.telegram_id, digest_sent_date=today
+                    claimed = await claim_date_marker(
+                        session, user.telegram_id, "digest_sent_date", today
                     )
+                if not claimed:
+                    continue
                 try:
                     await _send_morning(bot, user, today, tz)
                 except Exception:
                     # Откатываем маркер при ошибке
                     async with async_session() as session:
-                        await update_user_settings(
-                            session, user.telegram_id, digest_sent_date=None
+                        await release_date_marker(
+                            session, user.telegram_id, "digest_sent_date", today
                         )
                     raise
 
             # Вечерний дайджест (write-ahead: маркер до отправки)
             if now >= evening_target and not evening_sent:
                 async with async_session() as session:
-                    await update_user_settings(
-                        session, user.telegram_id, digest_evening_sent_date=today
+                    claimed = await claim_date_marker(
+                        session, user.telegram_id, "digest_evening_sent_date", today
                     )
+                if not claimed:
+                    continue
                 try:
                     await _send_evening(bot, user, today, tz)
                 except Exception:
                     # Откатываем вечерний маркер при ошибке
                     async with async_session() as session:
-                        await update_user_settings(
-                            session, user.telegram_id, digest_evening_sent_date=None
+                        await release_date_marker(
+                            session, user.telegram_id, "digest_evening_sent_date", today
                         )
                     raise
 
@@ -90,7 +100,7 @@ async def _send_morning(bot: Bot, user, today, tz: str) -> None:
         tasks = await get_today_tasks(session, user.telegram_id, today)
         frog = await get_frog(session, user.telegram_id)
         projects = await get_user_projects(session, user.telegram_id)
-        trip = await get_active_trip(session, user.telegram_id)
+        trip = await get_active_trip(session, user.telegram_id, today)
         birthdays = await get_birthdays_on_date(session, user.telegram_id, today)
 
         project_progress = {}
@@ -109,7 +119,7 @@ async def _send_morning(bot: Bot, user, today, tz: str) -> None:
         birthdays=birthdays,
     )
 
-    for part in split_message(text):
+    for part in split_html_message(text):
         await bot.send_message(
             chat_id=user.telegram_id, text=part, parse_mode="HTML"
         )
@@ -154,8 +164,21 @@ async def _send_evening(bot: Bot, user, today, tz: str) -> None:
         frog_title=frog_title,
     )
 
-    for part in split_message(text):
+    for part in split_html_message(text):
         await bot.send_message(
             chat_id=user.telegram_id, text=part, parse_mode="HTML"
         )
+
+    # Действия вечернего разбора раньше были недостижимы: formatter и callback
+    # существовали, но кнопки никто не отправлял.
+    if remaining:
+        from html import escape
+        from bot.handlers.evening_review import build_review_keyboard
+        for task in remaining[:10]:
+            await bot.send_message(
+                chat_id=user.telegram_id,
+                text=f"Что сделать с задачей «{escape(task.title)}»?",
+                parse_mode="HTML",
+                reply_markup=build_review_keyboard(str(task.id)).as_markup(),
+            )
     logger.info("Вечерний дайджест отправлен: %s", user.telegram_id)

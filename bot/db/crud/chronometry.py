@@ -71,7 +71,7 @@ async def get_day_stats(
 ) -> dict:
     """Статистика дня по категориям."""
     entries = await get_today_entries(session, user_id, tz)
-    stats = {"work": 0, "personal": 0, "rest": 0, "waste": 0, "focus": 0}
+    stats = {"work": 0, "personal": 0, "rest": 0, "waste": 0, "focus": 0, "unknown": 0}
     total_minutes = 0
     total_productivity = 0
     scored_count = 0
@@ -111,7 +111,7 @@ async def get_week_stats(
     )
     entries = list(result.scalars().all())
 
-    stats = {"work": 0, "personal": 0, "rest": 0, "waste": 0, "focus": 0}
+    stats = {"work": 0, "personal": 0, "rest": 0, "waste": 0, "focus": 0, "unknown": 0}
     total_productivity = 0
     scored_count = 0
 

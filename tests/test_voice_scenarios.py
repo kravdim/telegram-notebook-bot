@@ -6,7 +6,16 @@ from tests.fakes import FakeCallback, FakeMessage
 
 
 @pytest.fixture(autouse=True)
-def clear_voice_state():
+def clear_voice_state(monkeypatch):
+    async def no_persist(*args, **kwargs):
+        return None
+
+    async def no_load(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(voice, "_persist_voice_state", no_persist)
+    monkeypatch.setattr(voice, "_clear_voice_state", no_persist)
+    monkeypatch.setattr(voice, "_load_voice_state", no_load)
     voice._pending_transcripts.clear()
     voice._awaiting_edit.clear()
     yield

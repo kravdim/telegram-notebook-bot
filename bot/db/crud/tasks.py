@@ -17,6 +17,7 @@ async def create_task(
     title: str,
     category: str = "work",
     priority: str = "normal",
+    commit: bool = True,
     **kwargs,
 ) -> Task:
     """Создать задачу."""
@@ -28,7 +29,10 @@ async def create_task(
         **kwargs,
     )
     session.add(task)
-    await session.commit()
+    if commit:
+        await session.commit()
+    else:
+        await session.flush()
     await session.refresh(task)
     return task
 
@@ -112,6 +116,7 @@ async def set_frog(
     session: AsyncSession,
     task_id: uuid.UUID,
     user_id: int,
+    commit: bool = True,
 ) -> Optional[Task]:
     """Назначить задачу лягушкой. Снимает флаг с предыдущей."""
     # Снять флаг с текущей лягушки
@@ -124,7 +129,10 @@ async def set_frog(
         return None
 
     task.is_frog = True
-    await session.commit()
+    if commit:
+        await session.commit()
+    else:
+        await session.flush()
     await session.refresh(task)
     return task
 
@@ -140,14 +148,19 @@ async def search_tasks(
     Сортирует: open задачи первыми, потом по дате создания (новые первые).
     status='open' — только открытые.
     """
-    from sqlalchemy import case
+    from sqlalchemy import case, func, or_
 
-    pattern = f"%{query}%"
+    normalized = (query or "").strip().casefold().replace("ё", "е")
+    if not normalized:
+        return []
+    normalized_title = func.replace(func.lower(Task.title), "ё", "е")
+    pattern = f"%{normalized}%"
+    similarity = func.similarity(normalized_title, normalized)
     q = (
         select(Task)
         .where(
             Task.user_id == user_id,
-            Task.title.ilike(pattern),
+            or_(normalized_title.ilike(pattern), similarity >= 0.25),
         )
     )
     if status:
@@ -155,7 +168,9 @@ async def search_tasks(
 
     # Открытые задачи первыми
     q = q.order_by(
+        case((normalized_title == normalized, 0), else_=1),
         case((Task.status == "open", 0), else_=1),
+        similarity.desc(),
         Task.created_at.desc(),
     ).limit(10)
 
@@ -204,6 +219,7 @@ async def update_task(
     session: AsyncSession,
     task_id: uuid.UUID,
     user_id: int,
+    commit: bool = True,
     **updates,
 ) -> Optional[Task]:
     """Обновить задачу."""
@@ -221,7 +237,10 @@ async def update_task(
         task.resolution = "completed"
         task.completed_at = pendulum.now("UTC")
 
-    await session.commit()
+    if commit:
+        await session.commit()
+    else:
+        await session.flush()
     await session.refresh(task)
     return task
 

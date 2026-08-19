@@ -1,6 +1,7 @@
 """Ежедневный бэкап БД через pg_dump + ротация."""
 
 import asyncio
+import hashlib
 import logging
 import os
 from datetime import datetime, timedelta
@@ -12,7 +13,9 @@ from bot.config import settings
 
 logger = logging.getLogger(__name__)
 
-_BACKUP_DIR = Path.home() / "backups" / "notebook-bot"
+_BACKUP_DIR = Path(
+    os.environ.get("BACKUP_DIR", str(Path.home() / "backups" / "notebook-bot"))
+)
 
 
 async def run_backup() -> None:
@@ -78,6 +81,14 @@ async def run_backup() -> None:
             filepath.unlink(missing_ok=True)
         else:
             size_mb = filepath.stat().st_size / (1024 * 1024)
+            digest = hashlib.sha256()
+            with open(filepath, "rb") as source:
+                for chunk in iter(lambda: source.read(1024 * 1024), b""):
+                    digest.update(chunk)
+            checksum_path = filepath.with_suffix(filepath.suffix + ".sha256")
+            checksum_path.write_text(
+                f"{digest.hexdigest()}  {filepath.name}\n", encoding="ascii"
+            )
             logger.info("Бэкап создан: %s (%.1f MB)", filename, size_mb)
     except asyncio.TimeoutError:
         logger.error("Таймаут бэкапа")
@@ -98,5 +109,6 @@ def _rotate_backups(retention_days: int) -> None:
     cutoff = datetime.now() - timedelta(days=retention_days)
     for f in _BACKUP_DIR.glob("notebook_bot_*.sql.gz"):
         if f.stat().st_mtime < cutoff.timestamp():
+            f.with_suffix(f.suffix + ".sha256").unlink(missing_ok=True)
             f.unlink()
             logger.info("Удалён старый бэкап: %s", f.name)
