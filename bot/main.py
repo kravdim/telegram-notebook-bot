@@ -34,6 +34,8 @@ from bot.scheduler.task_reminders import send_task_reminders
 from bot.scheduler.weekly_review import send_weekly_review
 from bot.scheduler.reindex import reindex_missing_embeddings
 from bot.scheduler.sweep import sweep_missed_reminders
+from bot.runtime.singleton import SingletonLease
+from bot.observability import alert_slo_violations, evaluate_slos, observe_job
 
 logging.basicConfig(
     level=logging.INFO,
@@ -104,6 +106,14 @@ async def main() -> None:
         logger.error("Некорректная конфигурация: %s", "; ".join(config_errors))
         sys.exit(1)
 
+    singleton = SingletonLease(engine)
+    if not await singleton.acquire():
+        logger.error(
+            "Другой экземпляр DailyPlanner уже активен; запуск отменён до polling."
+        )
+        await engine.dispose()
+        return
+
     # Прокси для Telegram API (из env: ALL_PROXY или HTTPS_PROXY)
     proxy_url = os.environ.get("ALL_PROXY") or os.environ.get("HTTPS_PROXY")
     session = AiohttpSession(proxy=proxy_url) if proxy_url else None
@@ -163,7 +173,8 @@ async def main() -> None:
         while True:
             await asyncio.sleep(30)
             try:
-                await send_pending_reminders(bot)
+                async with observe_job("reminders"):
+                    await send_pending_reminders(bot)
             except Exception as e:
                 logger.error("Reminders loop error: %s", e)
 
@@ -172,7 +183,8 @@ async def main() -> None:
         while True:
             await asyncio.sleep(300)
             try:
-                await sweep_missed_reminders(bot)
+                async with observe_job("reminder_sweep"):
+                    await sweep_missed_reminders(bot)
             except Exception as e:
                 logger.error("Sweep loop error: %s", e)
 
@@ -181,7 +193,10 @@ async def main() -> None:
         while True:
             await asyncio.sleep(300)
             try:
-                await check_llm_health(llm_client)
+                async with observe_job("health"):
+                    await check_llm_health(llm_client)
+                    slo_result = await evaluate_slos()
+                    await alert_slo_violations(bot, slo_result)
             except Exception as e:
                 logger.error("Health check error: %s", e)
 
@@ -190,7 +205,8 @@ async def main() -> None:
         while True:
             await asyncio.sleep(60)
             try:
-                await send_digests(bot)
+                async with observe_job("digest"):
+                    await send_digests(bot)
             except Exception as e:
                 logger.error("Digest loop error: %s", e)
 
@@ -199,7 +215,8 @@ async def main() -> None:
         while True:
             await asyncio.sleep(60)
             try:
-                await send_memoir_prompts(bot)
+                async with observe_job("memoir"):
+                    await send_memoir_prompts(bot)
             except Exception as e:
                 logger.error("Memoir loop error: %s", e)
 
@@ -208,7 +225,8 @@ async def main() -> None:
         while True:
             await asyncio.sleep(60)
             try:
-                await send_chronometry_prompts(bot)
+                async with observe_job("chronometry"):
+                    await send_chronometry_prompts(bot)
             except Exception as e:
                 logger.error("Chronometry loop error: %s", e)
 
@@ -217,7 +235,8 @@ async def main() -> None:
         while True:
             await asyncio.sleep(60)
             try:
-                await send_task_reminders(bot)
+                async with observe_job("task_reminders"):
+                    await send_task_reminders(bot)
             except Exception as e:
                 logger.error("Task reminders loop error: %s", e)
 
@@ -226,7 +245,8 @@ async def main() -> None:
         while True:
             await asyncio.sleep(60)
             try:
-                await send_weekly_review(bot)
+                async with observe_job("weekly_review"):
+                    await send_weekly_review(bot)
             except Exception as e:
                 logger.error("Weekly review loop error: %s", e)
 
@@ -235,27 +255,27 @@ async def main() -> None:
         while True:
             await asyncio.sleep(3600)
             try:
-                await reindex_missing_embeddings()
-                await rotate_llm_logs()
+                async with observe_job("maintenance"):
+                    await reindex_missing_embeddings()
+                    await rotate_llm_logs()
 
-                # Бэкап в 3:00
-                import pendulum
-                now = pendulum.now()
-                backup_hour = settings.yaml_config.get("scheduler", {}).get("backup_hour", 3)
-                if now.hour == backup_hour:
-                    await run_backup()
+                    # Бэкап в 3:00
+                    import pendulum
+                    now = pendulum.now()
+                    backup_hour = settings.yaml_config.get("scheduler", {}).get("backup_hour", 3)
+                    if now.hour == backup_hour:
+                        await run_backup()
             except Exception as e:
                 logger.error("Maintenance loop error: %s", e)
 
-    asyncio.create_task(_reminders_loop())
-    asyncio.create_task(_sweep_loop())
-    asyncio.create_task(_health_loop())
-    asyncio.create_task(_digest_loop())
-    asyncio.create_task(_memoir_loop())
-    asyncio.create_task(_chronometry_loop())
-    asyncio.create_task(_task_reminders_loop())
-    asyncio.create_task(_weekly_review_loop())
-    asyncio.create_task(_maintenance_loop())
+    background_tasks = [
+        asyncio.create_task(loop_fn(), name=loop_fn.__name__)
+        for loop_fn in (
+            _reminders_loop, _sweep_loop, _health_loop, _digest_loop,
+            _memoir_loop, _chronometry_loop, _task_reminders_loop,
+            _weekly_review_loop, _maintenance_loop,
+        )
+    ]
 
     # Middleware (порядок: whitelist первым, rate limit вторым)
     dp.message.middleware(WhitelistMiddleware())
@@ -285,8 +305,12 @@ async def main() -> None:
     try:
         await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
     finally:
+        for task in background_tasks:
+            task.cancel()
+        await asyncio.gather(*background_tasks, return_exceptions=True)
         await llm_queue.stop()
         await bot.session.close()
+        await singleton.release()
         await engine.dispose()
         logger.info("Бот остановлен.")
 

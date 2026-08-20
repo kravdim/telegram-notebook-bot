@@ -7,6 +7,7 @@ from sqlalchemy import text
 
 from bot.db.engine import async_session
 from bot.embeddings.indexer import get_client as get_embed_client
+from bot.observability import evaluate_slos, metrics
 
 logger = logging.getLogger(__name__)
 
@@ -59,5 +60,12 @@ async def check_all_health(llm_client) -> dict:
             results["embedding"] = {"status": "error", "error": str(e)}
     else:
         results["embedding"] = {"status": "not_configured"}
+
+    try:
+        results.update(await evaluate_slos())
+    except Exception as e:
+        results["slo"] = {"status": "error", "error": str(e)}
+
+    results["metrics"] = {"status": "ok", "snapshot": metrics.snapshot()}
 
     return results

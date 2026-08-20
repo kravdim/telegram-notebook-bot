@@ -141,6 +141,9 @@ class Task(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default="now()"
     )
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+
+    __mapper_args__ = {"version_id_col": version}
 
     __table_args__ = (
         CheckConstraint("category IN ('work', 'personal')", name="ck_tasks_category"),
@@ -213,6 +216,18 @@ class ProcessedRequest(Base):
             "status IN ('processing', 'completed', 'failed')",
             name="ck_processed_requests_status",
         ),
+    )
+
+
+class OperationalState(Base):
+    """Persistent operational markers and SLO state."""
+
+    __tablename__ = "operational_state"
+
+    key: Mapped[str] = mapped_column(Text, primary_key=True)
+    value: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default="now()"
     )
 
 

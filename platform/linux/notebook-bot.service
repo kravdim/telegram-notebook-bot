@@ -10,6 +10,7 @@ WorkingDirectory=/opt/notebook-bot
 EnvironmentFile=/opt/notebook-bot/.env
 ExecStartPre=/opt/notebook-bot/.venv/bin/alembic upgrade head
 ExecStartPre=/opt/notebook-bot/.venv/bin/python /opt/notebook-bot/scripts/seed_knowledge.py
+ExecStartPre=/opt/notebook-bot/.venv/bin/python /opt/notebook-bot/scripts/preflight.py
 ExecStart=/opt/notebook-bot/.venv/bin/python -m bot.main
 Restart=always
 RestartSec=10

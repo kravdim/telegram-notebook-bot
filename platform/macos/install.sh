@@ -12,15 +12,12 @@ LOG_DIR="$HOME/Library/Logs/notebook-bot"
 echo "=== Установка Telegram Notebook Bot ==="
 echo "Проект: $PROJECT_DIR"
 
-# 1. Создание виртуального окружения
-if [ ! -d "$VENV_DIR" ]; then
-    echo "Создаю виртуальное окружение..."
-    python3 -m venv "$VENV_DIR"
-fi
-
-# 2. Установка зависимостей
+# 1. Установка зависимостей из lockfile
 echo "Устанавливаю зависимости..."
-"$VENV_DIR/bin/pip" install -r "$PROJECT_DIR/requirements.txt"
+if ! command -v uv >/dev/null 2>&1; then
+    brew install uv
+fi
+uv sync --project "$PROJECT_DIR" --frozen --no-dev --extra stt
 
 # 3. Создание директории логов
 mkdir -p "$LOG_DIR"
@@ -28,7 +25,6 @@ mkdir -p "$LOG_DIR"
 # 4. Копирование и настройка plist
 echo "Настраиваю LaunchAgent..."
 sed \
-    -e "s|__VENV_PATH__|$VENV_DIR|g" \
     -e "s|__PROJECT_PATH__|$PROJECT_DIR|g" \
     -e "s|__HOME__|$HOME|g" \
     "$PLIST_SRC" > "$PLIST_DST"

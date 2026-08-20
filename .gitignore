@@ -35,6 +35,16 @@ logs/
 # Database
 *.sql.bak
 *.dump
+*.sql
+*.sql.gz
+*.sql.gz.sha256
+backups/
+!platform/linux/init-db.sql
+
+# Telegram/local sessions and credentials
+*.session
+*.session-journal
+credentials.json
 
 # Alembic
 alembic.ini.local

@@ -32,7 +32,9 @@ sudo chown -R notebook:notebook /var/lib/notebook-bot
 
 # Создаём venv
 sudo -u notebook python3.12 -m venv /opt/notebook-bot/.venv
-sudo -u notebook /opt/notebook-bot/.venv/bin/pip install -r /opt/notebook-bot/requirements.txt
+sudo -u notebook /opt/notebook-bot/.venv/bin/pip install uv==0.11.21
+sudo -u notebook /opt/notebook-bot/.venv/bin/uv sync \
+    --project /opt/notebook-bot --frozen --no-dev --extra stt
 
 # Настраиваем PostgreSQL
 sudo -u postgres psql -c "CREATE USER notebook;" 2>/dev/null || true
@@ -52,6 +54,7 @@ sudo -u notebook sed -i \
 # Миграции
 cd /opt/notebook-bot
 sudo -u notebook PYTHONPATH=/opt/notebook-bot /opt/notebook-bot/.venv/bin/alembic upgrade head
+sudo -u notebook PYTHONPATH=/opt/notebook-bot /opt/notebook-bot/.venv/bin/python scripts/preflight.py
 
 # Systemd
 sudo cp platform/linux/notebook-bot.service /etc/systemd/system/

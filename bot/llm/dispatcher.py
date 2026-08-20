@@ -7,6 +7,7 @@ from typing import Any, Dict, Optional, Tuple
 
 import pendulum
 from json_repair import repair_json
+from pydantic import ValidationError
 
 from bot.db.crud.diary import create_diary_entry
 from bot.db.crud.notes import create_note
@@ -18,13 +19,14 @@ from bot.db.crud.projects import (
 )
 from bot.db.crud.reminders import create_reminder, is_valid_repeat_rule, upsert_task_reminder
 from bot.db.crud.tasks import (
-    complete_task_by_id, count_similar_completed, create_task, get_frog,
+    ConcurrentTaskUpdateError, complete_task_by_id, count_similar_completed, create_task, get_frog,
     get_today_tasks, get_user_tasks, search_tasks,
     update_task as crud_update_task,
 )
 from bot.db.crud.trips import get_active_trip
 from bot.db.engine import async_session
 from bot.llm.contracts import Action
+from bot.observability import metrics
 
 logger = logging.getLogger(__name__)
 
@@ -91,7 +93,15 @@ async def dispatch(
         else:
             logger.warning("Неизвестная функция: %s", name)
             return "Не удалось обработать команду. Попробуй переформулировать."
+    except ConcurrentTaskUpdateError:
+        logger.warning("Конкурентное изменение задачи: %s", function_call.get("name", "?"))
+        return "Задача уже изменилась в другом запросе. Проверь актуальное состояние и повтори команду."
+    except ValidationError as e:
+        metrics.increment("llm.invalid_tool")
+        logger.warning("LLM tool contract rejected: %s", e)
+        return "Ошибка распознавания команды. Переформулируй её, пожалуйста."
     except Exception as e:
+        metrics.increment("llm.tool_error")
         logger.error(
             "Ошибка при выполнении tool call %s: %s",
             function_call.get("name", "?"), e, exc_info=True,

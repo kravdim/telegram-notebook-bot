@@ -29,6 +29,11 @@ scheduler:
   backup_retention_days: 30
   llm_log_retention_days: 90
 
+slo:
+  # Alert when the oldest due reminder or last successful backup exceeds target.
+  reminder_lag_seconds: 120
+  backup_max_age_hours: 30
+
 chronometry:
   default_interval_min: 60
   onboarding_week1_interval: 60

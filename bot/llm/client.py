@@ -8,6 +8,7 @@ from typing import Any, Dict, List, Optional
 from openai import APIConnectionError, APIError, APITimeoutError, AsyncOpenAI, RateLimitError
 
 from bot.config import settings
+from bot.observability import metrics
 
 logger = logging.getLogger(__name__)
 
@@ -100,6 +101,7 @@ class LLMClient:
 
         # Fallback
         try:
+            metrics.increment("llm.fallback")
             return await self._call(
                 self.fallback_client, self.fallback_model, messages, functions,
                 timeout, self.fallback_max_retries,
@@ -137,6 +139,7 @@ class LLMClient:
             try:
                 response = await client.chat.completions.create(**kwargs)
                 elapsed_ms = int((time.monotonic() - start) * 1000)
+                metrics.observe("llm.latency_ms", float(elapsed_ms))
 
                 choice = response.choices[0]
                 content = re.sub(r"<think>.*?</think>", "", choice.message.content or "", flags=re.DOTALL).strip() if choice.message.content else choice.message.content
@@ -162,12 +165,14 @@ class LLMClient:
                     latency_ms=elapsed_ms,
                 )
             except (APIConnectionError, APITimeoutError, RateLimitError) as e:
+                metrics.increment("llm.error")
                 last_error = e
                 if attempt < max_retries:
                     logger.info("Retry %d/%d for %s: %s", attempt + 1, max_retries, model, e)
                     continue
                 raise
             except APIError as e:
+                metrics.increment("llm.error")
                 if e.status_code and e.status_code >= 500:
                     last_error = e
                     if attempt < max_retries:

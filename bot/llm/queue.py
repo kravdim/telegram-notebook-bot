@@ -7,6 +7,8 @@ import itertools
 from dataclasses import dataclass, field
 from typing import Any, Callable, Coroutine
 
+from bot.observability import metrics
+
 logger = logging.getLogger(__name__)
 
 # Приоритеты: меньше = важнее
@@ -70,6 +72,7 @@ class LLMQueue:
             future=future,
         )
         await self._queue.put(task)
+        metrics.gauge("llm.queue_depth", float(self._queue.qsize()))
         try:
             return await asyncio.wait_for(future, timeout=timeout)
         except asyncio.TimeoutError:
@@ -83,6 +86,7 @@ class LLMQueue:
         """Обработка очереди последовательно."""
         while True:
             task = await self._queue.get()
+            metrics.gauge("llm.queue_depth", float(self._queue.qsize()))
             try:
                 task.execution_task = asyncio.create_task(task.coro)
                 result = await task.execution_task

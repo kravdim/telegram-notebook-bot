@@ -126,7 +126,7 @@ telegram-notebook-bot/
 │       └── install.sh              # Установка на VPS
 ├── config.yaml.example             # Модели, роутинг, параметры
 ├── .env.example                    # API-ключи
-├── requirements.txt
+├── pyproject.toml / uv.lock    # зависимости и воспроизводимый lockfile
 ├── alembic.ini
 ├── CLAUDE.md                       # Этот файл
 └── docs/

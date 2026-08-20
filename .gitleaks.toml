@@ -1,0 +1,8 @@
+title = "DailyPlanner gitleaks configuration"
+
+[allowlist]
+description = "Documentation and explicit placeholders"
+paths = [
+  '''config\.yaml\.example''',
+  '''\.env\.example''',
+]

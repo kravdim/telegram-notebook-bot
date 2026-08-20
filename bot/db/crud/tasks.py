@@ -7,8 +7,23 @@ from typing import Any, Dict, List, Optional
 import pendulum
 from sqlalchemy import select, and_
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm.exc import StaleDataError
 
 from bot.db.models import Task
+
+
+class ConcurrentTaskUpdateError(RuntimeError):
+    """The task changed after it was loaded; caller should retry explicitly."""
+
+
+async def _commit(session: AsyncSession) -> None:
+    try:
+        await session.commit()
+    except StaleDataError as exc:
+        await session.rollback()
+        raise ConcurrentTaskUpdateError(
+            "task was changed by another request"
+        ) from exc
 
 
 async def create_task(
@@ -30,7 +45,7 @@ async def create_task(
     )
     session.add(task)
     if commit:
-        await session.commit()
+        await _commit(session)
     else:
         await session.flush()
     await session.refresh(task)
@@ -130,7 +145,7 @@ async def set_frog(
 
     task.is_frog = True
     if commit:
-        await session.commit()
+        await _commit(session)
     else:
         await session.flush()
     await session.refresh(task)
@@ -192,7 +207,7 @@ async def complete_task(
     task.status = "done"
     task.resolution = "completed"
     task.completed_at = pendulum.now("UTC")
-    await session.commit()
+    await _commit(session)
     await session.refresh(task)
     return task
 
@@ -210,7 +225,7 @@ async def complete_task_by_id(
     task.status = "done"
     task.resolution = "completed"
     task.completed_at = pendulum.now("UTC")
-    await session.commit()
+    await _commit(session)
     await session.refresh(task)
     return task
 
@@ -238,7 +253,7 @@ async def update_task(
         task.completed_at = pendulum.now("UTC")
 
     if commit:
-        await session.commit()
+        await _commit(session)
     else:
         await session.flush()
     await session.refresh(task)
@@ -366,5 +381,5 @@ async def delete_task(
         return False
 
     await session.delete(task)
-    await session.commit()
+    await _commit(session)
     return True

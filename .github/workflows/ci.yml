@@ -1,0 +1,73 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: planner
+          POSTGRES_PASSWORD: planner
+          POSTGRES_DB: planner_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U planner -d planner_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql+asyncpg://planner:planner@localhost:5432/planner_test
+      BOT_TOKEN: ci-placeholder-not-a-token
+      ALLOW_ALL_USERS: "true"
+      RUN_DB_TESTS: "1"
+      BACKUP_DIR: /tmp/dailyplanner-backups
+      PYTHONPATH: .
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - run: uv sync --frozen --group dev
+      - name: Lint all code for correctness errors
+        run: uv run ruff check bot scripts tests --select E9,F63,F7,F82
+      - name: Strict lint for operational hardening code
+        run: >-
+          uv run ruff check bot/runtime bot/observability.py scripts/preflight.py
+          scripts/restore_drill.py scripts/secret_scan.py
+          scripts/evaluate_llm_contracts.py scripts/run_postgres_drill.py
+          tests/test_operational_reliability.py tests/integration
+      - name: Typecheck operational boundaries
+        run: >-
+          uv run mypy bot/runtime bot/observability.py bot/db/crud/operational.py
+          scripts/preflight.py scripts/restore_drill.py scripts/secret_scan.py
+          scripts/run_postgres_drill.py
+      - run: uv run alembic upgrade head
+      - name: Require a single Alembic head
+        run: test "$(uv run alembic heads | wc -l)" -eq 1
+      - run: uv run pytest
+      - run: uv run python scripts/evaluate_llm_contracts.py
+      - name: Create and restore a real backup
+        run: |
+          backup="$(uv run python -c 'import asyncio; from bot.scheduler.backup import run_backup; print(asyncio.run(run_backup()))')"
+          uv run python scripts/restore_drill.py "$backup"
+      - run: uv run python scripts/secret_scan.py
+      - run: docker build -f platform/linux/Dockerfile -t dailyplanner:${{ github.sha }} .
+
+  secrets:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

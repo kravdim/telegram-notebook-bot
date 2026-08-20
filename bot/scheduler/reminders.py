@@ -10,6 +10,7 @@ from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
 from bot.db.crud.reminders import get_pending_reminders, mark_sent, record_delivery_failure
 from bot.db.engine import async_session
 from bot.handlers.callbacks import build_snooze_keyboard
+from bot.observability import metrics
 
 logger = logging.getLogger(__name__)
 
@@ -31,8 +32,14 @@ async def send_pending_reminders(bot: Bot) -> None:
                     reply_markup=kb.as_markup(),
                 )
                 await mark_sent(session, reminder.id)
+                metrics.increment("reminders.delivered")
+                metrics.observe(
+                    "reminders.delivery_lag_seconds",
+                    max(0.0, (now - pendulum.instance(reminder.remind_at)).total_seconds()),
+                )
                 logger.info("Напоминание %s отправлено пользователю %s", reminder.id, reminder.user_id)
             except Exception as e:
+                metrics.increment("reminders.delivery_error")
                 logger.error(
                     "Не удалось отправить напоминание %s: %s", reminder.id, e, exc_info=True
                 )

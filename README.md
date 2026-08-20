@@ -68,10 +68,9 @@
 git clone https://github.com/kravdim/telegram-notebook-bot.git
 cd telegram-notebook-bot
 
-# Виртуальное окружение
-python3 -m venv .venv
+# Воспроизводимое окружение из lockfile
+uv sync --frozen --extra stt
 source .venv/bin/activate
-pip install -r requirements.txt
 
 # Конфигурация
 cp .env.example .env
@@ -237,6 +236,14 @@ Telegram-сообщения дедуплицируются в PostgreSQL.
 - **json_repair** — автокоррекция невалидного JSON от LLM
 - **Бэкапы** — ежедневный pg_dump, SHA-256 checksum и ротация 30 дней
 - **Graceful shutdown** — корректное завершение при SIGTERM
+- **Singleton runtime** — PostgreSQL advisory lock исключает второй scheduler/polling
+- **Restore drill** — backup проверяется по SHA-256 и восстанавливается в одноразовую БД
+- **SLO** — `/status` и Telegram-alert для задержки напоминаний и возраста backup
+- **CI** — lockfile, lint/typecheck, unit/integration restart tests, Alembic single-head,
+  restore drill, secret scan и Docker build
+
+Эксплуатация и разработка: [runbook](docs/OPERATIONS.md),
+[границы архитектуры](docs/ARCHITECTURE.md), [privacy/retention](docs/PRIVACY.md).
 
 ## Команды бота
 

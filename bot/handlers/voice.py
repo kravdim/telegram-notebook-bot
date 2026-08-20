@@ -11,6 +11,7 @@ from aiogram.types import CallbackQuery, Message
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from bot.db.engine import async_session
+from bot.observability import metrics
 
 logger = logging.getLogger(__name__)
 
@@ -98,7 +99,9 @@ async def handle_voice(message: Message) -> None:
 
     try:
         text = await _stt_client.transcribe(tmp_path)
+        metrics.increment("stt.success")
     except Exception as e:
+        metrics.increment("stt.error")
         logger.error("Ошибка STT: %s", e)
         await message.answer("Не удалось распознать голосовое. Попробуй ещё раз.")
         return

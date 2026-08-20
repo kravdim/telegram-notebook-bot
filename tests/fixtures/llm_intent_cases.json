@@ -1,0 +1,20 @@
+[
+  {
+    "description": "Russian date and timezone are preserved in a create action",
+    "raw": {"name": "create_task", "arguments": "{\"title\":\"Позвонить врачу\",\"scheduled_date\":\"2026-08-20\",\"due_time\":\"09:30\"}"},
+    "name": "create_task",
+    "scheduled_date": "2026-08-20"
+  },
+  {
+    "description": "A recurring reminder has a supported normalized rule",
+    "raw": {"name": "create_reminder", "arguments": "{\"message\":\"Пить воду\",\"remind_at\":\"2026-08-20T10:00:00+03:00\",\"repeat_rule\":\"weekdays\"}"},
+    "name": "create_reminder",
+    "repeat_rule": "weekdays"
+  },
+  {
+    "description": "Recoverable provider JSON remains contract-compatible",
+    "raw": {"name": "update_task", "arguments": "{'search_query':'отчёт','updates':{'scheduled_date':'2026-08-21'}}"},
+    "name": "update_task",
+    "scheduled_date": "2026-08-21"
+  }
+]

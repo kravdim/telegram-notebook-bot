@@ -12,4 +12,5 @@ until alembic upgrade head; do
 done
 
 python scripts/seed_knowledge.py
+python scripts/preflight.py
 exec python -m bot.main
