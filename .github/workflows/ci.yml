@@ -27,6 +27,7 @@ jobs:
     env:
       DATABASE_URL: postgresql+asyncpg://planner:planner@localhost:5432/planner_test
       BOT_TOKEN: ci-placeholder-not-a-token
+      MINIMAX_API_KEY: ci-placeholder-not-a-key
       ALLOW_ALL_USERS: "true"
       RUN_DB_TESTS: "1"
       BACKUP_DIR: /tmp/dailyplanner-backups
