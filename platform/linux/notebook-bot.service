@@ -16,6 +16,7 @@ Restart=always
 RestartSec=10
 Environment=PYTHONPATH=/opt/notebook-bot
 Environment=BACKUP_DIR=/var/lib/notebook-bot/backups
+Environment=HF_HUB_OFFLINE=1
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict

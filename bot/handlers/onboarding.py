@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 
 from aiogram import F, Router
 from aiogram.filters import Command
@@ -58,6 +59,7 @@ async def cmd_start(message: Message, state: FSMContext) -> None:
         await message.answer(
             "Похоже, мы не закончили настройку. Продолжим с того места, где остановились!"
         )
+        await _resend_current_step(message, state, current_state)
         return
 
     first_name = message.from_user.first_name or "друг"
@@ -96,13 +98,60 @@ async def onb_name_custom(callback: CallbackQuery, state: FSMContext) -> None:
 async def onb_name_text(message: Message, state: FSMContext) -> None:
     """Пользователь ввёл имя текстом."""
     name = message.text.strip() if message.text else "друг"
+    if not _is_valid_name(name):
+        await message.answer(
+            "Имя должно содержать 1–3 слова из букв, дефиса или апострофа "
+            "и быть не длиннее 50 символов. Попробуй ещё раз."
+        )
+        return
     await _save_name_and_proceed_msg(message, state, name)
+
+
+def _is_valid_name(name: str) -> bool:
+    parts = name.strip().split()
+    if not 1 <= len(parts) <= 3 or len(name) > 50:
+        return False
+    return all(
+        re.fullmatch(r"[A-Za-zА-Яа-яЁё]+(?:[-'][A-Za-zА-Яа-яЁё]+)*", part)
+        for part in parts
+    )
+
+
+async def _resend_current_step(
+    message: Message, state: FSMContext, current_state: str
+) -> None:
+    """Повторить актуальный вопрос, чтобы resume не зависел от истории чата."""
+    data = await state.get_data()
+    if current_state == OnboardingStates.step_name.state:
+        await message.answer("Как тебя зовут? Введи имя (1–3 слова).")
+    elif current_state == OnboardingStates.step_timezone.state:
+        await _send_timezone_step(message, state, str(data.get("username") or "друг"))
+    elif current_state == OnboardingStates.step_timezone_input.state:
+        await message.answer("Введи часовой пояс, например Europe/Moscow.")
+    elif current_state == OnboardingStates.step_digest_times.state:
+        await _send_digest_step(message, state)
+    elif current_state == OnboardingStates.step_digest_times_input.state:
+        await message.answer(
+            "Введи время: утро=08:00 вечер=21:00 мемуарник=20:45"
+        )
+    elif current_state == OnboardingStates.step_work_schedule.state:
+        await _send_work_schedule_step(message, state)
+    elif current_state == OnboardingStates.step_work_schedule_input.state:
+        await message.answer(
+            "Введи график: дни=пн,вт,ср,чт,пт начало=09:00 конец=18:00"
+        )
+    elif current_state == OnboardingStates.step_concepts.state:
+        await _send_concepts_step(message, state)
+    elif current_state == OnboardingStates.step_first_task.state:
+        await message.answer("Напиши первую задачу или нажми «Пропустить».")
 
 
 async def _save_name_and_proceed(callback: CallbackQuery, state: FSMContext, name: str) -> None:
     """Сохраняет имя и переходит к шагу 2."""
     await callback.answer()
     user_id = callback.from_user.id
+    if not _is_valid_name(name):
+        name = "друг"
 
     async with async_session() as session:
         await get_or_create_user(session, user_id, username=name)

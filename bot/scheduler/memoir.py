@@ -4,6 +4,7 @@ import logging
 
 import pendulum
 from aiogram import Bot
+from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from bot.db.crud.chronometry import get_today_entries
 from bot.db.crud.memoir import get_memoir_entries
@@ -32,6 +33,13 @@ def get_memoir_message_id(user_id: int) -> int | None:
 def clear_awaiting_memoir(user_id: int) -> None:
     """Очистить флаг ожидания ответа на мемуарник."""
     _awaiting_memoir.pop(user_id, None)
+
+
+def build_memoir_keyboard():
+    """Кнопка позволяет явно закрыть ожидание ответа."""
+    kb = InlineKeyboardBuilder()
+    kb.button(text="Пропустить", callback_data="memoir_skip")
+    return kb.as_markup()
 
 
 async def send_memoir_prompts(bot: Bot) -> None:
@@ -71,6 +79,7 @@ async def send_memoir_prompts(bot: Bot) -> None:
                             chat_id=user.telegram_id,
                             text=format_memoir_question(),
                             parse_mode="HTML",
+                            reply_markup=build_memoir_keyboard(),
                         )
                         _awaiting_memoir[user.telegram_id] = sent.message_id
                         await _persist_memoir_state(user.telegram_id, sent.message_id)
@@ -122,6 +131,7 @@ async def _send_weekly_review(bot: Bot, user, tz: str) -> None:
         chat_id=user.telegram_id,
         text=format_memoir_question(),
         parse_mode="HTML",
+        reply_markup=build_memoir_keyboard(),
     )
     _awaiting_memoir[user.telegram_id] = sent.message_id
     await _persist_memoir_state(user.telegram_id, sent.message_id)
@@ -137,7 +147,7 @@ async def _persist_memoir_state(user_id: int, message_id: int) -> None:
                 user_id,
                 "memoir",
                 payload={"message_id": message_id},
-                ttl_minutes=12 * 60,
+                ttl_minutes=60,
             )
     except Exception as e:
         logger.warning("Не удалось сохранить ожидание мемуарника: %s", e)

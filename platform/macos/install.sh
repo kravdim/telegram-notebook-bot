@@ -18,6 +18,10 @@ if ! command -v uv >/dev/null 2>&1; then
     brew install uv
 fi
 uv sync --project "$PROJECT_DIR" --frozen --no-dev --extra stt
+echo "Загружаю и проверяю локальную STT-модель..."
+cd "$PROJECT_DIR"
+DAILYPLANNER_STT_CACHE="$HOME/Library/Caches/notebook-bot/huggingface" \
+    "$VENV_DIR/bin/python" scripts/prefetch_stt_model.py
 
 # 3. Создание директории логов
 mkdir -p "$LOG_DIR"

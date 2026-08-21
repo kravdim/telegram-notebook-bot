@@ -2,6 +2,8 @@
 
 import asyncio
 import logging
+import os
+import threading
 from pathlib import Path
 
 from bot.config import settings
@@ -18,17 +20,28 @@ class LocalWhisperClient(STTClient):
         stt_cfg = yaml_cfg.get("stt", {})
         self.model_size = stt_cfg.get("model", "medium")
         self.language = stt_cfg.get("language", "ru")
+        self.local_files_only = bool(stt_cfg.get("local_files_only", True))
+        self.download_root = stt_cfg.get("download_root") or os.environ.get(
+            "DAILYPLANNER_STT_CACHE"
+        )
         self._model = None
+        self._load_lock = threading.Lock()
 
     def _load_model(self):
         """Ленивая загрузка модели."""
-        if self._model is None:
+        if self._model is not None:
+            return
+        with self._load_lock:
+            if self._model is not None:
+                return
             try:
                 from faster_whisper import WhisperModel
                 self._model = WhisperModel(
                     self.model_size,
                     device="cpu",
                     compute_type="int8",
+                    local_files_only=self.local_files_only,
+                    download_root=self.download_root,
                 )
                 logger.info("Whisper модель загружена: %s", self.model_size)
             except ImportError:
@@ -60,5 +73,6 @@ class LocalWhisperClient(STTClient):
             loop = asyncio.get_running_loop()
             await loop.run_in_executor(None, self._load_model)
             return self._model is not None
-        except Exception:
+        except Exception as exc:
+            logger.warning("Whisper health check failed: %s", exc, exc_info=True)
             return False

@@ -1,5 +1,6 @@
 """Обработчик голосовых сообщений: STT → confirm → обработка."""
 
+import asyncio
 import logging
 import tempfile
 from html import escape
@@ -11,6 +12,7 @@ from aiogram.types import CallbackQuery, Message
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from bot.db.engine import async_session
+from bot.config import settings
 from bot.observability import metrics
 
 logger = logging.getLogger(__name__)
@@ -97,9 +99,22 @@ async def handle_voice(message: Message) -> None:
         tmp_path = Path(tmp.name)
         await message.bot.download_file(file.file_path, tmp_path)
 
+    await message.answer("🎤 Распознаю голосовое…")
     try:
-        text = await _stt_client.transcribe(tmp_path)
+        timeout_sec = int(
+            settings.yaml_config.get("stt", {}).get("timeout_sec", 90)
+        )
+        text = await asyncio.wait_for(
+            _stt_client.transcribe(tmp_path), timeout=timeout_sec
+        )
         metrics.increment("stt.success")
+    except asyncio.TimeoutError:
+        metrics.increment("stt.timeout")
+        logger.error("STT timeout")
+        await message.answer(
+            "Распознавание заняло слишком много времени. Попробуй более короткое голосовое."
+        )
+        return
     except Exception as e:
         metrics.increment("stt.error")
         logger.error("Ошибка STT: %s", e)

@@ -67,9 +67,36 @@ _FAKE_MUTATION_RE = re.compile(
     r"((?:создаю|создал|создан[аоы]?|сохран(?:ил|ена|ено)?)\s+задач[ауы]|"
     r"задач[ауы]\s+(?:создан[аоы]?|создал|создаю|сохран(?:ил|ена|ено)?|выполнен[аоы]?|удален[аоы]?|удалена)|"
     r"задач[ауы]\s+«[^»]+»\s+(?:выполнен[аоы]?|удален[аоы]?|удалена|уже\s+была\s+отмечена)|"
+    r"(?:день\s+рождени[яе]|заметк[ауы]|напоминани[ея]|слон|проект)"
+    r"[^.\n]{0,80}?\s+"
+    r"(?:сохран(?:ён|ен|ена|ено|ил[аи]?)|запомн(?:ил[аи]?|ен[ао]?)|создан[аоы]?|установлен[ао]?)|"
+    r"(?:сохран(?:ил[аи]?)|запомн(?:ил[аи]?)|создал[аи]?|установил[аи]?)\s+"
+    r"(?:день\s+рождени[яе]|заметк[уа]|напоминани[ея]|слона?|проект)|"
     r"всё\s+сохранил|готово,\s*всё\s+сохранил|поправил\s+в\s+уме)",
     re.IGNORECASE,
 )
+
+_MUTATION_REQUEST_RE = re.compile(
+    r"(?:\b(?:напомни|напоминание|запомни|сохрани|запиши|создай|сделай|поставь|заведи|добавь|удали|"
+    r"убери|отмени|перенеси|измени|отметь|закрой|день\s+рождения|"
+    r"кажд(?:ый|ую|ое|ые)|ежедневно|по\s+будням|надо|нужно)\b|"
+    r"^\s*(?:заехать|позвонить|купить|сделать|отправить)\b|"
+    r"^\s*встреча\s+(?:в|на)\s+\d{1,2}(?::\d{2})?\b)",
+    re.IGNORECASE,
+)
+
+_MUTATING_TOOLS = {
+    "create_task",
+    "complete_task",
+    "update_task",
+    "delete_task",
+    "create_note",
+    "create_diary_entry",
+    "create_reminder",
+    "add_birthday",
+    "create_project",
+    "complete_project",
+}
 
 _pending_project_completion: dict[int, bool] = {}
 _user_locks: dict[int, asyncio.Lock] = {}
@@ -314,7 +341,8 @@ async def _process_text_message_unlocked(user_id: int, text: str, message: Messa
             await message.answer(part, parse_mode=None)
         return
 
-    # Проверяем, ожидается ли ответ на мемуарник
+    # Явная команда важнее устаревшего ожидания мемуарника, если пользователь
+    # не ответил reply'ем непосредственно на вопрос.
     from bot.scheduler.memoir import is_awaiting_memoir, clear_awaiting_memoir, get_memoir_message_id
     persisted_memoir = await _get_persisted_interaction(user_id, "memoir")
     if is_awaiting_memoir(user_id) or persisted_memoir:
@@ -328,7 +356,9 @@ async def _process_text_message_unlocked(user_id: int, text: str, message: Messa
         if reply_to and memoir_msg_id and reply_to.message_id != memoir_msg_id:
             is_memoir_reply = False
 
-        if is_memoir_reply:
+        if is_memoir_reply and not (
+            reply_to is None and _looks_like_mutation_request(text)
+        ):
             clear_awaiting_memoir(user_id)
             await _clear_persisted_interaction(user_id, "memoir")
             await message.bot.send_chat_action(chat_id=message.chat.id, action="typing")
@@ -403,6 +433,36 @@ async def _process_text_message_unlocked(user_id: int, text: str, message: Messa
         logger.error("Ошибка LLM: %s", e, exc_info=True)
         await message.answer("Произошла ошибка при обработке. Попробуй ещё раз.")
         return
+
+    # Модели иногда имитируют успешную мутацию свободным текстом. Для явного
+    # изменяющего запроса делаем один retry с обязательным вызовом tool.
+    mutation_expected = _looks_like_mutation_request(text) or _looks_like_fake_mutation(
+        response.content or ""
+    )
+    if mutation_expected and not _has_mutating_tool_call(response.function_calls):
+        logger.warning("Mutation intent without tool call; retrying: user=%s", user_id)
+        try:
+            response = await llm_queue.submit(
+                PRIORITY_INTENT,
+                llm_client.chat(
+                    messages=messages,
+                    functions=FUNCTIONS,
+                    tool_choice="required",
+                ),
+            )
+        except Exception as e:
+            logger.error("Ошибка обязательного tool-call retry: %s", e, exc_info=True)
+            await message.answer(
+                "Не удалось надёжно выполнить изменение. Ничего не сохранено — попробуй ещё раз."
+            )
+            return
+        if not _has_mutating_tool_call(response.function_calls):
+            logger.error("Required tool retry returned no mutation: user=%s", user_id)
+            await message.answer(
+                "Не удалось надёжно распознать изменение. Ничего не сохранено — "
+                "переформулируй команду."
+            )
+            return
 
     # Логирование в БД
     async with async_session() as session:
@@ -486,14 +546,18 @@ async def _process_text_message_unlocked(user_id: int, text: str, message: Messa
                         user_id, project_id, task_titles, project_category
                     )
                     tasks_list = "\n".join(f"  • {t}" for t in task_titles)
-                    all_results.append(f"Слон создан, нарезан на {created} бифштексов")
+                    add_message(
+                        user_id,
+                        "assistant",
+                        f"Слон создан, нарезан на {created} бифштексов",
+                    )
                     await message.answer(
                         f"🔪 Нарезано {created} бифштексов:\n{tasks_list}\n\n"
                         "Смотри /projects для прогресса.",
                         parse_mode=None,
                     )
                 else:
-                    all_results.append("Слон создан")
+                    add_message(user_id, "assistant", "Слон создан без декомпозиции")
                     await message.answer(
                         "Не удалось автоматически декомпозировать. "
                         "Добавь задачи вручную."
@@ -609,7 +673,11 @@ def _default_intent_prompt() -> str:
         "list_tasks, create_note, create_diary_entry, create_reminder, "
         "search, get_advice, add_birthday, create_project, complete_project, respond_to_user.\n\n"
         "Никогда не пиши, что задача создана/сохранена свободным текстом: "
-        "для изменения данных обязательно вызывай функцию.\n"
+        "для любого изменения данных обязательно вызывай функцию.\n"
+        "Повторяющееся действие или привычка ('каждый день принимать витамины') — "
+        "create_task с repeat_rule. create_reminder используй только когда пользователь "
+        "явно просит 'напомни' или 'напоминание'. Относительное время 'через N минут' "
+        "обязательно преобразуй в ISO datetime и вызови create_reminder.\n"
         "Множественные действия: вызывай НЕСКОЛЬКО функций если в сообщении "
         "несколько намерений.\n"
         "respond_to_user — КОРОТКО, макс 2-3 предложения.\n"
@@ -791,6 +859,15 @@ def _looks_like_chronometry_activity(text: str) -> bool:
 def _looks_like_fake_mutation(content: str) -> bool:
     """Свободный ответ LLM не должен заявлять, что что-то сохранил."""
     return bool(_FAKE_MUTATION_RE.search(content))
+
+
+def _looks_like_mutation_request(text: str) -> bool:
+    """Консервативно определить запрос, который должен менять данные."""
+    return bool(_MUTATION_REQUEST_RE.search(text))
+
+
+def _has_mutating_tool_call(function_calls: list[dict]) -> bool:
+    return any(call.get("name") in _MUTATING_TOOLS for call in function_calls)
 
 
 def _looks_like_chronometry_answer(text: str) -> bool:

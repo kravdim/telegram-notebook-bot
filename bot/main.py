@@ -35,7 +35,12 @@ from bot.scheduler.weekly_review import send_weekly_review
 from bot.scheduler.reindex import reindex_missing_embeddings
 from bot.scheduler.sweep import sweep_missed_reminders
 from bot.runtime.singleton import SingletonLease
-from bot.observability import alert_slo_violations, evaluate_slos, observe_job
+from bot.observability import (
+    alert_slo_violations,
+    evaluate_slos,
+    install_telegram_conflict_alert,
+    observe_job,
+)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -43,6 +48,13 @@ logging.basicConfig(
     stream=sys.stdout,
 )
 logger = logging.getLogger(__name__)
+
+
+def _tmux_runtime_disallowed() -> bool:
+    """DailyPlanner штатно принадлежит launchd/systemd, не tmux recovery."""
+    return bool(os.environ.get("TMUX")) and os.environ.get(
+        "DAILYPLANNER_ALLOW_TMUX"
+    ) != "1"
 
 
 def _init_embedding_client():
@@ -92,6 +104,12 @@ def _init_stt_client():
 
 async def main() -> None:
     """Запуск бота."""
+    if _tmux_runtime_disallowed():
+        logger.error(
+            "Запуск DailyPlanner внутри tmux запрещён: используйте штатный "
+            "LaunchAgent/systemd (override: DAILYPLANNER_ALLOW_TMUX=1)."
+        )
+        return
     if not settings.bot_token or settings.bot_token == "your_telegram_bot_token":
         logger.error("BOT_TOKEN не задан в .env!")
         sys.exit(1)
@@ -139,7 +157,7 @@ async def main() -> None:
     _init_embedding_client()
 
     # STT
-    _init_stt_client()
+    stt_client = _init_stt_client()
 
     # Очистка контекста при старте
     clear_context()
@@ -276,6 +294,27 @@ async def main() -> None:
             _weekly_review_loop, _maintenance_loop,
         )
     ]
+    if stt_client is not None:
+        async def _warmup_stt() -> None:
+            timeout_sec = int(
+                settings.yaml_config.get("stt", {}).get("warmup_timeout_sec", 120)
+            )
+            try:
+                ready = await asyncio.wait_for(
+                    stt_client.health_check(), timeout=timeout_sec
+                )
+                if ready:
+                    logger.info("STT-модель прогрета и готова")
+                else:
+                    logger.warning("STT-модель не прошла прогрев")
+            except asyncio.TimeoutError:
+                logger.warning("Прогрев STT превысил %s сек", timeout_sec)
+            except Exception as exc:
+                logger.warning("Прогрев STT завершился ошибкой: %s", exc)
+
+        background_tasks.append(
+            asyncio.create_task(_warmup_stt(), name="_warmup_stt")
+        )
 
     # Middleware (порядок: whitelist первым, rate limit вторым)
     dp.message.middleware(WhitelistMiddleware())
@@ -301,10 +340,12 @@ async def main() -> None:
         )
 
     logger.info("Бот запускается...")
+    conflict_handler = install_telegram_conflict_alert(bot, loop)
 
     try:
         await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
     finally:
+        logging.getLogger("aiogram.dispatcher").removeHandler(conflict_handler)
         for task in background_tasks:
             task.cancel()
         await asyncio.gather(*background_tasks, return_exceptions=True)

@@ -35,6 +35,8 @@ sudo -u notebook python3.12 -m venv /opt/notebook-bot/.venv
 sudo -u notebook /opt/notebook-bot/.venv/bin/pip install uv==0.11.21
 sudo -u notebook /opt/notebook-bot/.venv/bin/uv sync \
     --project /opt/notebook-bot --frozen --no-dev --extra stt
+sudo -u notebook env PYTHONPATH=/opt/notebook-bot \
+    /opt/notebook-bot/.venv/bin/python /opt/notebook-bot/scripts/prefetch_stt_model.py
 
 # Настраиваем PostgreSQL
 sudo -u postgres psql -c "CREATE USER notebook;" 2>/dev/null || true

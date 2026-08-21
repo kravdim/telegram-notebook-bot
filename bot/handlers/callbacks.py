@@ -24,6 +24,28 @@ router = Router()
 MAX_SNOOZE = 5
 
 
+@router.callback_query(F.data == "memoir_skip")
+async def cb_memoir_skip(callback: CallbackQuery) -> None:
+    """Закрыть ожидание мемуарника без создания записи."""
+    from bot.db.crud.interaction_states import clear_state, get_state
+    from bot.scheduler.memoir import clear_awaiting_memoir
+
+    user_id = callback.from_user.id
+    clear_awaiting_memoir(user_id)
+    await callback.answer("Пропущено")
+    try:
+        async with async_session() as session:
+            state = await get_state(session, user_id)
+            if state and state.state_type == "memoir":
+                await clear_state(session, user_id)
+    except Exception as exc:
+        logger.warning("Не удалось очистить persistent memoir state: %s", exc)
+    await callback.message.edit_text(
+        "📔 Сегодня без записи. Завтра спрошу снова.",
+        reply_markup=None,
+    )
+
+
 # --- Snooze напоминаний ---
 
 @router.callback_query(F.data.startswith("snooze_30:"))
@@ -109,6 +131,7 @@ async def _do_snooze(
                 new_time,
                 callback.from_user.id,
             )
+            user = await get_user(session, callback.from_user.id)
 
         if not reminder:
             await callback.message.edit_text("Напоминание не найдено.", reply_markup=None)
@@ -124,9 +147,12 @@ async def _do_snooze(
             )
             return
 
-        time_str = new_time.strftime("%d.%m %H:%M") if hasattr(new_time, 'strftime') else str(new_time)
+        timezone = user.timezone if user and user.timezone else "Europe/Moscow"
+        local_time = pendulum.instance(new_time).in_timezone(timezone)
+        time_str = local_time.strftime("%d.%m %H:%M")
+        delay_text = f"Отложено на {minutes} минут — " if minutes else ""
         await callback.message.edit_text(
-            f"⏰ Напомню: {time_str}\n{reminder.message}",
+            f"⏰ {delay_text}напомню: {time_str}\n{reminder.message}",
             parse_mode=None,
             reply_markup=None,
         )

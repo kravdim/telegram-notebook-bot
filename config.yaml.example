@@ -16,6 +16,10 @@ stt:
   provider: local_whisper  # или "groq", "openai"
   model: medium
   language: ru
+  # Модель должна быть загружена при установке; runtime не зависает на сети.
+  local_files_only: true
+  warmup_timeout_sec: 120
+  timeout_sec: 90
 
 bot:
   admin_telegram_ids: []

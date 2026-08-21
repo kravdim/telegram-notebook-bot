@@ -406,7 +406,7 @@ async def test_free_text_fake_task_creation_is_blocked(monkeypatch):
     msg = FakeMessage("какая-то сложная формулировка", user_id=42)
     await messages.process_text_message(42, msg.text, msg)
 
-    assert "Я не сохранил это" in msg.answers[-1][0]
+    assert "Ничего не сохранено" in msg.answers[-1][0]
 
 
 @pytest.mark.asyncio

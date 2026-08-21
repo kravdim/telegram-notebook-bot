@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 from collections import defaultdict, deque
@@ -20,6 +21,73 @@ logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from aiogram import Bot
+
+
+class TelegramConflictAlertHandler(logging.Handler):
+    """Convert aiogram getUpdates conflicts into a metric and admin alert."""
+
+    def __init__(self, bot: "Bot", loop: asyncio.AbstractEventLoop) -> None:
+        super().__init__(level=logging.ERROR)
+        self.bot = bot
+        self.loop = loop
+        self._last_alert_scheduled = 0.0
+
+    def emit(self, record: logging.LogRecord) -> None:
+        if "TelegramConflictError" not in record.getMessage():
+            return
+        metrics.increment("telegram.polling_conflict")
+        now = time.monotonic()
+        if now - self._last_alert_scheduled < 60:
+            return
+        self._last_alert_scheduled = now
+        self.loop.call_soon_threadsafe(
+            asyncio.create_task,
+            _alert_telegram_conflict(self.bot),
+        )
+
+
+async def _alert_telegram_conflict(bot: "Bot") -> None:
+    """Alert at most once per hour for a competing getUpdates poller."""
+    marker_key = "telegram.polling_conflict"
+    try:
+        async with async_session() as session:
+            previous = await get_operational_state(session, marker_key)
+            if previous and pendulum.instance(previous.updated_at) > pendulum.now(
+                "UTC"
+            ).subtract(hours=1):
+                return
+    except Exception as exc:
+        logger.error("Polling conflict throttle lookup failed: %s", exc)
+
+    delivered = False
+    for admin_id in settings.admin_telegram_ids:
+        try:
+            await bot.send_message(
+                admin_id,
+                "🚨 DailyPlanner: обнаружен второй Telegram getUpdates-поллер. "
+                "Проверь VPS и локальные экземпляры бота.",
+            )
+            delivered = True
+        except Exception as exc:
+            logger.error("Polling conflict alert failed for %s: %s", admin_id, exc)
+    if delivered:
+        try:
+            async with async_session() as session:
+                await set_operational_state(
+                    session,
+                    marker_key,
+                    {"detected_at": pendulum.now("UTC").to_iso8601_string()},
+                )
+        except Exception as exc:
+            logger.error("Polling conflict throttle update failed: %s", exc)
+
+
+def install_telegram_conflict_alert(
+    bot: "Bot", loop: asyncio.AbstractEventLoop
+) -> TelegramConflictAlertHandler:
+    handler = TelegramConflictAlertHandler(bot, loop)
+    logging.getLogger("aiogram.dispatcher").addHandler(handler)
+    return handler
 
 
 class MetricsRegistry:

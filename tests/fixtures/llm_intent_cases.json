@@ -16,5 +16,22 @@
     "raw": {"name": "update_task", "arguments": "{'search_query':'отчёт','updates':{'scheduled_date':'2026-08-21'}}"},
     "name": "update_task",
     "scheduled_date": "2026-08-21"
+  },
+  {
+    "description": "A birthday mutation uses the birthday tool",
+    "raw": {"name": "add_birthday", "arguments": "{\"name\":\"мама\",\"date\":\"1900-03-15\",\"year_known\":false}"},
+    "name": "add_birthday"
+  },
+  {
+    "description": "A relative reminder is normalized before dispatch",
+    "raw": {"name": "create_reminder", "arguments": "{\"message\":\"Попить воды\",\"remind_at\":\"2026-08-21T20:02:00+03:00\"}"},
+    "name": "create_reminder"
+  },
+  {
+    "description": "A recurring action is a task rather than a standalone reminder",
+    "raw": {"name": "create_task", "arguments": "{\"title\":\"Принимать витамины\",\"scheduled_date\":\"2026-08-24\",\"due_time\":\"09:00\",\"repeat_rule\":\"weekdays\"}"},
+    "name": "create_task",
+    "scheduled_date": "2026-08-24",
+    "repeat_rule": "weekdays"
   }
 ]

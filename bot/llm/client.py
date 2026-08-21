@@ -82,6 +82,7 @@ class LLMClient:
         functions: Optional[List[Dict]] = None,
         timeout: Optional[float] = None,
         prompt_key: Optional[str] = None,
+        tool_choice: Optional[str] = None,
     ) -> LLMResponse:
         """Отправить запрос. При ошибке main — retry на fallback, если он настроен."""
         # Попытка main. Если fallback не настроен, пробуем main на каждом запросе,
@@ -90,7 +91,7 @@ class LLMClient:
             try:
                 return await self._call(
                     self.main_client, self.main_model, messages, functions,
-                    timeout, self.main_max_retries,
+                    timeout, self.main_max_retries, tool_choice,
                 )
             except (APIConnectionError, APIError, APITimeoutError, RateLimitError) as e:
                 logger.warning("Main LLM (%s) failed: %s.", self.main_model, e)
@@ -104,7 +105,7 @@ class LLMClient:
             metrics.increment("llm.fallback")
             return await self._call(
                 self.fallback_client, self.fallback_model, messages, functions,
-                timeout, self.fallback_max_retries,
+                timeout, self.fallback_max_retries, tool_choice,
             )
         except Exception as e:
             logger.error("Fallback LLM (%s) also failed: %s", self.fallback_model, e)
@@ -118,6 +119,7 @@ class LLMClient:
         functions: Optional[List[Dict]],
         timeout: Optional[float],
         max_retries: int,
+        tool_choice: Optional[str] = None,
     ) -> LLMResponse:
         """Выполнить запрос к конкретному провайдеру."""
         kwargs: Dict[str, Any] = {
@@ -128,7 +130,7 @@ class LLMClient:
             kwargs["tools"] = [
                 {"type": "function", "function": f} for f in functions
             ]
-            kwargs["tool_choice"] = "auto"
+            kwargs["tool_choice"] = tool_choice or "auto"
         if timeout:
             kwargs["timeout"] = timeout
 

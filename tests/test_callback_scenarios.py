@@ -49,8 +49,12 @@ async def test_snooze_limit_message(monkeypatch):
         assert user_id == 42
         return SimpleNamespace(snooze_count=5, message="Позвонить")
 
+    async def fake_user(session, user_id):
+        return SimpleNamespace(timezone="Europe/Moscow")
+
     monkeypatch.setattr(callbacks, "async_session", lambda: FakeSessionContext())
     monkeypatch.setattr(callbacks, "snooze_reminder", fake_snooze)
+    monkeypatch.setattr(callbacks, "get_user", fake_user)
 
     callback = FakeCallback(user_id=42)
     await callbacks._do_snooze(callback, str(reminder_id), minutes=30)
@@ -58,6 +62,26 @@ async def test_snooze_limit_message(monkeypatch):
     text = callback.message.edits[0][0]
     assert "уже откладывалось 5 раз" in text
     assert "Позвонить" in text
+@pytest.mark.asyncio
+async def test_snooze_confirmation_shows_delay_and_user_timezone(monkeypatch):
+    reminder_id = uuid4()
+
+    async def fake_snooze(session, rid, new_time, user_id):
+        return SimpleNamespace(snooze_count=1, message="Попить воды")
+
+    async def fake_user(session, user_id):
+        return SimpleNamespace(timezone="Europe/Moscow")
+
+    monkeypatch.setattr(callbacks, "async_session", lambda: FakeSessionContext())
+    monkeypatch.setattr(callbacks, "snooze_reminder", fake_snooze)
+    monkeypatch.setattr(callbacks, "get_user", fake_user)
+
+    callback = FakeCallback(user_id=42)
+    await callbacks._do_snooze(callback, str(reminder_id), minutes=30)
+
+    text = callback.message.edits[0][0]
+    assert "Отложено на 30 минут" in text
+    assert "Попить воды" in text
 
 
 @pytest.mark.asyncio

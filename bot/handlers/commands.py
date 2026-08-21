@@ -307,12 +307,23 @@ async def cmd_notes(message: Message) -> None:
 
     lines = ["📝 <b>Последние заметки:</b>\n"]
     for note in notes:
-        title = html.escape(note.title or note.content[:50])
-        date_str = note.created_at.strftime("%d.%m") if note.created_at else ""
-        tags = " ".join(f"#{html.escape(t)}" for t in note.tags) if note.tags else ""
-        lines.append(f"• {title} <i>{date_str}</i> {tags}")
+        lines.append(_format_note_line(note))
 
     await message.answer("\n".join(lines), parse_mode="HTML")
+
+
+def _format_note_line(note: Note) -> str:
+    """Показать не только заголовок, но и полезное содержимое заметки."""
+    raw_title = note.title or note.content[:50]
+    title = html.escape(raw_title)
+    content = note.content.strip()
+    preview = ""
+    if note.title and content and content != note.title:
+        shortened = content if len(content) <= 160 else content[:157] + "…"
+        preview = f" — {html.escape(shortened)}"
+    date_str = note.created_at.strftime("%d.%m") if note.created_at else ""
+    tags = " ".join(f"#{html.escape(t)}" for t in note.tags) if note.tags else ""
+    return f"• {title}{preview} <i>{date_str}</i> {tags}"
 
 
 # --- /projects ---

@@ -3,7 +3,10 @@
 FUNCTIONS = [
     {
         "name": "create_task",
-        "description": "Создать новую задачу",
+        "description": (
+            "Создать новую задачу, включая повторяющееся действие или привычку "
+            "(например, 'каждый будний день принимать витамины')"
+        ),
         "parameters": {
             "type": "object",
             "properties": {
@@ -121,7 +124,10 @@ FUNCTIONS = [
     },
     {
         "name": "create_reminder",
-        "description": "Создать напоминание",
+        "description": (
+            "Создать напоминание только по явной просьбе 'напомни' или 'напоминание'. "
+            "Повторяющиеся действия без слова 'напомни' создавай через create_task"
+        ),
         "parameters": {
             "type": "object",
             "properties": {

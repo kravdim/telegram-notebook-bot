@@ -76,7 +76,7 @@ async def test_weekly_review_splits_long_messages(monkeypatch):
     entries = [entry(i, "x" * 1200) for i in range(1, 8)]
 
     class Bot:
-        async def send_message(self, chat_id, text, parse_mode=None):
+        async def send_message(self, chat_id, text, parse_mode=None, **kwargs):
             sent.append((chat_id, text, parse_mode))
             return SimpleNamespace(message_id=len(sent))
 

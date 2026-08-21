@@ -45,6 +45,7 @@ def main() -> None:
         raise SystemExit("PostgreSQL is required")
     database = f"dailyplanner_ci_drill_{secrets.token_hex(5)}"
     env = os.environ.copy()
+    env["PYTHONPATH"] = str(project)
     env["PGPASSWORD"] = source_url.password or ""
     cli = ["-h", source_url.host or "localhost", "-p", str(source_url.port or 5432)]
     if source_url.username:
