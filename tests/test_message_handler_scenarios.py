@@ -406,7 +406,77 @@ async def test_free_text_fake_task_creation_is_blocked(monkeypatch):
     msg = FakeMessage("какая-то сложная формулировка", user_id=42)
     await messages.process_text_message(42, msg.text, msg)
 
-    assert "Ничего не сохранено" in msg.answers[-1][0]
+    assert "Не понял" in msg.answers[-1][0]
+    assert get_history(42)[-1]["role"] == "assistant"
+
+
+@pytest.mark.asyncio
+async def test_failed_mutation_is_closed_in_history_before_next_turn(monkeypatch):
+    calls = []
+
+    class Client:
+        async def chat(self, *, messages, functions, tool_choice=None):
+            calls.append((list(messages), tool_choice))
+            if len(calls) == 1:
+                return FakeResponse(content="Не уверен, что нужно сделать")
+            if len(calls) == 2:
+                return FakeResponse(
+                    function_calls=[
+                        {
+                            "name": "respond_to_user",
+                            "arguments": {"message": "Когда напомнить и о чём?"},
+                        }
+                    ]
+                )
+            return FakeResponse(
+                function_calls=[
+                    {
+                        "name": "respond_to_user",
+                        "arguments": {"message": "Я на связи."},
+                    }
+                ]
+            )
+
+    class Queue:
+        async def submit(self, priority, coro):
+            return await coro
+
+    async def fake_get_user(session, user_id):
+        return SimpleNamespace(timezone="Europe/Moscow")
+
+    async def fake_get_prompt(session, prompt_key):
+        return "prompt {now} {timezone}"
+
+    async def fake_log(*args, **kwargs):
+        return None
+
+    async def fake_dispatch(function_call, user_id, user_tz):
+        return function_call["arguments"]["message"]
+
+    monkeypatch.setattr(messages, "async_session", lambda: FakeSessionContext())
+    monkeypatch.setattr(messages, "get_user", fake_get_user)
+    monkeypatch.setattr(messages, "get_prompt", fake_get_prompt)
+    monkeypatch.setattr(messages, "dispatch", fake_dispatch)
+    monkeypatch.setattr(messages, "llm_client", Client())
+    monkeypatch.setattr(messages, "llm_queue", Queue())
+    monkeypatch.setattr("bot.db.crud.llm_logs.log_llm_request", fake_log)
+    monkeypatch.setattr(chronometry_scheduler, "is_awaiting_response", lambda _: False)
+
+    first = FakeMessage("напмни через 15 минут воду", user_id=42)
+    await messages.process_text_message(42, first.text, first)
+    assert first.answers[-1][0] == "Когда напомнить и о чём?"
+    assert [item["role"] for item in get_history(42)] == ["user", "assistant"]
+
+    second = FakeMessage("как дела?", user_id=42)
+    await messages.process_text_message(42, second.text, second)
+
+    third_call_messages = calls[2][0]
+    assert third_call_messages[-3:] == [
+        {"role": "user", "content": "напомни через 15 минут воду"},
+        {"role": "assistant", "content": "Когда напомнить и о чём?"},
+        {"role": "user", "content": "как дела?"},
+    ]
+    assert second.answers[-1][0] == "Я на связи."
 
 
 @pytest.mark.asyncio

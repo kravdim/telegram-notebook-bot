@@ -1,7 +1,9 @@
 """CRUD-операции для задач."""
 
+import re
 import uuid
 from datetime import date, datetime
+from difflib import SequenceMatcher
 from typing import Any, Dict, List, Optional
 
 import pendulum
@@ -10,6 +12,30 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm.exc import StaleDataError
 
 from bot.db.models import Task
+
+
+def normalize_task_identity(title: str) -> str:
+    """Нормализовать заголовок для поиска дублей и безопасных мутаций."""
+    value = (title or "").casefold().replace("ё", "е")
+    value = re.sub(r"<[^>]+>", " ", value)
+    value = re.sub(r"[^0-9a-zа-я_-]+", " ", value)
+    value = re.sub(
+        r"^(?:(?:надо|нужно|нужна|нужен|купить|сделать|создать|задача)\s+)+",
+        "",
+        value,
+    )
+    return " ".join(value.split())
+
+
+def task_title_similarity(query: str, title: str) -> float:
+    """Сходство без завышения оценки из-за общего служебного префикса."""
+    left = normalize_task_identity(query)
+    right = normalize_task_identity(title)
+    if not left or not right:
+        return 0.0
+    if left == right:
+        return 1.0
+    return SequenceMatcher(None, left, right).ratio()
 
 
 class ConcurrentTaskUpdateError(RuntimeError):
@@ -175,7 +201,7 @@ async def search_tasks(
         select(Task)
         .where(
             Task.user_id == user_id,
-            or_(normalized_title.ilike(pattern), similarity >= 0.25),
+            or_(normalized_title.ilike(pattern), similarity >= 0.45),
         )
     )
     if status:

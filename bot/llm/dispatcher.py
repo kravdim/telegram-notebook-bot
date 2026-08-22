@@ -1,7 +1,9 @@
 """Исполнение function calls от LLM: валидация + CRUD + ответ."""
 
+import html
 import json
 import logging
+import re
 from datetime import date, datetime, time
 from typing import Any, Dict, Optional, Tuple
 
@@ -20,7 +22,8 @@ from bot.db.crud.projects import (
 from bot.db.crud.reminders import create_reminder, is_valid_repeat_rule, upsert_task_reminder
 from bot.db.crud.tasks import (
     ConcurrentTaskUpdateError, complete_task_by_id, count_similar_completed, create_task, get_frog,
-    get_today_tasks, get_user_tasks, search_tasks,
+    get_today_tasks, get_user_tasks, normalize_task_identity, search_tasks,
+    task_title_similarity,
     update_task as crud_update_task,
 )
 from bot.db.crud.trips import get_active_trip
@@ -29,6 +32,27 @@ from bot.llm.contracts import Action
 from bot.observability import metrics
 
 logger = logging.getLogger(__name__)
+
+
+def _select_confident_task(query: str, tasks: list) -> Any | None:
+    """Выбрать задачу для мутации только при однозначном хорошем совпадении."""
+    normalized_query = normalize_task_identity(query)
+    exact = next(
+        (
+            task for task in tasks
+            if normalize_task_identity(task.title) == normalized_query
+        ),
+        None,
+    )
+    if exact:
+        return exact
+    if len(normalized_query) < 5:
+        return None
+    strong = [
+        task for task in tasks
+        if task_title_similarity(query, task.title) >= 0.6
+    ]
+    return strong[0] if len(strong) == 1 else None
 
 
 def parse_function_call(raw: Dict[str, Any]) -> Tuple[str, Dict[str, Any]]:
@@ -118,6 +142,12 @@ def _validate_title(title: str) -> Optional[str]:
     return None
 
 
+def _sanitize_title(title: str) -> str:
+    """Явно удалить HTML-теги из пользовательского заголовка."""
+    without_tags = re.sub(r"<[^>]*>", "", title or "")
+    return " ".join(html.unescape(without_tags).split()).strip()
+
+
 def _parse_date(date_str: Optional[str], tz: str) -> Optional[date]:
     """Парсинг даты через pendulum."""
     if not date_str:
@@ -154,7 +184,7 @@ def _parse_datetime(dt_str: Optional[str], tz: str) -> Optional[datetime]:
 async def _handle_create_task(
     user_id: int, args: Dict[str, Any], tz: str
 ) -> str:
-    title = args.get("title", "").strip()
+    title = _sanitize_title(args.get("title", ""))
     err = _validate_title(title)
     if err:
         return err
@@ -200,7 +230,7 @@ async def _handle_create_task(
     async with async_session() as session:
         existing = await search_tasks(session, user_id, title, status="open")
         for t in existing:
-            if t.title.lower().strip() == title.lower().strip():
+            if normalize_task_identity(t.title) == normalize_task_identity(title):
                 dup_info = {
                     "id": t.id, "title": t.title,
                     "scheduled_date": t.scheduled_date, "due_date": t.due_date,
@@ -351,22 +381,15 @@ async def _handle_complete_task(user_id: int, args: Dict[str, Any], tz: str) -> 
                 )
             return "Не нашёл такую задачу. Уточни название."
 
-        exact = next(
-            (
-                candidate
-                for candidate in open_matches
-                if candidate.title.casefold().strip() == query.casefold().strip()
-            ),
-            None,
-        )
-        if len(open_matches) > 1 and exact is None:
+        confident = _select_confident_task(query, open_matches)
+        if confident is None:
             lines = [f"Нашёл несколько задач по «{query}». Уточни название:"]
             for candidate in open_matches[:5]:
                 lines.append(f"  • {candidate.title}")
             return "\n".join(lines)
 
         task = await complete_task_by_id(
-            session, (exact or open_matches[0]).id, user_id
+            session, confident.id, user_id
         )
         if not task:
             return "Не нашёл такую задачу. Уточни название."
@@ -573,7 +596,8 @@ async def _handle_create_note(user_id: int, args: Dict[str, Any]) -> str:
     if not content:
         return "Заметка не может быть пустой."
 
-    title = args.get("title")
+    raw_title = args.get("title")
+    title = _sanitize_title(raw_title) if raw_title else None
     tags = args.get("tags", [])
 
     async with async_session() as session:
@@ -730,6 +754,20 @@ async def _handle_search(user_id: int, args: Dict[str, Any]) -> str:
     query = args.get("query", "")
     scope = args.get("scope", "all")
     results = []
+    seen = set()
+    marker_match = re.search(
+        r"\b[А-ЯЁA-Z]\d{1,4}-[\w-]+", query, re.IGNORECASE
+    )
+    exact_marker = marker_match.group(0).casefold() if marker_match else None
+
+    def append_result(rendered: str, searchable: str) -> None:
+        normalized = " ".join(searchable.casefold().replace("ё", "е").split())
+        if exact_marker and exact_marker not in searchable.casefold():
+            return
+        if normalized in seen:
+            return
+        seen.add(normalized)
+        results.append(rendered)
 
     from bot.embeddings.indexer import get_embedding
     query_emb = await get_embedding(query)
@@ -741,7 +779,7 @@ async def _handle_search(user_id: int, args: Dict[str, Any]) -> str:
             tasks = await search_tasks(session, user_id, query)
             for t in tasks[:5]:
                 status = "✅" if t.status == "done" else "📌"
-                results.append(f"{status} {t.title}")
+                append_result(f"{status} {t.title}", t.title)
 
         # Поиск по заметкам (гибридный)
         if scope in ("all", "notes"):
@@ -749,7 +787,8 @@ async def _handle_search(user_id: int, args: Dict[str, Any]) -> str:
             rows = await hybrid_search_notes(session, user_id, query, emb_str)
             for row in rows:
                 title = row.title or (row.content[:50] if hasattr(row, "content") else str(row)[:50])
-                results.append(f"📝 {title}")
+                content = row.content if hasattr(row, "content") else str(row)
+                append_result(f"📝 {title}", f"{title} {content}")
 
         # Поиск по дневнику (гибридный)
         if scope in ("all", "diary"):
@@ -757,7 +796,7 @@ async def _handle_search(user_id: int, args: Dict[str, Any]) -> str:
             rows = await hybrid_search_diary(session, user_id, query, emb_str)
             for row in rows:
                 content = row.content if hasattr(row, "content") else str(row)
-                results.append(f"📓 {content[:50]}...")
+                append_result(f"📓 {content[:50]}...", content)
 
         # Поиск по мемуарнику (гибридный)
         if scope in ("all", "memoir"):
@@ -765,7 +804,7 @@ async def _handle_search(user_id: int, args: Dict[str, Any]) -> str:
             rows = await hybrid_search_memoir(session, user_id, query, emb_str)
             for row in rows:
                 content = row.content if hasattr(row, "content") else str(row)
-                results.append(f"📔 {content[:50]}...")
+                append_result(f"📔 {content[:50]}...", content)
 
     if results:
         return f"🔍 По запросу «{query}» найдено:\n" + "\n".join(results)
@@ -786,14 +825,15 @@ async def _handle_update_task(user_id: int, args: Dict[str, Any], tz: str = "Eur
         if not tasks:
             return f"Не нашёл задачу «{query}»."
 
-        if len(tasks) > 1:
+        confident = _select_confident_task(query, tasks)
+        if confident is None:
             top3 = tasks[:3]
             lines = [f"Несколько задач похожи на «{query}». Уточни:"]
-            for i, t in enumerate(top3, 1):
-                lines.append(f"  {i}. {t.title}")
+            for i, task in enumerate(top3, 1):
+                lines.append(f"  {i}. {task.title}")
             return "\n".join(lines)
 
-        task = tasks[0]
+        task = confident
         # Фильтруем допустимые поля
         allowed = {"title", "priority", "is_frog", "scheduled_date", "due_date", "due_time", "status"}
         clean_updates = {k: v for k, v in updates.items() if k in allowed}
@@ -819,6 +859,7 @@ async def _handle_update_task(user_id: int, args: Dict[str, Any], tz: str = "Eur
             clean_updates["due_time"] = parsed_time
 
         if "title" in clean_updates:
+            clean_updates["title"] = _sanitize_title(str(clean_updates["title"]))
             err = _validate_title(str(clean_updates["title"]))
             if err:
                 return err
@@ -852,22 +893,23 @@ async def _handle_delete_task(user_id: int, args: Dict[str, Any]) -> str:
         if not tasks:
             return f"Не нашёл задачу «{query}»."
 
-        if len(tasks) > 1:
+        confident = _select_confident_task(query, tasks)
+        if confident is None:
             top3 = tasks[:3]
-            lines = [f"Несколько задач похожи на «{query}». Уточни:"]
-            for i, t in enumerate(top3, 1):
-                lines.append(f"  {i}. {t.title}")
-            return "\n".join(lines)
+            choices = [
+                {"id": str(task.id), "title": task.title} for task in top3
+            ]
+            return "CHOOSE_DELETE:" + json.dumps(choices, ensure_ascii=False)
 
-        task_id = tasks[0].id
-        task_title = tasks[0].title
+        task_id = confident.id
+        task_title = confident.title
 
     # Возвращаем текст с предложением confirm — кнопки добавит message handler
     return f"CONFIRM_DELETE:{task_id}:{task_title}"
 
 
 async def _handle_create_project(user_id: int, args: Dict[str, Any]) -> str:
-    title = args.get("title", "").strip()
+    title = _sanitize_title(args.get("title", ""))
     err = _validate_title(title)
     if err:
         return err

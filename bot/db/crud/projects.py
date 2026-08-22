@@ -1,9 +1,10 @@
 """CRUD-операции для проектов (слонов)."""
 
+import re
 import uuid
 from typing import List, Optional
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from bot.db.models import Project, Task
@@ -61,7 +62,13 @@ async def search_projects(
     status: Optional[str] = "active",
 ) -> List[Project]:
     """Поиск проектов пользователя по названию."""
-    q = select(Project).where(Project.user_id == user_id, Project.title.ilike(f"%{query}%"))
+    stripped_query = re.sub(
+        r"^[А-ЯЁA-Z]\d{1,4}-", "", (query or "").strip(), flags=re.IGNORECASE
+    ).strip()
+    patterns = [Project.title.ilike(f"%{query}%")]
+    if stripped_query and stripped_query.casefold() != query.casefold():
+        patterns.append(Project.title.ilike(f"%{stripped_query}%"))
+    q = select(Project).where(Project.user_id == user_id, or_(*patterns))
     if status is not None:
         q = q.where(Project.status == status)
     result = await session.execute(q.order_by(Project.created_at.desc()).limit(10))

@@ -165,7 +165,10 @@ async def cb_voice_confirm(callback: CallbackQuery) -> None:
 
     await _clear_voice_state(user_id)
 
-    await callback.message.edit_text(f"🎤 {text}", parse_mode=None)
+    await callback.message.edit_text(
+        f"🎤 {text}\n\n⏳ Выполняю подтверждённую команду…",
+        parse_mode=None,
+    )
 
     # Обрабатываем распознанный текст через LLM
     from bot.handlers.messages import process_text_message

@@ -36,6 +36,14 @@ router = Router()
 _PRIORITY_EMOJI = {"high": "🔴", "medium": "🟡", "normal": "⚪"}
 
 
+def _birthday_in_year(birth_date: date, year: int) -> date:
+    """Дата празднования в году; 29 февраля — 28 февраля в невисокосный."""
+    try:
+        return birth_date.replace(year=year)
+    except ValueError:
+        return date(year, 2, 28)
+
+
 def _format_task(task) -> str:
     """Форматирование задачи для вывода."""
     emoji = _PRIORITY_EMOJI.get(task.priority, "⚪")
@@ -62,11 +70,13 @@ async def cmd_help(message: Message) -> None:
         "/notes — заметки\n"
         "/projects — проекты (слоны)\n"
         "/memoir — мемуарник\n"
-        "/chrono — хронометраж\n"
-        "/focus — режим фокуса\n"
+        "/chrono — фото дня; /chrono week — неделя\n"
+        "/focus — статус; /focus 30 — включить\n"
         "/trip — режим командировки\n"
+        "/birthdays — дни рождения\n"
         "/stats — статистика\n"
-        "/settings — настройки\n\n"
+        "/settings — настройки\n"
+        "/export — выгрузить данные\n\n"
         "💡 <b>Примеры фраз:</b>\n"
         "• Купить продукты завтра\n"
         "• Напомни в 15:00 позвонить врачу\n"
@@ -396,10 +406,14 @@ async def cmd_chrono(message: Message, command: CommandObject) -> None:
         async with async_session() as session:
             stats = await get_week_stats(session, message.from_user.id, tz)
         await message.answer(format_week_summary(stats), parse_mode="HTML")
-    else:
+    elif not args:
         async with async_session() as session:
             stats = await get_day_stats(session, message.from_user.id, tz)
         await message.answer(format_day_photo(stats), parse_mode="HTML")
+    else:
+        await message.answer(
+            "Не понял аргумент. Используй /chrono или /chrono week."
+        )
 
 
 # --- /focus ---
@@ -412,6 +426,25 @@ async def cmd_focus(message: Message, command: CommandObject) -> None:
 
     args = command.args.strip().lower() if command.args else ""
 
+    async with async_session() as session:
+        user = await get_user(session, message.from_user.id)
+    tz = user.timezone if user else "Europe/Moscow"
+
+    if not args:
+        focus_until = user.focus_until if user else None
+        if focus_until and pendulum.instance(focus_until) > pendulum.now("UTC"):
+            local_until = pendulum.instance(focus_until).in_timezone(tz)
+            await message.answer(
+                f"🎯 Режим фокуса включён до {local_until.strftime('%H:%M')}.\n"
+                "Выключить: /focus off"
+            )
+        else:
+            await message.answer(
+                "🎯 Режим фокуса выключен.\n"
+                "Включить: /focus 30 (от 1 до 480 минут)."
+            )
+        return
+
     if args == "off":
         async with async_session() as session:
             await update_user_settings(
@@ -420,11 +453,14 @@ async def cmd_focus(message: Message, command: CommandObject) -> None:
         await message.answer("🎯 Режим фокуса выключен.")
         return
 
-    minutes = 30
-    if args.isdigit():
-        minutes = int(args)
-        if minutes > 480:
-            minutes = 480
+    if not args.isdigit():
+        await message.answer("Укажи минуты числом, например: /focus 30")
+        return
+
+    minutes = int(args)
+    if not 1 <= minutes <= 480:
+        await message.answer("Длительность фокуса — от 1 до 480 минут.")
+        return
 
     focus_until = pendulum.now("UTC").add(minutes=minutes)
 
@@ -467,7 +503,7 @@ async def cmd_stats(message: Message, command: CommandObject) -> None:
 
 async def _stats_frogs(message: Message) -> None:
     """Статистика лягушек."""
-    from sqlalchemy import select, func
+    from sqlalchemy import func, or_, select
     from bot.db.models import Task
 
     async with async_session() as session:
@@ -478,8 +514,13 @@ async def _stats_frogs(message: Message) -> None:
             select(func.count()).where(
                 Task.user_id == message.from_user.id,
                 Task.is_frog == True,
-                Task.created_at >= pendulum.instance(
-                    datetime.combine(since, datetime.min.time())
+                or_(
+                    Task.created_at >= pendulum.instance(
+                        datetime.combine(since, datetime.min.time())
+                    ),
+                    Task.completed_at >= pendulum.instance(
+                        datetime.combine(since, datetime.min.time())
+                    ),
                 ),
             )
         )
@@ -490,7 +531,7 @@ async def _stats_frogs(message: Message) -> None:
                 Task.user_id == message.from_user.id,
                 Task.is_frog == True,
                 Task.status == "done",
-                Task.created_at >= pendulum.instance(
+                Task.completed_at >= pendulum.instance(
                     datetime.combine(since, datetime.min.time())
                 ),
             )
@@ -519,12 +560,24 @@ async def _stats_productivity(message: Message) -> None:
         )
 
     from bot.formatters.stats import format_productivity_stats
+    trend = _productivity_trend(
+        week["avg_productivity"], month_stats["avg_productivity"]
+    )
     text = format_productivity_stats(
         avg_week=week["avg_productivity"],
         avg_month=month_stats["avg_productivity"],
-        trend="stable",
+        trend=trend,
     )
     await message.answer(text, parse_mode="HTML")
+
+
+def _productivity_trend(avg_week: float, avg_month: float) -> str:
+    delta = avg_week - avg_month
+    if delta >= 0.2:
+        return "up"
+    if delta <= -0.2:
+        return "down"
+    return "stable"
 
 
 async def _stats_values(message: Message) -> None:
@@ -544,6 +597,10 @@ _DAY_NAMES = {1: "Пн", 2: "Вт", 3: "Ср", 4: "Чт", 5: "Пт", 6: "Сб", 
 def _build_settings_kb(user) -> InlineKeyboardBuilder:
     """Собрать клавиатуру настроек."""
     kb = InlineKeyboardBuilder()
+    kb.button(
+        text=f"🌍 Часовой пояс: {user.timezone}",
+        callback_data="settings:timezone",
+    )
     kb.button(
         text=f"🌅 Утренний дайджест: {user.digest_morning_time.strftime('%H:%M')}",
         callback_data="settings:morning_time",
@@ -649,6 +706,45 @@ def _time_picker_kb(callback_prefix: str, start: int = 6, end: int = 23) -> Inli
 @router.callback_query(F.data == "settings:back")
 async def cb_settings_back(callback: CallbackQuery) -> None:
     await callback.answer()
+    await _show_settings(callback)
+
+
+@router.callback_query(F.data == "settings:timezone")
+async def cb_timezone(callback: CallbackQuery) -> None:
+    await callback.answer()
+    choices = [
+        ("Калининград", "Europe/Kaliningrad"),
+        ("Москва", "Europe/Moscow"),
+        ("Самара", "Europe/Samara"),
+        ("Екатеринбург", "Asia/Yekaterinburg"),
+        ("Омск", "Asia/Omsk"),
+        ("Новосибирск", "Asia/Novosibirsk"),
+        ("Иркутск", "Asia/Irkutsk"),
+        ("Владивосток", "Asia/Vladivostok"),
+    ]
+    kb = InlineKeyboardBuilder()
+    for label, timezone in choices:
+        kb.button(text=label, callback_data=f"settings:set_tz:{timezone}")
+    kb.button(text="◀️ Назад", callback_data="settings:back")
+    kb.adjust(2)
+    await callback.message.edit_text(
+        "🌍 Выбери часовой пояс:", reply_markup=kb.as_markup()
+    )
+
+
+@router.callback_query(F.data.startswith("settings:set_tz:"))
+async def cb_set_timezone(callback: CallbackQuery) -> None:
+    await callback.answer()
+    timezone = callback.data.split(":", 2)[2]
+    try:
+        pendulum.now(timezone)
+    except Exception:
+        await callback.message.edit_text("Неизвестный часовой пояс.")
+        return
+    async with async_session() as session:
+        await update_user_settings(
+            session, callback.from_user.id, timezone=timezone
+        )
     await _show_settings(callback)
 
 
@@ -880,7 +976,7 @@ async def cmd_birthdays(message: Message) -> None:
         if b.year_known:
             years = today.year - b.birth_date.year
             # Если ДР ещё не было в этом году
-            this_year_bday = b.birth_date.replace(year=today.year)
+            this_year_bday = _birthday_in_year(b.birth_date, today.year)
             if this_year_bday <= today:
                 years_now = years
             else:

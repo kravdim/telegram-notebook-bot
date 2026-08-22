@@ -2,11 +2,12 @@
 
 import asyncio
 import hashlib
+import json
 import logging
 import re
 from typing import Optional
 
-from aiogram import Router
+from aiogram import F, Router
 from aiogram.types import Message
 
 from bot.db.crud.users import get_user
@@ -77,11 +78,19 @@ _FAKE_MUTATION_RE = re.compile(
 )
 
 _MUTATION_REQUEST_RE = re.compile(
-    r"(?:\b(?:напомни|напоминание|запомни|сохрани|запиши|создай|сделай|поставь|заведи|добавь|удали|"
+    r"(?:\b(?:напомни|напмни|напоминание|запомни|сохрани|запиши|создай|сделай|поставь|заведи|добавь|удали|"
     r"убери|отмени|перенеси|измени|отметь|закрой|день\s+рождения|"
     r"кажд(?:ый|ую|ое|ые)|ежедневно|по\s+будням|надо|нужно)\b|"
+    r"\bзабей\s+в\s+задач[иу]\b|"
     r"^\s*(?:заехать|позвонить|купить|сделать|отправить)\b|"
     r"^\s*встреча\s+(?:в|на)\s+\d{1,2}(?::\d{2})?\b)",
+    re.IGNORECASE,
+)
+
+_INCOMPLETE_MUTATION_RE = re.compile(
+    r"^\s*(?:создай|сделай|добавь|запиши|сохрани|напомни|напмни|удали|"
+    r"перенеси|измени|отметь|закрой)(?:\s+(?:задач[уи]|заметк[уи]|"
+    r"напоминани[ея]|слона?|проект))?\s*[.!?]*$",
     re.IGNORECASE,
 )
 
@@ -254,6 +263,8 @@ async def _process_text_message_unlocked(user_id: int, text: str, message: Messa
         )
         return
 
+    _close_dangling_history(user_id)
+
     # Получаем пользователя один раз (используется для timezone во всех ветках)
     async with async_session() as session:
         user = await get_user(session, user_id)
@@ -325,6 +336,24 @@ async def _process_text_message_unlocked(user_id: int, text: str, message: Messa
     if _PROJECT_DONE_RE.match(text):
         await _set_pending_interaction(user_id, "complete_project")
         await message.answer("Какой слон закрываем? Напиши название проекта.")
+        return
+
+    common_mutation = _extract_common_mutation(text, user_tz)
+    if common_mutation:
+        tool_name, arguments = common_mutation
+        add_message(user_id, "user", text)
+        if tool_name == "respond_to_user":
+            result = str(arguments["message"])
+        else:
+            await message.bot.send_chat_action(chat_id=message.chat.id, action="typing")
+            result = await dispatch(
+                {"name": tool_name, "arguments": arguments},
+                user_id,
+                user_tz,
+            )
+        add_message(user_id, "assistant", result)
+        for part in split_message(result):
+            await message.answer(part, parse_mode=None)
         return
 
     task_args = _extract_task_request(text, user_tz)
@@ -410,8 +439,10 @@ async def _process_text_message_unlocked(user_id: int, text: str, message: Messa
     now_str = pendulum.now(user_tz).format("YYYY-MM-DD HH:mm dddd", locale="ru")
     system_prompt = system_prompt.replace("{now}", now_str).replace("{timezone}", user_tz)
 
-    # Добавляем в историю
-    add_message(user_id, "user", text)
+    # Добавляем нормализованную разговорную формулировку: модель чаще делает
+    # правильный tool call с первого круга, а не после forced retry.
+    intent_text = _normalize_common_intent_text(text)
+    add_message(user_id, "user", intent_text)
 
     # Собираем сообщения
     messages = [{"role": "system", "content": system_prompt}]
@@ -424,14 +455,18 @@ async def _process_text_message_unlocked(user_id: int, text: str, message: Messa
             llm_client.chat(messages=messages, functions=FUNCTIONS),
         )
     except LLMUnavailableError:
-        await message.answer(
+        reply = (
             "Извини, AI-сервис временно недоступен. "
             "Попробуй через пару минут или используй команды напрямую."
         )
+        add_message(user_id, "assistant", reply)
+        await message.answer(reply)
         return
     except Exception as e:
         logger.error("Ошибка LLM: %s", e, exc_info=True)
-        await message.answer("Произошла ошибка при обработке. Попробуй ещё раз.")
+        reply = "Произошла ошибка при обработке. Попробуй ещё раз."
+        add_message(user_id, "assistant", reply)
+        await message.answer(reply)
         return
 
     # Модели иногда имитируют успешную мутацию свободным текстом. Для явного
@@ -452,39 +487,48 @@ async def _process_text_message_unlocked(user_id: int, text: str, message: Messa
             )
         except Exception as e:
             logger.error("Ошибка обязательного tool-call retry: %s", e, exc_info=True)
-            await message.answer(
-                "Не удалось надёжно выполнить изменение. Ничего не сохранено — попробуй ещё раз."
-            )
+            reply = "Не смог выполнить изменение. Уточни, что именно нужно сохранить."
+            add_message(user_id, "assistant", reply)
+            await message.answer(reply)
             return
         if not _has_mutating_tool_call(response.function_calls):
+            clarification = _clarification_from_response(response)
+            if clarification:
+                add_message(user_id, "assistant", clarification)
+                await message.answer(clarification, parse_mode=None)
+                return
             logger.error("Required tool retry returned no mutation: user=%s", user_id)
-            await message.answer(
-                "Не удалось надёжно распознать изменение. Ничего не сохранено — "
-                "переформулируй команду."
-            )
+            reply = "Не понял, что именно нужно сохранить. Уточни действие и объект."
+            add_message(user_id, "assistant", reply)
+            await message.answer(reply)
             return
 
     # Логирование в БД
-    async with async_session() as session:
-        from bot.db.crud.llm_logs import log_llm_request
-        await log_llm_request(
-            session,
-            user_id=user_id,
-            prompt_key="intent_detection",
-            model=response.model,
-            input_messages=messages,
-            output_content=response.content,
-            function_call=response.function_call,
-            function_calls=response.function_calls,
-            total_tokens=response.total_tokens,
-            latency_ms=response.latency_ms,
-        )
+    try:
+        async with async_session() as session:
+            from bot.db.crud.llm_logs import log_llm_request
+            await log_llm_request(
+                session,
+                user_id=user_id,
+                prompt_key="intent_detection",
+                model=response.model,
+                input_messages=messages,
+                output_content=response.content,
+                function_call=response.function_call,
+                function_calls=response.function_calls,
+                total_tokens=response.total_tokens,
+                latency_ms=response.latency_ms,
+            )
+    except Exception as exc:
+        logger.warning("Не удалось записать LLM log: %s", exc)
 
     # Обработка ответа
     if response.function_calls:
         all_results = []
 
         for fc in response.function_calls:
+            fc = _preserve_user_marker_in_call(text, fc)
+            fc = _guard_relative_birthday(text, fc)
             result = await dispatch(fc, user_id, user_tz)
 
             # Специальный случай: confirm удаления
@@ -494,8 +538,24 @@ async def _process_text_message_unlocked(user_id: int, text: str, message: Messa
                 task_title = parts[2]
                 from bot.handlers.callbacks import build_delete_confirm_keyboard
                 kb = build_delete_confirm_keyboard(task_id)
+                prompt = f"Нашёл задачу «{task_title}». Удалить?"
+                add_message(user_id, "assistant", prompt)
                 await message.answer(
-                    f"Нашёл задачу «{task_title}». Удалить?",
+                    prompt,
+                    parse_mode=None,
+                    reply_markup=kb.as_markup(),
+                )
+                continue
+
+            if result.startswith("CHOOSE_DELETE:"):
+                import json
+                choices = json.loads(result.split(":", 1)[1])
+                from bot.handlers.callbacks import build_delete_choice_keyboard
+                kb = build_delete_choice_keyboard(choices)
+                prompt = "Нашёл несколько похожих задач. Какую удалить?"
+                add_message(user_id, "assistant", prompt)
+                await message.answer(
+                    prompt,
                     parse_mode=None,
                     reply_markup=kb.as_markup(),
                 )
@@ -506,9 +566,13 @@ async def _process_text_message_unlocked(user_id: int, text: str, message: Messa
                 project_id, project_title, open_count = parts[1:]
                 from bot.handlers.callbacks import build_project_complete_keyboard
                 kb = build_project_complete_keyboard(project_id)
-                await message.answer(
+                prompt = (
                     f"У слона «{project_title}» осталось открытых задач: {open_count}. "
-                    "Закрыть слона и отменить эти задачи?",
+                    "Закрыть слона и отменить эти задачи?"
+                )
+                add_message(user_id, "assistant", prompt)
+                await message.answer(
+                    prompt,
                     parse_mode=None,
                     reply_markup=kb.as_markup(),
                 )
@@ -519,9 +583,13 @@ async def _process_text_message_unlocked(user_id: int, text: str, message: Messa
                 parts = result.split(":", 2)
                 project_id = parts[1]
                 project_title = parts[2]
-                await message.answer(
+                project_prompt = (
                     f"🐘 Слон «{project_title}» создан!\n"
-                    "Сейчас нарезаю на бифштексы...",
+                    "Сейчас нарезаю на бифштексы..."
+                )
+                add_message(user_id, "assistant", project_prompt)
+                await message.answer(
+                    project_prompt,
                     parse_mode=None,
                 )
                 await message.bot.send_chat_action(chat_id=message.chat.id, action="typing")
@@ -581,21 +649,31 @@ async def _process_text_message_unlocked(user_id: int, text: str, message: Messa
                 "LLM tried to report mutation without function call: user=%s text=%.120s response=%.200s",
                 user_id, text, content,
             )
-            await message.answer(
+            reply = (
                 "Я не сохранил это, потому что не получил реальную команду на изменение. "
                 "Напиши коротко: «надо сделать ...» или «... - сделал»."
             )
+            add_message(user_id, "assistant", reply)
+            await message.answer(reply)
             return
         if len(content) > 1000:
             content = content[:1000] + "..."
         add_message(user_id, "assistant", content)
         await message.answer(content, parse_mode=None)
     else:
-        await message.answer("Не удалось обработать сообщение. Попробуй переформулировать.")
+        reply = "Не удалось обработать сообщение. Попробуй переформулировать."
+        add_message(user_id, "assistant", reply)
+        await message.answer(reply)
 
     # Компрессия при необходимости
     if needs_compression(user_id):
         await _compress(user_id)
+
+
+@router.message(F.text.startswith("/"))
+async def handle_unknown_command(message: Message) -> None:
+    """Не отправлять неизвестные bot-команды в дорогой intent pipeline."""
+    await message.answer("Неизвестная команда. Список доступных: /help")
 
 
 @router.message()
@@ -772,9 +850,162 @@ def _parse_relative_ru_date(word: str, tz: str):
     return today.add(days=delta)
 
 
+_RU_MONTHS = {
+    "января": 1,
+    "февраля": 2,
+    "марта": 3,
+    "апреля": 4,
+    "мая": 5,
+    "июня": 6,
+    "июля": 7,
+    "августа": 8,
+    "сентября": 9,
+    "октября": 10,
+    "ноября": 11,
+    "декабря": 12,
+}
+
+
+def _extract_common_mutation(text: str, tz: str) -> Optional[tuple[str, dict]]:
+    """Надёжный узкий путь для частых фраз, на которых LLM может отказаться."""
+    import pendulum
+
+    stripped = " ".join(text.strip().split())
+
+    explicit_task = re.match(
+        r"^создай\s+задачу\s*[:\-—]?\s*(?P<body>.+)$",
+        stripped,
+        re.IGNORECASE,
+    )
+    if explicit_task:
+        body = explicit_task.group("body").strip(" .!?:;«»\"'")
+        if re.search(
+            r"\b(?:и\s+(?:ещ[её]\s+)?(?:напоминани[ея]|заметк[ау]|задач[ау])|"
+            r"а\s+ещ[её])\b",
+            body,
+            re.IGNORECASE,
+        ):
+            return None
+        if re.search(
+            r"\b(?:system\s+override|dump\s+(?:all\s+)?prompts?|"
+            r"ignore\s+(?:all\s+)?(?:previous\s+)?instructions?)\b",
+            body,
+            re.IGNORECASE,
+        ):
+            return (
+                "respond_to_user",
+                {
+                    "message": (
+                        "Задачу не сохранил: текст похож на попытку изменить "
+                        "системные инструкции. Переформулируй только само действие."
+                    )
+                },
+            )
+        if body:
+            return (
+                "create_task",
+                {
+                    "title": body,
+                    "category": _guess_task_category(body),
+                    "priority": "normal",
+                },
+            )
+
+    reminder = re.match(
+        r"^напомни\s+через\s+(?:(?P<half>пол\s*часа)|"
+        r"(?P<minutes>\d+)\s*минут(?:у|ы)?)\s+(?P<body>.+)$",
+        stripped,
+        re.IGNORECASE,
+    )
+    if reminder:
+        minutes = 30 if reminder.group("half") else int(reminder.group("minutes"))
+        body = reminder.group("body").strip(" .!?:;")
+        if minutes > 0 and body:
+            remind_at = pendulum.now(tz).add(minutes=minutes).replace(second=0, microsecond=0)
+            return (
+                "create_reminder",
+                {"message": body, "remind_at": remind_at.to_iso8601_string()},
+            )
+
+    evening_task = re.match(
+        r"^вечером\s+(?:надо|нужно)\s+(?P<body>.+)$",
+        stripped,
+        re.IGNORECASE,
+    )
+    if evening_task:
+        body = evening_task.group("body").strip(" .!?:;")
+        if body:
+            return (
+                "create_task",
+                {
+                    "title": _normalize_task_title(body),
+                    "category": _guess_task_category(body),
+                    "priority": "normal",
+                    "scheduled_date": str(pendulum.now(tz).date()),
+                },
+            )
+
+    weekday_task = re.match(
+        r"^в\s+следующ(?:ий|ую|ее)\s+"
+        r"(?P<weekday>понедельник|вторник|среду|четверг|пятницу|субботу|воскресенье)\s+"
+        r"(?P<body>.+?)(?:\s+в\s+(?P<hour>\d{1,2})(?:[:.](?P<minute>\d{2}))?"
+        r"(?:\s*(?:утра|дня|вечера))?)?$",
+        stripped,
+        re.IGNORECASE,
+    )
+    if weekday_task:
+        scheduled = _parse_relative_ru_date(weekday_task.group("weekday").lower(), tz)
+        body = weekday_task.group("body").strip(" .!?:;")
+        if scheduled and body:
+            args = {
+                "title": _normalize_task_title(body),
+                "category": _guess_task_category(body),
+                "priority": "normal",
+                "scheduled_date": str(scheduled),
+            }
+            if weekday_task.group("hour"):
+                args["due_time"] = (
+                    f"{int(weekday_task.group('hour')):02d}:"
+                    f"{int(weekday_task.group('minute') or 0):02d}"
+                )
+            return "create_task", args
+
+    birthday = re.match(
+        r"^(?:кстати\s+)?у\s+(?P<name>[а-яёa-z-]+)\s+"
+        r"день\s+рождения\s+(?P<day>\d{1,2})\s+(?P<month>[а-яё]+)$",
+        stripped,
+        re.IGNORECASE,
+    )
+    if birthday:
+        day = int(birthday.group("day"))
+        month = _RU_MONTHS.get(birthday.group("month").casefold())
+        if month:
+            try:
+                birth_date = pendulum.date(1900, month, day)
+            except ValueError:
+                return None
+            name = birthday.group("name").casefold()
+            name = {"папы": "папа", "мамы": "мама"}.get(name, name)
+            return (
+                "add_birthday",
+                {"name": name, "date": str(birth_date), "year_known": False},
+            )
+
+    return None
+
+
 def _extract_task_request(text: str, tz: str) -> Optional[dict]:
     """Детерминированно распознать простую постановку задачи."""
     stripped = text.strip()
+    if re.search(
+        r"\b(?:утром|дн[её]м|вечером|ночью|полчаса|через\s+час)\b|"
+        r"\b(?:в|к)\s+\d{1,2}(?::\d{2})?\b",
+        stripped,
+        re.IGNORECASE,
+    ):
+        # Быстрый путь не умеет сохранить эту точность; LLM должен построить
+        # due_time/remind_at, иначе пользовательская часть запроса потеряется.
+        return None
     match = None
     for pattern in _TASK_REQUEST_PATTERNS:
         match = pattern.match(stripped)
@@ -863,7 +1094,116 @@ def _looks_like_fake_mutation(content: str) -> bool:
 
 def _looks_like_mutation_request(text: str) -> bool:
     """Консервативно определить запрос, который должен менять данные."""
-    return bool(_MUTATION_REQUEST_RE.search(text))
+    stripped = text.strip()
+    if _INCOMPLETE_MUTATION_RE.fullmatch(stripped):
+        return False
+    return bool(_MUTATION_REQUEST_RE.search(stripped))
+
+
+def _clarification_from_response(response) -> str | None:
+    """Достать безопасное уточнение из forced-tool ответа модели."""
+    for call in response.function_calls:
+        if call.get("name") == "respond_to_user":
+            message = str(_function_arguments(call).get("message", "")).strip()
+            if message:
+                return message[:1000]
+    content = (response.content or "").strip()
+    if content and not _looks_like_fake_mutation(content):
+        return content[:1000]
+    return None
+
+
+def _close_dangling_history(user_id: int) -> None:
+    """Закрыть старый user-turn, чтобы он не исполнился следующим сообщением."""
+    history = get_history(user_id)
+    if history and history[-1].get("role") == "user":
+        add_message(
+            user_id,
+            "assistant",
+            "Предыдущий запрос не был выполнен; для него нужно отдельное уточнение.",
+        )
+
+
+def _normalize_common_intent_text(text: str) -> str:
+    """Маленький словарь частых опечаток без попытки заменить NLU."""
+    normalized = re.sub(r"^\s*напмни\b", "напомни", text, flags=re.IGNORECASE)
+    normalized = re.sub(
+        r"\bчерез\s+пол\s*часа\b", "через 30 минут", normalized,
+        flags=re.IGNORECASE,
+    )
+    normalized = re.sub(
+        r"^\s*забей\s+в\s+задач[иу]\s*", "создай задачу: ", normalized,
+        flags=re.IGNORECASE,
+    )
+    return normalized.strip()
+
+
+def _preserve_user_marker_in_call(text: str, function_call: dict) -> dict:
+    """Не терять пользовательский артикул при очистке title моделью."""
+    name = function_call.get("name")
+    if name not in {
+        "create_task", "create_note", "create_project",
+        "complete_task", "update_task", "delete_task",
+    }:
+        return function_call
+    marker_match = re.search(r"\b[А-ЯЁA-Z]\d{1,4}-[\w-]+", text, re.IGNORECASE)
+    if not marker_match:
+        return function_call
+    marker = marker_match.group(0)
+    args = _function_arguments(function_call)
+    if not args:
+        return function_call
+    if name in {"complete_task", "update_task", "delete_task"}:
+        args["search_query"] = marker
+        return {**function_call, "arguments": args}
+    title = str(args.get("title") or "").strip()
+    if marker.casefold() in title.casefold():
+        return function_call
+    marker_tail = marker.split("-", 1)[-1]
+    if title.casefold().startswith(marker_tail.casefold()):
+        title = marker + title[len(marker_tail):]
+    else:
+        title = f"{marker} — {title}" if title else marker
+    args["title"] = title
+    return {**function_call, "arguments": args}
+
+
+def _function_arguments(function_call: dict) -> dict:
+    """Нормализовать arguments, которые провайдер может вернуть JSON-строкой."""
+    raw = function_call.get("arguments", {})
+    if isinstance(raw, dict):
+        return dict(raw)
+    if not isinstance(raw, str):
+        return {}
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        try:
+            from json_repair import repair_json
+            parsed = json.loads(repair_json(raw))
+        except (json.JSONDecodeError, ValueError, TypeError):
+            return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _guard_relative_birthday(text: str, function_call: dict) -> dict:
+    """Не превращать относительный день рождения в вечную дату без согласия."""
+    if function_call.get("name") != "add_birthday":
+        return function_call
+    normalized = text.casefold().replace("ё", "е")
+    if "день рожд" not in normalized and "др" not in normalized:
+        return function_call
+    if not re.search(r"\b(?:вчера|сегодня|завтра)\b", normalized):
+        return function_call
+    return {
+        "name": "respond_to_user",
+        "arguments": {
+            "message": (
+                "Для дня рождения нужна постоянная дата. Уточни её явно, "
+                "например: «у мамы день рождения 21 августа»."
+            )
+        },
+    }
 
 
 def _has_mutating_tool_call(function_calls: list[dict]) -> bool:

@@ -40,11 +40,15 @@ async def hybrid_search_notes(
         res = await session.execute(
             text("""
                 SELECT id, title, content,
-                       COALESCE(1 - (embedding <=> CAST(:emb AS vector)), 0) * 0.6 +
-                       COALESCE(similarity(content, CAST(:query AS text)), 0) * 0.4 AS score
+                       COALESCE(1 - (embedding <=> CAST(:emb AS vector)), 0) * 0.5 +
+                       GREATEST(
+                           COALESCE(similarity(content, CAST(:query AS text)), 0),
+                           COALESCE(similarity(title, CAST(:query AS text)), 0)
+                       ) * 0.5 AS score
                 FROM notes
                 WHERE user_id = :uid
                   AND (content % CAST(:query AS text) OR content ILIKE :pattern
+                       OR title % CAST(:query AS text) OR title ILIKE :pattern
                        OR (embedding IS NOT NULL AND embedding <=> CAST(:emb AS vector) < 0.8))
                 ORDER BY score DESC
                 LIMIT :lim
@@ -55,7 +59,10 @@ async def hybrid_search_notes(
     else:
         res = await session.execute(
             select(Note)
-            .where(Note.user_id == user_id, Note.content.ilike(f"%{query}%"))
+            .where(
+                Note.user_id == user_id,
+                Note.content.ilike(f"%{query}%") | Note.title.ilike(f"%{query}%"),
+            )
             .limit(limit)
         )
         return list(res.scalars().all())

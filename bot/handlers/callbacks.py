@@ -177,7 +177,24 @@ async def cb_delete_yes(callback: CallbackQuery) -> None:
         await callback.message.edit_text("Не удалось удалить задачу.")
 
 
-@router.callback_query(F.data.startswith("task_delete_no:"))
+@router.callback_query(F.data.startswith("task_delete_choose:"))
+async def cb_delete_choose(callback: CallbackQuery) -> None:
+    """После неоднозначного поиска показать обычное подтверждение удаления."""
+    await callback.answer()
+    task_id = uuid.UUID(callback.data.split(":", 1)[1])
+    async with async_session() as session:
+        task = await get_task_by_id(session, task_id)
+    if not task or task.user_id != callback.from_user.id:
+        await callback.message.edit_text("Задача не найдена.")
+        return
+    await callback.message.edit_text(
+        f"Удалить задачу «{html.escape(task.title)}»?",
+        parse_mode="HTML",
+        reply_markup=build_delete_confirm_keyboard(str(task.id)).as_markup(),
+    )
+
+
+@router.callback_query(F.data.startswith("task_delete_no"))
 async def cb_delete_no(callback: CallbackQuery) -> None:
     """Отмена удаления задачи."""
     await callback.answer()
@@ -201,6 +218,21 @@ def build_delete_confirm_keyboard(task_id: str) -> InlineKeyboardBuilder:
     kb.button(text="🗑 Да, удалить", callback_data=f"task_delete_yes:{task_id}")
     kb.button(text="❌ Отмена", callback_data=f"task_delete_no:{task_id}")
     kb.adjust(2)
+    return kb
+
+
+def build_delete_choice_keyboard(choices: list[dict]) -> InlineKeyboardBuilder:
+    """Кнопки выбора top-N перед подтверждением удаления."""
+    kb = InlineKeyboardBuilder()
+    for choice in choices[:3]:
+        title = str(choice.get("title", "Задача"))
+        label = title if len(title) <= 40 else title[:37] + "..."
+        kb.button(
+            text=f"🗑 {label}",
+            callback_data=f"task_delete_choose:{choice['id']}",
+        )
+    kb.button(text="❌ Отмена", callback_data="task_delete_no")
+    kb.adjust(1)
     return kb
 
 

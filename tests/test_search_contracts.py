@@ -5,6 +5,7 @@ import pytest
 from bot.db.crud.diary import hybrid_search_diary
 from bot.db.crud.memoir import hybrid_search_memoir
 from bot.db.crud.notes import hybrid_search_notes
+from bot.db.crud.knowledge import _topic_hint
 
 
 class FakeScalarResult:
@@ -50,3 +51,7 @@ async def test_memoir_search_without_embedding_returns_model_objects():
     row = SimpleNamespace(content="Главное событие дня")
     result = await hybrid_search_memoir(FakeSession([row]), 1, "событие", query_embedding=None)
     assert result == [row]
+
+
+def test_elephant_advice_query_has_explicit_topic_boost():
+    assert _topic_hint("как съесть этого слона если не хочется начинать") == "слоны"

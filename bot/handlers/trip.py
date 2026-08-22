@@ -88,17 +88,22 @@ async def _trip_on(message: Message, text: str) -> None:
         user = await get_user(session, message.from_user.id)
     tz = user.timezone if user else "Europe/Moscow"
 
-    title = text
-    destination = None
-    start_date = pendulum.now(tz).date()
-    end_date = pendulum.now(tz).add(days=7).date()
-
     date_match = re.search(
         r"(?P<sd>\d{1,2})\.(?P<sm>\d{1,2})(?:\.(?P<sy>\d{4}))?"
         r"\s*[-–—]\s*"
         r"(?P<ed>\d{1,2})\.(?P<em>\d{1,2})(?:\.(?P<ey>\d{4}))?",
         text,
     )
+    if not date_match:
+        await message.answer(
+            "Уточни даты командировки, например: /trip on Питер 25.08-29.08"
+        )
+        return
+
+    title = text
+    destination = None
+    start_date = pendulum.now(tz).date()
+    end_date = start_date
     date_part = date_match.group(0) if date_match else None
     if date_match:
         try:

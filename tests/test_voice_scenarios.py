@@ -36,7 +36,8 @@ async def test_voice_confirm_processes_transcript(monkeypatch):
     callback = FakeCallback(user_id=42)
     await voice.cb_voice_confirm(callback)
 
-    assert callback.message.edits[0][0] == "🎤 Купить кофе завтра"
+    assert callback.message.edits[0][0].startswith("🎤 Купить кофе завтра")
+    assert "Выполняю" in callback.message.edits[0][0]
     assert processed == [(42, "Купить кофе завтра", callback.message)]
     assert 42 not in voice._pending_transcripts
 

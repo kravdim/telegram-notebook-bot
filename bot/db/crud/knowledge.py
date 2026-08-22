@@ -11,6 +11,20 @@ from bot.db.models import KnowledgeChunk
 logger = logging.getLogger(__name__)
 
 
+def _topic_hint(query: str) -> str:
+    normalized = (query or "").casefold().replace("ё", "е")
+    hints = {
+        "слоны": ("слон", "бифштекс", "декомпоз"),
+        "хронометраж": ("хронометраж", "хронофаг", "фотографи"),
+        "мемуарник": ("мемуар", "главное событие дня", "гсд"),
+        "прокрастинация": ("прокраст", "не хочется начинать", "откладыва"),
+    }
+    for topic, markers in hints.items():
+        if any(marker in normalized for marker in markers):
+            return topic
+    return ""
+
+
 async def add_chunk(
     session: AsyncSession,
     source: str,
@@ -43,6 +57,7 @@ async def hybrid_search(
 
     Если embedding недоступен — только текстовый поиск.
     """
+    topic_hint = _topic_hint(query)
     if query_embedding:
         # Гибридный поиск: RRF (Reciprocal Rank Fusion)
         sql = text("""
@@ -68,7 +83,9 @@ async def hybrid_search(
                        COALESCE(v.source, t.source) AS source,
                        COALESCE(v.topic, t.topic) AS topic,
                        :sw / (60.0 + COALESCE(v.vrank, 100)) +
-                       :tw / (60.0 + COALESCE(t.trank, 100)) AS rrf_score
+                       :tw / (60.0 + COALESCE(t.trank, 100)) +
+                       CASE WHEN lower(COALESCE(v.topic, t.topic)) = :topic
+                            THEN 0.05 ELSE 0 END AS rrf_score
                 FROM vector_results v
                 FULL OUTER JOIN text_results t ON v.id = t.id
             )
@@ -79,7 +96,8 @@ async def hybrid_search(
         """)
         result = await session.execute(
             sql,
-            {"emb": str(query_embedding), "query": query, "sw": semantic_weight, "tw": text_weight, "lim": limit},
+            {"emb": str(query_embedding), "query": query, "topic": topic_hint,
+             "sw": semantic_weight, "tw": text_weight, "lim": limit},
         )
     else:
         # Только текстовый поиск (trigram similarity)
@@ -87,11 +105,14 @@ async def hybrid_search(
             SELECT id, content, source, topic
             FROM knowledge_base
             WHERE content % CAST(:query AS text) OR content ILIKE :pattern
-            ORDER BY similarity(content, CAST(:query AS text)) DESC
+               OR lower(topic) = :topic
+            ORDER BY CASE WHEN lower(topic) = :topic THEN 0 ELSE 1 END,
+                     similarity(content, CAST(:query AS text)) DESC
             LIMIT :lim
         """)
         result = await session.execute(
-            sql, {"query": query, "pattern": f"%{query}%", "lim": limit}
+            sql, {"query": query, "pattern": f"%{query}%", "topic": topic_hint,
+                  "lim": limit}
         )
 
     rows = result.fetchall()
