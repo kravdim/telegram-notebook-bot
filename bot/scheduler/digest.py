@@ -19,6 +19,34 @@ from bot.formatters.digest import format_evening_digest, format_morning_digest
 logger = logging.getLogger(__name__)
 
 
+async def send_digest_now(bot: Bot, user, period: str) -> bool:
+    """Атомарно отправить ручной дайджест; False означает уже занятый слот."""
+    if period not in {"morning", "evening"}:
+        raise ValueError("period must be morning or evening")
+
+    tz = user.timezone or "Europe/Moscow"
+    today = pendulum.now(tz).date()
+    marker = (
+        "digest_sent_date" if period == "morning"
+        else "digest_evening_sent_date"
+    )
+    async with async_session() as session:
+        claimed = await claim_date_marker(session, user.telegram_id, marker, today)
+    if not claimed:
+        return False
+
+    try:
+        if period == "morning":
+            await _send_morning(bot, user, today, tz)
+        else:
+            await _send_evening(bot, user, today, tz)
+    except Exception:
+        async with async_session() as session:
+            await release_date_marker(session, user.telegram_id, marker, today)
+        raise
+    return True
+
+
 async def send_digests(bot: Bot) -> None:
     """Проверить и отправить дайджесты всем пользователям."""
     async with async_session() as session:

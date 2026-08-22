@@ -1,5 +1,6 @@
 """Планировщик хронометража: периодический опрос в рабочее время."""
 
+import asyncio
 import logging
 import random
 
@@ -19,6 +20,10 @@ _awaiting_since: dict[int, pendulum.DateTime] = {}
 
 # user_id → индекс последнего вопроса (чтобы не повторять подряд)
 _last_question_idx: dict[int, int] = {}
+
+# Один scheduler и admin-handler живут в одном event loop. Общий lock не даёт
+# им одновременно отправить два вопроса одному пользователю.
+_prompt_locks: dict[int, asyncio.Lock] = {}
 
 _CHRONOMETRY_QUESTIONS = [
     "⏱ Чем занимаешься сейчас?",
@@ -50,6 +55,56 @@ def clear_awaiting(user_id: int) -> None:
     """Очистить флаг ожидания ответа."""
     _awaiting_response.pop(user_id, None)
     _awaiting_since.pop(user_id, None)
+
+
+async def send_chronometry_prompt_now(bot: Bot, user) -> str:
+    """Ручной prompt вне расписания: sent, pending или busy."""
+    tz = user.timezone or "Europe/Moscow"
+    return await _send_prompt(bot, user, pendulum.now(tz))
+
+
+async def _send_prompt(bot: Bot, user, now: pendulum.DateTime) -> str:
+    """Отправить один вопрос с общей защитой scheduler/admin от дублей."""
+    user_id = user.telegram_id
+    lock = _prompt_locks.setdefault(user_id, asyncio.Lock())
+    async with lock:
+        if user_id in _awaiting_response:
+            return "pending"
+
+        from bot.db.crud.interaction_states import get_state, set_state
+        async with async_session() as session:
+            state = await get_state(session, user_id)
+        if state:
+            return "pending" if state.state_type == "chronometry" else "busy"
+
+        last_idx = _last_question_idx.get(user_id, -1)
+        available = [i for i in range(len(_CHRONOMETRY_QUESTIONS)) if i != last_idx]
+        idx = random.choice(available)
+        _last_question_idx[user_id] = idx
+
+        sent = await bot.send_message(
+            chat_id=user_id,
+            text=_CHRONOMETRY_QUESTIONS[idx],
+        )
+        _awaiting_response[user_id] = sent.message_id
+        _awaiting_since[user_id] = now
+
+        async with async_session() as session:
+            await set_state(
+                session,
+                user_id,
+                "chronometry",
+                payload={"message_id": sent.message_id},
+                ttl_minutes=max(user.chronometry_interval_min * 2, 60),
+            )
+
+        async with async_session() as session:
+            await update_user_settings(
+                session, user_id,
+                chronometry_last_asked=now,
+            )
+        logger.info("Хронометраж: вопрос отправлен %s", user_id)
+        return "sent"
 
 
 async def send_chronometry_prompts(bot: Bot) -> None:
@@ -104,36 +159,7 @@ async def send_chronometry_prompts(bot: Bot) -> None:
                 if (now - last).in_seconds() < interval_sec:
                     continue
 
-            # Выбираем вопрос, отличный от предыдущего
-            last_idx = _last_question_idx.get(user.telegram_id, -1)
-            available = [i for i in range(len(_CHRONOMETRY_QUESTIONS)) if i != last_idx]
-            idx = random.choice(available)
-            _last_question_idx[user.telegram_id] = idx
-
-            sent = await bot.send_message(
-                chat_id=user.telegram_id,
-                text=_CHRONOMETRY_QUESTIONS[idx],
-            )
-            _awaiting_response[user.telegram_id] = sent.message_id
-            _awaiting_since[user.telegram_id] = now
-
-            from bot.db.crud.interaction_states import set_state
-            async with async_session() as session:
-                await set_state(
-                    session,
-                    user.telegram_id,
-                    "chronometry",
-                    payload={"message_id": sent.message_id},
-                    ttl_minutes=max(user.chronometry_interval_min * 2, 60),
-                )
-
-            # Обновляем timestamp в БД только после успешной отправки
-            async with async_session() as session:
-                await update_user_settings(
-                    session, user.telegram_id,
-                    chronometry_last_asked=now,
-                )
-            logger.info("Хронометраж: вопрос отправлен %s", user.telegram_id)
+            await _send_prompt(bot, user, now)
 
         except Exception as e:
             logger.error(

@@ -273,6 +273,10 @@ Telegram-сообщения дедуплицируются в PostgreSQL.
 | `/adduser ID` | Добавить в whitelist (admin) |
 | `/removeuser ID` | Удалить из whitelist (admin) |
 | `/listusers` | Список пользователей (admin) |
+| `/adminhelp` | Справка по ручным scheduler-trigger (admin) |
+| `/digest morning\|evening [ID]` | Запустить дайджест сейчас (admin) |
+| `/review [ID]` | Запустить Sunday Review сейчас (admin) |
+| `/chrono_ping [ID]` | Отправить вопрос хронометража сейчас (admin) |
 
 ## Конфигурация
 

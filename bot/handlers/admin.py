@@ -1,4 +1,4 @@
-"""Команды администратора: /prompts, /status, /adduser, /removeuser."""
+"""Команды администратора и безопасные ручные scheduler-trigger."""
 
 import logging
 from html import escape as html_escape
@@ -11,7 +11,7 @@ from aiogram.filters import Command, CommandObject
 from aiogram.types import Message
 
 from bot.config import settings, BASE_DIR
-from bot.db.crud.users import get_all_users
+from bot.db.crud.users import get_all_users, get_user
 from bot.db.engine import async_session
 from bot.llm.prompts import get_all_prompts
 
@@ -23,6 +23,132 @@ router = Router()
 def _is_admin(user_id: int) -> bool:
     """Проверка прав администратора."""
     return user_id in settings.admin_telegram_ids
+
+
+async def _require_admin(message: Message) -> bool:
+    if message.from_user and _is_admin(message.from_user.id):
+        return True
+    await message.answer("Эта команда доступна только администратору.")
+    return False
+
+
+async def _get_trigger_target(message: Message, raw_id: str | None):
+    """Найти зарегистрированного адресата; без ID — вызывающий admin."""
+    if not message.from_user:
+        return None
+    target_id = message.from_user.id
+    if raw_id:
+        try:
+            target_id = int(raw_id)
+        except ValueError:
+            await message.answer("TELEGRAM_ID должен быть числом.")
+            return None
+    async with async_session() as session:
+        user = await get_user(session, target_id)
+    if not user:
+        await message.answer(f"Пользователь {target_id} не зарегистрирован в боте.")
+        return None
+    return user
+
+
+@router.message(Command("adminhelp"))
+async def cmd_adminhelp(message: Message) -> None:
+    """Справка по закрытым служебным командам."""
+    if not await _require_admin(message):
+        return
+    await message.answer(
+        "🛠 <b>Команды администратора</b>\n\n"
+        "/digest morning [TELEGRAM_ID] — утренний дайджест\n"
+        "/digest evening [TELEGRAM_ID] — вечерний итог и разбор\n"
+        "/review [TELEGRAM_ID] — Sunday Review сейчас\n"
+        "/chrono_ping [TELEGRAM_ID] — вопрос хронометража сейчас\n\n"
+        "Без TELEGRAM_ID команда адресована тебе. Повторный запуск одного "
+        "дайджеста/обзора в тот же день и второй незакрытый chrono-ping блокируются.",
+        parse_mode="HTML",
+    )
+
+
+@router.message(Command("digest"))
+async def cmd_digest_now(message: Message, command: CommandObject) -> None:
+    """Вручную отправить morning/evening digest через штатный atomic slot."""
+    if not await _require_admin(message):
+        return
+    parts = (command.args or "").split()
+    if not parts or parts[0].lower() not in {"morning", "evening"} or len(parts) > 2:
+        await message.answer("Использование: /digest morning|evening [TELEGRAM_ID]")
+        return
+    user = await _get_trigger_target(message, parts[1] if len(parts) == 2 else None)
+    if not user:
+        return
+
+    from bot.scheduler.digest import send_digest_now
+    try:
+        sent = await send_digest_now(message.bot, user, parts[0].lower())
+    except Exception as exc:
+        logger.error("Ручной digest завершился ошибкой: %s", exc, exc_info=True)
+        await message.answer("Не удалось отправить дайджест; слот освобождён для повтора.")
+        return
+    if not sent:
+        await message.answer("Этот дайджест уже был отправлен сегодня — дубль пропущен.")
+        return
+    label = "Утренний дайджест" if parts[0].lower() == "morning" else "Вечерний итог"
+    await message.answer(f"✅ {label} отправлен пользователю {user.telegram_id}.")
+
+
+@router.message(Command("review"))
+async def cmd_review_now(message: Message, command: CommandObject) -> None:
+    """Вручную отправить Sunday Review через штатный atomic slot."""
+    if not await _require_admin(message):
+        return
+    parts = (command.args or "").split()
+    if parts and parts[0].lower() == "now":
+        parts = parts[1:]
+    if len(parts) > 1:
+        await message.answer("Использование: /review [TELEGRAM_ID]")
+        return
+    user = await _get_trigger_target(message, parts[0] if parts else None)
+    if not user:
+        return
+
+    from bot.scheduler.weekly_review import send_weekly_review_now
+    try:
+        sent = await send_weekly_review_now(message.bot, user)
+    except Exception as exc:
+        logger.error("Ручной weekly review завершился ошибкой: %s", exc, exc_info=True)
+        await message.answer("Не удалось отправить обзор; слот освобождён для повтора.")
+        return
+    if not sent:
+        await message.answer("Обзор уже был отправлен сегодня — дубль пропущен.")
+        return
+    await message.answer(f"✅ Sunday Review отправлен пользователю {user.telegram_id}.")
+
+
+@router.message(Command("chrono_ping"))
+async def cmd_chrono_ping(message: Message, command: CommandObject) -> None:
+    """Вручную задать вопрос хронометража, не создавая второй pending prompt."""
+    if not await _require_admin(message):
+        return
+    parts = (command.args or "").split()
+    if len(parts) > 1:
+        await message.answer("Использование: /chrono_ping [TELEGRAM_ID]")
+        return
+    user = await _get_trigger_target(message, parts[0] if parts else None)
+    if not user:
+        return
+
+    from bot.scheduler.chronometry import send_chronometry_prompt_now
+    try:
+        status = await send_chronometry_prompt_now(message.bot, user)
+    except Exception as exc:
+        logger.error("Ручной chrono ping завершился ошибкой: %s", exc, exc_info=True)
+        await message.answer("Не удалось отправить вопрос хронометража.")
+        return
+    if status == "pending":
+        await message.answer("У пользователя уже есть незакрытый вопрос хронометража.")
+    elif status == "busy":
+        await message.answer("Пользователь сейчас отвечает на другой вопрос бота.")
+    else:
+        await message.answer(f"✅ Вопрос хронометража отправлен пользователю {user.telegram_id}.")
 
 
 @router.message(Command("prompts"))

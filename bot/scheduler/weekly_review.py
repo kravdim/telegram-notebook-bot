@@ -37,6 +37,28 @@ _CATEGORY_RU = {
 }
 
 
+async def send_weekly_review_now(bot: Bot, user) -> bool:
+    """Атомарно отправить ручной weekly review для локальной даты пользователя."""
+    tz = user.timezone or "Europe/Moscow"
+    today = pendulum.now(tz).date()
+    async with async_session() as session:
+        claimed = await claim_date_marker(
+            session, user.telegram_id, "weekly_review_sent_date", today
+        )
+    if not claimed:
+        return False
+
+    try:
+        await _send_review(bot, user, tz)
+    except Exception:
+        async with async_session() as session:
+            await release_date_marker(
+                session, user.telegram_id, "weekly_review_sent_date", today
+            )
+        raise
+    return True
+
+
 async def send_weekly_review(bot: Bot) -> None:
     """Проверить и отправить еженедельный обзор (воскресенье 21:00)."""
     async with async_session() as session:
