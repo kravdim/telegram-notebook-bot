@@ -86,3 +86,17 @@ Telegram polling и прогрел local Whisper; Ollama health виден в st
 - Post-deploy запуск через launchd стал вторым успешным drill: exit code `0`,
   RTO 0,22 секунды, stderr пуст. Временных drill-БД не осталось; recovery role
   сохранила только `CREATEDB`, основной application preflight прошёл.
+
+## Финальный review-remediation release
+
+- Основная реализация текущего этапа зафиксирована commit `93b2002`
+  (`Complete production review remediation`): full-project quality gates,
+  log-maintenance LaunchAgent, verified privacy deletion, UX polish и
+  актуальная документация.
+- Перед deploy сохранён проверенный backup
+  `notebook_bot_2026-08-24_230526.sql.gz` с корректными gzip и SHA-256.
+- Production уже исполняет содержимое commit `93b2002`: основной LaunchAgent
+  работает как PID `21485`, singleton lease и Telegram polling активны,
+  migration остаётся `f4b8c2d6e1a0`, local Whisper прогрет.
+- Этот handoff фиксируется отдельным context commit; после push необходимо
+  сохранить номер и результат соответствующего GitHub Actions run.
