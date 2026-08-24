@@ -26,6 +26,10 @@ bot:
   allowed_telegram_ids: []
   default_timezone: Europe/Moscow
 
+testing:
+  # Только выделенные тестовые аккаунты: cleanup удаляет все их доменные данные.
+  e2e_user_ids: []
+
 scheduler:
   healthcheck_interval_min: 5
   sweep_interval_min: 5

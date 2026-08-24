@@ -30,7 +30,8 @@
 
 - [x] Delivery ledger/outbox для multipart digest/memoir с DB lease,
   возобновлением по частям и формальной гарантией at-least-once.
-- [ ] Изолированный userbot namespace с уникальным run ID и teardown.
+- [x] Выделенный userbot account, уникальный run ID, pre-cleanup и обязательный
+  teardown с allowlist-защитой от удаления данных обычного пользователя.
 - [ ] Полный container E2E/readiness либо удаление Docker target.
 - [ ] Operator DATABASE_URL и регулярный измеряемый recovery drill.
 - [ ] Полная выплата Ruff/mypy debt с расширением CI gate.
@@ -43,7 +44,7 @@
 ## Проверка и production
 
 - `pytest`: 140 passed, 5 skipped;
-- PostgreSQL integration suite: 7 passed на disposable `pgvector:pg16`, включая
+- PostgreSQL integration suite: 9 passed на disposable `pgvector:pg16`, включая
   partial retry и конкурентный DB lease outbox;
 - CI-critical Ruff, operational Ruff, выбранные mypy-модули и compileall:
   успешно;

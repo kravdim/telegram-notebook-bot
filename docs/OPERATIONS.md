@@ -21,6 +21,14 @@ offers no atomic transaction with PostgreSQL.
 Completed delivery payloads are removed by the transient-state retention job
 after 30 days; pending batches are retained for recovery and investigation.
 
+DailyPlanner userbot E2E uses the dedicated account listed under
+`testing.e2e_user_ids`. Each run has a `DP-<UTC>-<random>` audit ID, but cleanup
+does not trust the LLM to preserve that marker in generated titles: pre-cleanup
+and mandatory `finally` teardown wipe all domain/transient data for that
+dedicated account while preserving its registration and settings. The cleanup
+script rejects users outside the configured allowlist and is dry-run unless
+`--execute --all-user-data` are both supplied.
+
 `scripts/evaluate_llm_contracts.py` reports tool-call parser accuracy and
 invalid-tool rate for anonymized saved provider responses; это не online intent
 evaluation пользовательских utterance. Runtime counters additionally expose

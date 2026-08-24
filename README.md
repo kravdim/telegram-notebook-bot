@@ -312,6 +312,9 @@ bot:
   admin_telegram_ids: []
   allowed_telegram_ids: []
   default_timezone: Europe/Moscow
+
+testing:
+  e2e_user_ids: []  # только выделенные аккаунты для destructive E2E teardown
 ```
 
 ### .env

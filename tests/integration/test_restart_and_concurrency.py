@@ -12,10 +12,20 @@ from sqlalchemy import delete, select
 from bot.db.crud.interaction_states import get_state, set_state
 from bot.db.crud.reminders import create_reminder, get_pending_reminders, mark_sent
 from bot.db.engine import async_session, engine
-from bot.db.models import DeliveryBatch, DeliveryPart, ProcessedRequest, Reminder, Task, User
+from bot.db.models import (
+    DeliveryBatch,
+    DeliveryPart,
+    Note,
+    ProcessedRequest,
+    Project,
+    Reminder,
+    Task,
+    User,
+)
 from bot.runtime.singleton import SingletonLease
 from bot.services.delivery import DeliveryPartSpec, deliver_batch
 from bot.services.tasks import complete_task_workflow
+from scripts.cleanup_e2e_namespace import cleanup
 
 pytestmark = pytest.mark.skipif(
     os.environ.get("RUN_DB_TESTS") != "1", reason="requires disposable migrated PostgreSQL"
@@ -293,3 +303,111 @@ async def test_delivery_outbox_lease_excludes_concurrent_sender():
     async with async_session() as cleanup:
         await cleanup.execute(delete(User).where(User.telegram_id == user_id))
         await cleanup.commit()
+
+
+@pytest.mark.asyncio
+async def test_e2e_namespace_cleanup_deletes_only_current_run_artifacts():
+    user_id = 8_600_000_000 + int(uuid.uuid4().hex[:6], 16)
+    run_id = "DP-20260824T140501-a1b2c3"
+    task_id = uuid.uuid4()
+    kept_task_id = uuid.uuid4()
+
+    async with async_session() as setup:
+        setup.add(User(telegram_id=user_id, username="cleanup-test"))
+        await setup.flush()
+        project = Project(user_id=user_id, title=f"Project {run_id}")
+        setup.add(project)
+        await setup.flush()
+        project_id = project.id
+        setup.add_all(
+            [
+                Task(
+                    id=task_id,
+                    user_id=user_id,
+                    project_id=project_id,
+                    title="generated child without marker",
+                ),
+                Task(id=kept_task_id, user_id=user_id, title="personal task"),
+                Note(user_id=user_id, content=f"test note {run_id}"),
+            ]
+        )
+        await setup.commit()
+
+    preview = await cleanup(user_id, run_id, execute=False)
+    assert preview["projects"] == 1
+    assert preview["tasks"] == 1
+    assert preview["notes"] == 1
+
+    async with async_session() as after_preview:
+        assert await after_preview.get(Task, task_id) is not None
+
+    deleted = await cleanup(user_id, run_id, execute=True)
+    assert deleted["projects"] == 1
+    assert deleted["tasks"] == 1
+    assert deleted["notes"] == 1
+
+    async with async_session() as check:
+        assert await check.get(Task, task_id) is None
+        assert await check.get(Project, project_id) is None
+        assert await check.get(Task, kept_task_id) is not None
+        await check.execute(delete(User).where(User.telegram_id == user_id))
+        await check.commit()
+
+
+@pytest.mark.asyncio
+async def test_dedicated_e2e_cleanup_wipes_account_data_but_keeps_user():
+    user_id = 8_514_454_144
+    run_id = "DP-20260824T140502-b2c3d4"
+
+    async with async_session() as setup:
+        await setup.execute(delete(User).where(User.telegram_id == user_id))
+        setup.add(
+            User(
+                telegram_id=user_id,
+                username="dedicated-e2e",
+                onboarding_completed=True,
+            )
+        )
+        await setup.flush()
+        setup.add_all(
+            [
+                Task(user_id=user_id, title="LLM stripped the marker"),
+                Note(user_id=user_id, content="unmarked test note"),
+                ProcessedRequest(
+                    request_key=f"e2e:{uuid.uuid4()}",
+                    user_id=user_id,
+                    status="completed",
+                ),
+            ]
+        )
+        await setup.commit()
+
+    deleted = await cleanup(
+        user_id,
+        run_id,
+        execute=True,
+        all_user_data=True,
+    )
+    assert deleted["tasks"] == 1
+    assert deleted["notes"] == 1
+    assert deleted["processed_requests"] == 1
+
+    async with async_session() as check:
+        user = await check.get(User, user_id)
+        assert user is not None
+        assert user.onboarding_completed is True
+        assert list(
+            (await check.execute(select(Task).where(Task.user_id == user_id)))
+            .scalars()
+            .all()
+        ) == []
+        await check.delete(user)
+        await check.commit()
+
+    with pytest.raises(ValueError, match="not configured"):
+        await cleanup(
+            user_id + 1,
+            run_id,
+            execute=True,
+            all_user_data=True,
+        )
