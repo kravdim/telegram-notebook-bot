@@ -41,9 +41,10 @@ misclassification before changing prompts.
 2. Run `uv run ruff check ...`, `uv run mypy ...`, `uv run pytest` and
    `uv run alembic heads`; CI is the canonical command list.
 3. Create a pre-release backup and verify its `.sha256` sidecar.
-4. Run `uv run python scripts/restore_drill.py BACKUP.sql.gz`. It always creates
-   a random `dailyplanner_restore_drill_*` database and removes it afterwards;
-   it cannot select the production database as its restore target.
+4. Run `uv run python scripts/restore_drill.py --backup BACKUP.sql.gz` with
+   `OPERATOR_DATABASE_URL` supplied by the platform credential wrapper. It
+   always creates a random `dailyplanner_restore_drill_*` database and removes
+   it afterwards; it cannot select the production database as its restore target.
    When drilling a backup made before the release migration, pass the database's
    recorded revision as `--expected-revision REVISION`.
 5. For the official macOS target run its installer/preflight. For Docker run
@@ -66,6 +67,65 @@ misclassification before changing prompts.
    measured recovery time.
 
 Never pipe an unverified archive directly into the production database.
+
+## Recovery operator and scheduled drill
+
+The application role must remain `NOSUPERUSER NOCREATEDB NOCREATEROLE`. Recovery
+uses a separate `dailyplanner_recovery` login with only `CREATEDB`. The drill
+rejects both an underprivileged role and a role with `SUPERUSER`, `CREATEROLE`
+or `REPLICATION`.
+
+Pgvector is not a trusted PostgreSQL extension, so a CREATEDB-only role cannot
+install it. Provisioning therefore creates an admin-owned, non-connectable
+`dailyplanner_recovery_template` containing `vector`, `pg_trgm` and `pgcrypto`.
+Extension objects inside the template are owned by the recovery role. The
+one-time ownership setup is atomic: elevated capability is visible only inside
+the uncommitted admin transaction and is revoked before commit. Every drill DB
+is cloned from this template and remains owned by the recovery role.
+
+On the production Mac mini:
+
+```bash
+scripts/provision_recovery_operator_macos.sh
+platform/macos/install-recovery-drill.sh
+platform/macos/run-recovery-drill.sh
+```
+
+The provisioning script reuses an existing password from macOS Keychain or
+generates a new random password and stores it there before changing PostgreSQL.
+The service is `dailyplanner-db-operator` and the account is
+`dailyplanner_recovery`. This fail-fast ordering prevents a locked Keychain from
+leaving the database role with an unknown password.
+
+If macOS rejects non-interactive Keychain creation with `User interaction is
+not allowed`, open **Keychain Access**, select the login keychain and create a
+new **Password Item** with those exact service/account values. Then run this in
+an ordinary logged-in Terminal and choose **Always Allow** if macOS asks whether
+`/usr/bin/security` may read it:
+
+```bash
+security find-generic-password \
+  -a dailyplanner_recovery -s dailyplanner-db-operator -w >/dev/null \
+  && echo "Keychain access OK"
+scripts/provision_recovery_operator_macos.sh
+```
+
+Do not put the password or `OPERATOR_DATABASE_URL` in `.env`, shell history,
+plist or repository files. The wrapper assembles the URL in memory and runs the
+latest verified backup with a 30-hour freshness limit.
+
+LaunchAgent `com.notebook-bot-recovery-drill` runs Sunday at 04:30, after the
+normal 03:00 backup. Successful evidence is appended as JSONL to
+`~/Library/Logs/notebook-bot/recovery-drills.jsonl`; stdout/stderr have separate
+logs. Each record includes backup name/size/SHA-256, migration, restored row
+counts and `rto_seconds`, never credentials. A failed drill exits non-zero and
+does not append a success record.
+
+After every run verify that no database matching `dailyplanner_restore_drill_%`
+remains. Rollback is: unload the recovery LaunchAgent, remove its Keychain item,
+drop `dailyplanner_recovery_template`, then drop role `dailyplanner_recovery`
+only after confirming it owns no remaining databases or objects. This rollback
+does not affect the application role or `notebook_bot` database.
 
 ## Docker readiness and E2E
 

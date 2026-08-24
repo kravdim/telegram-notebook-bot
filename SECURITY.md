@@ -7,6 +7,8 @@ Report a vulnerability privately to the repository owner through GitHub's
 private vulnerability reporting. Include the affected revision, reproduction
 steps and expected impact. Revoke any exposed credential before reporting it.
 
-The supported production target is the macOS LaunchAgent described in
-`docs/OPERATIONS.md`. Docker/VPS is experimental until its end-to-end readiness
-checks become a release gate.
+The primary production target is the macOS LaunchAgent described in
+`docs/OPERATIONS.md`; Docker/VPS is a cloud-adapter target with a container E2E
+release gate. Application and recovery database credentials are separate. The
+CREATEDB-only recovery password belongs in macOS Keychain or the platform secret
+manager and must never be copied to `.env`, plist, logs or command arguments.

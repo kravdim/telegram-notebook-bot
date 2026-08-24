@@ -31,6 +31,7 @@ jobs:
       ALLOW_ALL_USERS: "true"
       RUN_DB_TESTS: "1"
       BACKUP_DIR: /tmp/dailyplanner-backups
+      OPERATOR_DATABASE_URL: postgresql://planner_recovery:planner_recovery@localhost:5432/postgres
       PYTHONPATH: .
     steps:
       - uses: actions/checkout@v4
@@ -52,6 +53,26 @@ jobs:
           scripts/preflight.py scripts/restore_drill.py scripts/secret_scan.py
           scripts/run_postgres_drill.py
       - run: uv run alembic upgrade head
+      - name: Create least-privilege recovery operator
+        run: |
+          export PGPASSWORD=planner
+          psql -h localhost -U planner -d postgres -v ON_ERROR_STOP=1 -c \
+            "CREATE ROLE planner_recovery LOGIN CREATEDB NOSUPERUSER NOCREATEROLE NOREPLICATION PASSWORD 'planner_recovery'"
+          createdb -h localhost -U planner --maintenance-db postgres \
+            --template template0 dailyplanner_recovery_template
+          psql -h localhost -U planner -d dailyplanner_recovery_template \
+            -v ON_ERROR_STOP=1 -c \
+            "BEGIN;
+             ALTER ROLE planner_recovery SUPERUSER;
+             SET ROLE planner_recovery;
+             CREATE EXTENSION vector;
+             CREATE EXTENSION pg_trgm;
+             CREATE EXTENSION pgcrypto;
+             RESET ROLE;
+             ALTER ROLE planner_recovery NOSUPERUSER NOCREATEROLE NOREPLICATION;
+             COMMIT"
+          psql -h localhost -U planner -d postgres -v ON_ERROR_STOP=1 -c \
+            "UPDATE pg_database SET datistemplate=true, datallowconn=false WHERE datname='dailyplanner_recovery_template'"
       - name: Require a single Alembic head
         run: test "$(uv run alembic heads | wc -l)" -eq 1
       - run: uv run pytest
@@ -59,7 +80,7 @@ jobs:
       - name: Create and restore a real backup
         run: |
           backup="$(uv run python -c 'import asyncio; from bot.scheduler.backup import run_backup; print(asyncio.run(run_backup()))')"
-          uv run python scripts/restore_drill.py "$backup"
+          uv run python scripts/restore_drill.py --backup "$backup"
       - run: uv run python scripts/secret_scan.py
 
   container-e2e:

@@ -7,7 +7,6 @@ import os
 import secrets
 import shutil
 import subprocess
-import sys
 import tempfile
 from pathlib import Path
 
@@ -37,26 +36,45 @@ def _pg_tool(name: str) -> str:
 
 def main() -> None:
     project = Path(__file__).resolve().parents[1]
-    sys.path.insert(0, str(project))
-    from bot.config import settings
-
-    source_url = make_url(settings.database_url)
-    if not source_url.drivername.startswith("postgresql"):
-        raise SystemExit("PostgreSQL is required")
+    operator_url_raw = os.environ.get("OPERATOR_DATABASE_URL")
+    if not operator_url_raw:
+        raise SystemExit("OPERATOR_DATABASE_URL is required")
+    operator_url = make_url(operator_url_raw)
+    if not operator_url.drivername.startswith("postgresql"):
+        raise SystemExit("PostgreSQL operator URL is required")
     database = f"dailyplanner_ci_drill_{secrets.token_hex(5)}"
     env = os.environ.copy()
     env["PYTHONPATH"] = str(project)
-    env["PGPASSWORD"] = source_url.password or ""
-    cli = ["-h", source_url.host or "localhost", "-p", str(source_url.port or 5432)]
-    if source_url.username:
-        cli += ["-U", source_url.username]
-    drill_url = source_url.set(database=database).render_as_string(hide_password=False)
+    env["PGPASSWORD"] = operator_url.password or ""
+    cli = [
+        "-h",
+        operator_url.host or "localhost",
+        "-p",
+        str(operator_url.port or 5432),
+    ]
+    if operator_url.username:
+        cli += ["-U", operator_url.username]
+    maintenance_db = operator_url.database or "postgres"
+    drill_url = operator_url.set(
+        drivername="postgresql+asyncpg", database=database
+    ).render_as_string(hide_password=False)
     env["DATABASE_URL"] = drill_url
     env["RUN_DB_TESTS"] = "1"
     env.setdefault("ALLOW_ALL_USERS", "true")
     created = False
     try:
-        _run([_pg_tool("createdb"), *cli, database], env)
+        _run(
+            [
+                _pg_tool("createdb"),
+                *cli,
+                "--maintenance-db",
+                maintenance_db,
+                "--template",
+                "dailyplanner_recovery_template",
+                database,
+            ],
+            env,
+        )
         created = True
         _run([str(project / ".venv/bin/alembic"), "upgrade", "head"], env)
         _run(
@@ -84,15 +102,24 @@ def main() -> None:
                 [
                     str(project / ".venv/bin/python"),
                     "scripts/restore_drill.py",
+                    "--backup",
                     str(backup),
-                    "--database-url",
-                    drill_url,
                 ],
                 env,
             )
     finally:
         if created:
-            _run([_pg_tool("dropdb"), *cli, "--force", database], env)
+            _run(
+                [
+                    _pg_tool("dropdb"),
+                    *cli,
+                    "--maintenance-db",
+                    maintenance_db,
+                    "--force",
+                    database,
+                ],
+                env,
+            )
 
 
 if __name__ == "__main__":

@@ -46,3 +46,9 @@ the probe combines that liveness evidence with config, PostgreSQL and Alembic
 head checks. Its hermetic CI E2E exercises image, entrypoint, extensions, schema
 and vector storage while deliberately replacing Telegram/provider traffic with
 a long-running smoke runtime.
+
+Backup creation uses the normal application role and never requires database
+creation rights. Recovery is a separate operational boundary: a CREATEDB-only
+role may clone a locked extension template and owns only disposable drill
+databases. The application process never receives this credential, and the
+recovery process never receives the application's Telegram or AI credentials.

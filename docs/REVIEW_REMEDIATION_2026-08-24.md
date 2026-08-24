@@ -36,7 +36,9 @@
   PostgreSQL/Alembic/schema/pgvector E2E в CI и readiness по свежему heartbeat,
   runtime PID, DB и точному migration head; negative stale-heartbeat probe
   проверен на disposable Compose stack.
-- [ ] Operator DATABASE_URL и регулярный измеряемый recovery drill.
+- [x] Отдельный CREATEDB-only operator URL из macOS Keychain, закрытая extension
+  template для pgvector, fail-closed capability checks, weekly LaunchAgent,
+  JSONL evidence с SHA-256/row counts/RTO и гарантированный cleanup drill DB.
 - [ ] Полная выплата Ruff/mypy debt с расширением CI gate.
 - [ ] Файловая ротация launchd stdout/stderr и проверяемый deletion workflow.
 - [ ] Coverage/security/dependency gates и дальнейшая UX-полировка настроек.

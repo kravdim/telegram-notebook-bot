@@ -18,6 +18,10 @@
 4. Container E2E/readiness: cloud-first образ без local Whisper, обязательный
    mounted config, чистый PostgreSQL 16 + migrations/extensions/schema/pgvector
    smoke, event-loop heartbeat и DB/Alembic readiness probe, отдельный CI job.
+5. Recovery operator: application role остаётся без `CREATEDB`; отдельная
+   Keychain-backed role клонирует закрытую pgvector template, восстанавливает
+   backup в случайную БД, пишет SHA-256/row counts/RTO evidence и удаляет drill
+   DB. Weekly LaunchAgent запускается по воскресеньям после ночного backup.
 
 ## Проверка последнего этапа
 
@@ -35,14 +39,17 @@
 
 ## Production и границы изменений
 
-Primary production остаётся macOS LaunchAgent `com.notebook-bot`; этот этап не
-менял production database, migration или supervisor и не требовал его restart.
-Docker/VPS теперь является проверяемым cloud-adapter target, но hermetic CI smoke
-не заменяет release-проверку реального Telegram `/status` и одной read-only
-команды с настоящими provider credentials.
+Primary production остаётся macOS LaunchAgent `com.notebook-bot`; recovery
+добавлен отдельным LaunchAgent `com.notebook-bot-recovery-drill` с расписанием
+Sunday 04:30 и не потребовал restart основного сервиса. Первый запуск через
+launchd успешно восстановил backup `notebook_bot_2026-08-24_162501.sql.gz`:
+20 public tables, migration `f4b8c2d6e1a0`, 2 users, 97 tasks, RTO 0,62 секунды.
+JSONL evidence записан, stderr пуст, временных drill-БД не осталось, application
+preflight прошёл. Docker/VPS теперь является проверяемым cloud-adapter target,
+но hermetic CI smoke не заменяет release-проверку реального Telegram `/status`
+и одной read-only команды с настоящими provider credentials.
 
 ## Следующий архитектурный этап
 
-Следующий незакрытый пункт review checklist — отдельный operator `DATABASE_URL`
-с правом создавать disposable restore-drill databases, регулярный recovery drill
-и сохранение измеренного RTO без расширения прав application role.
+Следующий незакрытый пункт review checklist — полная выплата Ruff/mypy debt с
+расширением CI gate на весь поддерживаемый код.

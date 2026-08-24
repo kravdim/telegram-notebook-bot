@@ -248,10 +248,11 @@ Telegram-сообщения дедуплицируются в PostgreSQL.
 - **Бэкапы** — ежедневный pg_dump, SHA-256 checksum и ротация 30 дней
 - **Graceful shutdown** — корректное завершение при SIGTERM
 - **Singleton runtime** — PostgreSQL advisory lock исключает второй scheduler/polling
-- **Restore drill** — backup проверяется по SHA-256 и восстанавливается в одноразовую БД
+- **Restore drill** — отдельная CREATEDB-only role из Keychain восстанавливает
+  SHA-256-проверенный backup в одноразовую БД и сохраняет измеренный RTO
 - **SLO** — `/status` и Telegram-alert для задержки напоминаний и возраста backup
 - **CI** — lockfile, lint/typecheck, unit/integration restart tests, Alembic single-head,
-  restore drill, secret scan и Docker build
+  restore drill, secret scan и полный container E2E
 
 Эксплуатация и разработка: [runbook](docs/OPERATIONS.md),
 [границы архитектуры](docs/ARCHITECTURE.md), [privacy/retention](docs/PRIVACY.md).
@@ -353,11 +354,18 @@ readiness. Healthcheck требует свежий heartbeat event loop, вал�
 Бэкапы сохраняются вместе с SHA-256 checksum. Проверенное восстановление:
 
 ```bash
-DATABASE_URL=postgresql://user:password@host/database \
-  scripts/restore_backup.sh /path/to/notebook_bot_YYYY-MM-DD_HHmmss.sql.gz
+platform/macos/run-recovery-drill.sh
 ```
 
-Скрипт проверяет checksum и требует явно ввести `RESTORE` перед изменением БД.
+Drill никогда не изменяет исходную БД: он проверяет operator capabilities и
+закрытую extension template, создаёт случайную `dailyplanner_restore_drill_*`,
+валидирует migration и row counts, измеряет RTO и гарантированно удаляет базу.
+На macOS operator password читается только из Keychain, а weekly LaunchAgent
+пишет результаты в `~/Library/Logs/notebook-bot/recovery-drills.jsonl`.
+На других платформах передавайте `OPERATOR_DATABASE_URL` через штатный secret
+manager, не командную строку или env-файл.
+Интерактивный `restore_backup.sh` предназначен только для явно выбранной target
+БД и остаётся отдельной аварийной процедурой.
 Для standalone-установки передайте пароль через
 `NOTEBOOK_DB_PASSWORD=... sudo -E platform/linux/install.sh`.
 
