@@ -355,9 +355,16 @@ async def test_e2e_namespace_cleanup_deletes_only_current_run_artifacts():
 
 
 @pytest.mark.asyncio
-async def test_dedicated_e2e_cleanup_wipes_account_data_but_keeps_user():
+async def test_dedicated_e2e_cleanup_wipes_account_data_but_keeps_user(monkeypatch):
     user_id = 8_514_454_144
     run_id = "DP-20260824T140502-b2c3d4"
+    from bot.config import settings
+
+    monkeypatch.setitem(
+        settings.yaml_config,
+        "testing",
+        {"e2e_user_ids": [user_id]},
+    )
 
     async with async_session() as setup:
         await setup.execute(delete(User).where(User.telegram_id == user_id))
