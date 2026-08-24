@@ -53,3 +53,14 @@ preflight прошёл. Docker/VPS теперь является проверя�
 
 Следующий незакрытый пункт review checklist — полная выплата Ruff/mypy debt с
 расширением CI gate на весь поддерживаемый код.
+
+## Фиксация и deployment
+
+- Recovery implementation зафиксирован commit `530015f` (`Add least-privilege
+  recovery drill`) и отправлен в `origin/main`.
+- GitHub Actions CI run `32764429844` завершился успешно.
+- Установленный plist совпадает с шаблоном из commit; production LaunchAgent
+  указывает на текущий checkout и зарегистрирован в GUI domain 501.
+- Post-deploy запуск через launchd стал вторым успешным drill: exit code `0`,
+  RTO 0,22 секунды, stderr пуст. Временных drill-БД не осталось; recovery role
+  сохранила только `CREATEDB`, основной application preflight прошёл.
