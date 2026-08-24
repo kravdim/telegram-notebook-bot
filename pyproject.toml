@@ -58,6 +58,6 @@ source = ["bot", "scripts"]
 omit = ["bot/db/migrations/*"]
 
 [tool.coverage.report]
-fail_under = 40
+fail_under = 42
 show_missing = true
 skip_covered = true

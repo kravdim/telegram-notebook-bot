@@ -12,7 +12,7 @@ from pathlib import Path
 from bot.config import BASE_DIR, settings
 from bot.db.engine import async_session, engine
 from bot.runtime.singleton import SingletonLease
-from bot.services.access_config import remove_allowed_telegram_id
+from bot.services.access_config import read_allowed_telegram_ids, remove_allowed_telegram_id
 from bot.services.user_deletion import (
     confirmation_phrase,
     delete_user_data,
@@ -38,6 +38,10 @@ async def run(args: argparse.Namespace) -> dict[str, object]:
         raise ValueError("refusing to delete an administrator account")
     if args.execute and settings.allow_all_users:
         raise ValueError("refusing deletion while ALLOW_ALL_USERS is enabled")
+    if args.execute and read_allowed_telegram_ids(args.config) != settings.allowed_telegram_ids:
+        raise ValueError(
+            "runtime whitelist differs from config.yaml; remove the environment override first"
+        )
 
     if not args.execute:
         async with async_session() as session:

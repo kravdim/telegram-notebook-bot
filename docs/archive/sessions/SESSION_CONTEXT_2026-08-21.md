@@ -3,7 +3,7 @@
 ## Исходная задача
 
 Разобрать результаты живого бета-теста из
-[`BETA_TEST_2026-08-20.md`](BETA_TEST_2026-08-20.md), составить план исправлений,
+[`BETA_TEST_2026-08-20.md`](../reviews/BETA_TEST_2026-08-20.md), составить план исправлений,
 реализовать его, проверить и развернуть исправления в production.
 
 ## Что сделано
@@ -27,7 +27,8 @@
   `e8c1f4a7b2d9_beta_intent_hardening`.
 - Добавлены regression-тесты и новые golden intent cases.
 
-Подробный чек-лист: [`BETA_REMEDIATION_PLAN_2026-08-21.md`](BETA_REMEDIATION_PLAN_2026-08-21.md).
+Подробный чек-лист:
+[`BETA_REMEDIATION_PLAN_2026-08-21.md`](../reviews/BETA_REMEDIATION_PLAN_2026-08-21.md).
 
 ## Проверка
 

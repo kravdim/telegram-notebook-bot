@@ -8,7 +8,8 @@
   `rto_seconds`; retain that value with release evidence.
 - Backup freshness alert: 30 hours, allowing for the scheduled window.
 
-`/status` shows PostgreSQL/LLM/embedding health plus reminder and backup SLOs.
+`/status` shows PostgreSQL/LLM/embedding/STT health, the latest observed STT
+transcription latency, plus reminder and backup SLOs.
 Violations are logged and sent to configured Telegram admins, throttled to one
 alert per SLO per hour. In-process counters include LLM/STT errors, LLM queue
 depth, reminder lag and scheduler job duration.
@@ -29,11 +30,24 @@ dedicated account while preserving its registration and settings. The cleanup
 script rejects users outside the configured allowlist and is dry-run unless
 `--execute --all-user-data` are both supplied.
 
-`scripts/evaluate_llm_contracts.py` reports tool-call parser accuracy and
-invalid-tool rate for anonymized saved provider responses; это не online intent
-evaluation пользовательских utterance. Runtime counters additionally expose
-fallback and invalid-tool frequency; extend the fixture for every production
-misclassification before changing prompts.
+`scripts/evaluate_llm_contracts.py` reports parser accuracy and utterance
+contract accuracy for anonymized saved provider responses. It verifies tool
+names, expected arguments and the current function schemas. Runtime counters
+additionally expose fallback and invalid-tool frequency; extend the fixture for
+every production misclassification before changing prompts.
+
+The credentialed release gate runs locally on the production Mac, where the
+dedicated Telegram test session exists:
+
+```bash
+scripts/run_live_e2e_gate.sh
+```
+
+The wrapper runs preflight, invokes the isolated messy-human suite, requires
+every executed case to pass, and relies on the runner's mandatory `finally`
+teardown. Its full report remains in the userbot repository. Hosted CI runs the
+deterministic 22-case LLM contract gate and container E2E; it intentionally has
+no access to a personal Telegram session.
 
 ## Release checklist
 
@@ -54,6 +68,8 @@ misclassification before changing prompts.
    instance exit before Telegram polling or scheduler startup.
 7. Check logs, `/status`, current Alembic revision and one non-mutating Telegram
    command. Confirm the next reminder sweep and backup marker.
+8. Run `scripts/run_live_e2e_gate.sh`; release only when every live case passes
+   and teardown reports success.
 
 ## LaunchAgent log maintenance
 

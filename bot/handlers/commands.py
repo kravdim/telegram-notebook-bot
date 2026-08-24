@@ -2,16 +2,21 @@
 
 import html
 import logging
+import tempfile
 import uuid as uuid_mod
 from datetime import date, datetime
+from pathlib import Path
 from typing import cast
 
 import pendulum
 from aiogram import F, Router
 from aiogram.filters import Command, CommandObject
 from aiogram.types import CallbackQuery, Message
+from aiogram.types.input_file import FSInputFile
 from aiogram.utils.keyboard import InlineKeyboardBuilder
+from sqlalchemy import select
 
+from bot.config import settings
 from bot.db.crud.birthdays import get_all_birthdays
 from bot.db.crud.chronometry import get_day_stats, get_week_stats
 from bot.db.crud.memoir import get_memoir_entries, get_value_stats
@@ -26,11 +31,12 @@ from bot.db.crud.tasks import (
 )
 from bot.db.crud.users import get_user, update_user_settings
 from bot.db.engine import async_session
-from bot.db.models import Note
+from bot.db.models import DiaryEntry, Note
 from bot.formatters import split_html_message
 from bot.formatters.chronometry import format_day_photo, format_week_summary
 from bot.formatters.memoir import format_memoir_entries, format_value_stats
 from bot.handlers.telegram import callback_data, callback_message, message_bot
+from bot.services.export import ExportTooLargeError, write_export_archive
 from bot.services.tasks import complete_task_workflow
 
 logger = logging.getLogger(__name__)
@@ -38,6 +44,40 @@ logger = logging.getLogger(__name__)
 router = Router()
 
 _PRIORITY_EMOJI = {"high": "🔴", "medium": "🟡", "normal": "⚪"}
+
+
+def _task_export_lines(tasks):
+    yield "# Задачи\n\n"
+    for task in tasks:
+        status = "x" if task.status == "done" else " "
+        frog = " 🐸" if task.is_frog else ""
+        date_str = (
+            f" (до {task.due_date.strftime('%d.%m.%Y')})" if task.due_date else ""
+        )
+        yield f"- [{status}] {task.title}{frog}{date_str}\n"
+
+
+def _note_export_lines(notes):
+    yield "# Заметки\n\n"
+    for note in notes:
+        title = note.title or "Без названия"
+        date_str = note.created_at.strftime("%Y-%m-%d %H:%M")
+        yield f"## {title}\n*{date_str}*\n\n{note.content}\n\n---\n\n"
+
+
+def _dated_export_lines(title, entries, date_attribute):
+    yield f"# {title}\n\n"
+    for entry in entries:
+        entry_date = getattr(entry, date_attribute).strftime("%Y-%m-%d")
+        tag = f" [{entry.value_tag}]" if getattr(entry, "value_tag", None) else ""
+        yield f"## {entry_date}{tag}\n\n{entry.content}\n\n---\n\n"
+
+
+def _birthday_export_lines(birthdays):
+    yield "# Дни рождения\n\n"
+    for birthday in birthdays:
+        note = f" — {birthday.note}" if birthday.note else ""
+        yield f"- {birthday.name}: {birthday.birth_date.strftime('%d.%m.%Y')}{note}\n"
 
 
 async def _answer_html_parts(message: Message, text: str) -> None:
@@ -1120,81 +1160,67 @@ async def cmd_export(message: Message) -> None:
     user_id = message.from_user.id
     await message_bot(message).send_chat_action(chat_id=message.chat.id, action="typing")
 
-    import io
-    import zipfile
-
-    buf = io.BytesIO()
-    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
-        async with async_session() as session:
-            # Задачи
-            tasks = await get_user_tasks(session, user_id, status=None)
-            if tasks:
-                md = "# Задачи\n\n"
-                for t in tasks:
-                    status = "x" if t.status == "done" else " "
-                    frog = " 🐸" if t.is_frog else ""
-                    date_str = f" (до {t.due_date.strftime('%d.%m.%Y')})" if t.due_date else ""
-                    md += f"- [{status}] {t.title}{frog}{date_str}\n"
-                zf.writestr("tasks.md", md)
-
-            # Заметки
-            from sqlalchemy import select
-
-            from bot.db.models import Note
-
-            res = await session.execute(
-                select(Note).where(Note.user_id == user_id).order_by(Note.created_at.desc())
-            )
-            notes = list(res.scalars().all())
-            if notes:
-                md = "# Заметки\n\n"
-                for n in notes:
-                    title = n.title or "Без названия"
-                    date_str = n.created_at.strftime("%Y-%m-%d %H:%M")
-                    md += f"## {title}\n*{date_str}*\n\n{n.content}\n\n---\n\n"
-                zf.writestr("notes.md", md)
-
-            # Дневник
-            from bot.db.models import DiaryEntry
-
-            diary_result = await session.execute(
-                select(DiaryEntry)
-                .where(DiaryEntry.user_id == user_id)
-                .order_by(DiaryEntry.entry_date.desc())
-            )
-            diary = list(diary_result.scalars().all())
-            if diary:
-                md = "# Дневник\n\n"
-                for d in diary:
-                    md += f"## {d.entry_date.strftime('%Y-%m-%d')}\n\n{d.content}\n\n---\n\n"
-                zf.writestr("diary.md", md)
-
-            # Мемуарник
-            memoirs = await get_memoir_entries(session, user_id, limit=365)
-            if memoirs:
-                md = "# Мемуарник\n\n"
-                for m in memoirs:
-                    tag = f" [{m.value_tag}]" if m.value_tag else ""
-                    md += f"## {m.event_date.strftime('%Y-%m-%d')}{tag}\n\n{m.content}\n\n---\n\n"
-                zf.writestr("memoir.md", md)
-
-            # Дни рождения
-            bdays = await get_all_birthdays(session, user_id)
-            if bdays:
-                md = "# Дни рождения\n\n"
-                for b in bdays:
-                    note = f" — {b.note}" if b.note else ""
-                    md += f"- {b.name}: {b.birth_date.strftime('%d.%m.%Y')}{note}\n"
-                zf.writestr("birthdays.md", md)
-
-    buf.seek(0)
-
-    from aiogram.types import BufferedInputFile
-
-    doc = BufferedInputFile(
-        buf.read(),
-        filename=f"export_{pendulum.now().format('YYYY-MM-DD')}.zip",
+    max_bytes = int(
+        settings.yaml_config.get("export", {}).get("max_bytes", 45 * 1024 * 1024)
     )
-    await message.answer_document(
-        doc, caption="📦 Экспорт данных в Markdown (Obsidian-совместимый)"
-    )
+    try:
+        with tempfile.TemporaryDirectory(prefix="dailyplanner-export-") as temp_dir:
+            archive_path = Path(temp_dir) / "export.zip"
+            sections = []
+            async with async_session() as session:
+                tasks = await get_user_tasks(session, user_id, status=None)
+                if tasks:
+                    sections.append(("tasks.md", _task_export_lines(tasks)))
+
+                res = await session.execute(
+                    select(Note)
+                    .where(Note.user_id == user_id)
+                    .order_by(Note.created_at.desc())
+                )
+                notes = list(res.scalars().all())
+                if notes:
+                    sections.append(("notes.md", _note_export_lines(notes)))
+
+                diary_result = await session.execute(
+                    select(DiaryEntry)
+                    .where(DiaryEntry.user_id == user_id)
+                    .order_by(DiaryEntry.entry_date.desc())
+                )
+                diary = list(diary_result.scalars().all())
+                if diary:
+                    sections.append(
+                        ("diary.md", _dated_export_lines("Дневник", diary, "entry_date"))
+                    )
+
+                memoirs = await get_memoir_entries(session, user_id, limit=365)
+                if memoirs:
+                    sections.append(
+                        (
+                            "memoir.md",
+                            _dated_export_lines("Мемуарник", memoirs, "event_date"),
+                        )
+                    )
+
+                birthdays = await get_all_birthdays(session, user_id)
+                if birthdays:
+                    sections.append(
+                        ("birthdays.md", _birthday_export_lines(birthdays))
+                    )
+
+            write_export_archive(archive_path, sections, max_bytes=max_bytes)
+            doc = FSInputFile(
+                archive_path,
+                filename=f"export_{pendulum.now().format('YYYY-MM-DD')}.zip",
+            )
+            await message.answer_document(
+                doc, caption="📦 Экспорт данных в Markdown (Obsidian-совместимый)"
+            )
+    except ExportTooLargeError:
+        logger.warning("Export for user %s exceeded the configured size", user_id)
+        await message.answer(
+            "Экспорт слишком большой для безопасной отправки. "
+            "Обратись к администратору за архивом данных."
+        )
+    except Exception:
+        logger.exception("Export failed for user %s", user_id)
+        await message.answer("Не удалось подготовить экспорт. Попробуй позже.")

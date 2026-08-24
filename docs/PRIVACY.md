@@ -4,6 +4,11 @@ DailyPlanner stores task, project, reminder, diary, memoir, time-tracking,
 birthday and interaction data in PostgreSQL. Embeddings are derived from user
 text and are personal data even when they are not directly readable.
 
+`/export` creates an Obsidian-compatible ZIP in a private temporary directory,
+writes Markdown incrementally, rejects content or archives above the configured
+`export.max_bytes`, and removes the temporary directory after success or error.
+The bot does not retain export archives.
+
 Default retention:
 
 - domain data: until the user or operator deletes the account/data;
@@ -26,6 +31,8 @@ uv run python scripts/delete_user_data.py TELEGRAM_ID \
 
 Stop the bot before the execute form. It is bound to the exact target ID,
 refuses administrator accounts and `ALLOW_ALL_USERS`, and refuses to continue
+when an environment whitelist differs from the persisted YAML whitelist. It
+also refuses to continue
 if the runtime still holds its PostgreSQL singleton lease. The deletion process
 holds that same lease to prevent a restart during the operation. It first
 removes access from the whitelist using an atomic YAML replacement, deletes the

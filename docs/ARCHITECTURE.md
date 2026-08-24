@@ -32,6 +32,8 @@ handlers ──► llm/contracts + dispatcher ──► db/crud ──► Postgr
    runtime advisory lock permits only one scheduler/polling process.
 5. `observability.py` may read operational state but must never be required for a
    successful domain write or a valid backup archive.
+6. User export is disk-backed and bounded in `services/export.py`; Telegram
+   handlers never hold the complete ZIP payload in process memory.
 
 New business workflows should first become a service function callable without
 Telegram objects. Handlers should remain thin adapters around that function.

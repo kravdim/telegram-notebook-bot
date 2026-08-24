@@ -3,6 +3,7 @@
 import asyncio
 import logging
 import tempfile
+import time
 from html import escape
 from pathlib import Path
 
@@ -32,6 +33,11 @@ def init(stt_client: STTClient) -> None:
     """Установить STT-клиент."""
     global _stt_client
     _stt_client = stt_client
+
+
+def get_client() -> STTClient | None:
+    """Return the initialized shared STT client for health checks."""
+    return _stt_client
 
 
 def consume_voice_edit(user_id: int) -> bool:
@@ -108,6 +114,7 @@ async def handle_voice(message: Message) -> None:
         await bot.download_file(file.file_path, tmp_path)
 
     await message.answer("🎤 Распознаю голосовое…")
+    started = time.monotonic()
     try:
         timeout_sec = int(
             settings.yaml_config.get("stt", {}).get("timeout_sec", 90)
@@ -129,6 +136,9 @@ async def handle_voice(message: Message) -> None:
         await message.answer("Не удалось распознать голосовое. Попробуй ещё раз.")
         return
     finally:
+        elapsed = time.monotonic() - started
+        metrics.observe("stt.transcription_seconds", elapsed)
+        metrics.gauge("stt.last_transcription_seconds", elapsed)
         tmp_path.unlink(missing_ok=True)
 
     if not text or not text.strip():

@@ -105,6 +105,11 @@ class MetricsRegistry:
     def observe(self, name: str, value: float) -> None:
         self._samples[name].append(value)
 
+    def latest(self, name: str) -> float | None:
+        """Return the latest observation without exposing mutable storage."""
+        values = self._samples.get(name)
+        return values[-1] if values else None
+
     def snapshot(self) -> dict:
         observations = {}
         for name, values in self._samples.items():

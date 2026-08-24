@@ -10,6 +10,16 @@ from pathlib import Path
 import yaml
 
 
+def read_allowed_telegram_ids(config_path: Path) -> list[int]:
+    """Read the persisted YAML whitelist used by operator mutations."""
+    content = config_path.read_text(encoding="utf-8") if config_path.exists() else ""
+    config = yaml.safe_load(content) or {}
+    values = config.get("bot", {}).get("allowed_telegram_ids", [])
+    if not isinstance(values, list) or any(not isinstance(value, int) for value in values):
+        raise ValueError("bot.allowed_telegram_ids must be a list of integers")
+    return values
+
+
 def write_allowed_telegram_ids(config_path: Path, user_ids: list[int]) -> None:
     """Persist the whitelist atomically while preserving unrelated settings."""
     content = config_path.read_text(encoding="utf-8") if config_path.exists() else ""
@@ -39,9 +49,7 @@ def write_allowed_telegram_ids(config_path: Path, user_ids: list[int]) -> None:
 
 def remove_allowed_telegram_id(config_path: Path, user_id: int) -> bool:
     """Remove one ID, returning whether the persisted list changed."""
-    content = config_path.read_text(encoding="utf-8") if config_path.exists() else ""
-    config = yaml.safe_load(content) or {}
-    current = list(config.get("bot", {}).get("allowed_telegram_ids", []))
+    current = read_allowed_telegram_ids(config_path)
     updated = [value for value in current if value != user_id]
     if updated == current:
         return False

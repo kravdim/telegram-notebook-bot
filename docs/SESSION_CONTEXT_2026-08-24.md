@@ -2,9 +2,9 @@
 
 ## Отправная точка
 
-В работу взяты рекомендации [`../REVIEW_2026-08-24.md`](../REVIEW_2026-08-24.md)
+В работу взяты рекомендации [`REVIEW_2026-08-24.md`](archive/reviews/REVIEW_2026-08-24.md)
 после исправлений по двум живым beta-тестам. Актуальный checklist находится в
-[`REVIEW_REMEDIATION_2026-08-24.md`](REVIEW_REMEDIATION_2026-08-24.md).
+архивном [`REVIEW_REMEDIATION_2026-08-24.md`](archive/reviews/REVIEW_REMEDIATION_2026-08-24.md).
 
 ## Завершённые этапы
 

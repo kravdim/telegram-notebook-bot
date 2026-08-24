@@ -21,6 +21,10 @@ stt:
   warmup_timeout_sec: 120
   timeout_sec: 90
 
+export:
+  # Консервативный предел архива; экспорт создаётся на диске и удаляется после отправки.
+  max_bytes: 47185920
+
 bot:
   admin_telegram_ids: []
   allowed_telegram_ids: []
@@ -41,6 +45,7 @@ slo:
   # Alert when the oldest due reminder or last successful backup exceeds target.
   reminder_lag_seconds: 120
   backup_max_age_hours: 30
+  stt_latency_seconds: 30
 
 chronometry:
   default_interval_min: 60

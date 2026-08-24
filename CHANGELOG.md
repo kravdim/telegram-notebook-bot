@@ -1,5 +1,14 @@
 # Changelog
 
+## 2026-08-25
+
+- Made `/export` disk-backed, size-bounded and cleanup-safe.
+- Added shared-client STT health and observed transcription latency to `/status`.
+- Expanded fail-fast runtime validation for every provider and operational limit.
+- Added schema-aware natural-language LLM contract evaluation and a mandatory
+  isolated live Telegram release gate.
+- Raised the measured coverage floor to 42% and archived completed review plans.
+
 All notable production changes are recorded here. Historical beta and review
 reports remain dated evidence under the repository root and `docs/`.
 

@@ -204,6 +204,8 @@ async def cmd_status(message: Message) -> None:
             status, "⚪"
         )
         latency = f" ({info['latency_ms']}ms)" if "latency_ms" in info else ""
+        if info.get("last_transcription_ms") is not None:
+            latency += f", last STT {info['last_transcription_ms']}ms"
         lines.append(f"{emoji} {service}: {status}{latency}")
 
     lines.append(f"\n👥 Пользователей: {len(users)}")

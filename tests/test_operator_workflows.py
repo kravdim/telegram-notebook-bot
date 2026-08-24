@@ -12,6 +12,7 @@ import yaml
 from bot.formatters.stats import format_frog_stats, format_productivity_stats
 from bot.handlers.commands import _current_frog_streak
 from bot.services.access_config import (
+    read_allowed_telegram_ids,
     remove_allowed_telegram_id,
     write_allowed_telegram_ids,
 )
@@ -40,6 +41,14 @@ def test_whitelist_update_deduplicates_ids(tmp_path: Path) -> None:
     write_allowed_telegram_ids(config_path, [4, 4, 5])
     config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
     assert config["bot"]["allowed_telegram_ids"] == [4, 5]
+    assert read_allowed_telegram_ids(config_path) == [4, 5]
+
+
+def test_whitelist_reader_rejects_non_integer_values(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text("bot:\n  allowed_telegram_ids: nope\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="list of integers"):
+        read_allowed_telegram_ids(config_path)
 
 
 def test_deletion_confirmation_is_bound_to_target() -> None:

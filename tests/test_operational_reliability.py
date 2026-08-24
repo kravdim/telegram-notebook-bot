@@ -95,6 +95,16 @@ def test_llm_golden_contract_fixtures():
             assert arguments["repeat_rule"] == case["repeat_rule"]
 
 
+def test_llm_utterance_contract_fixtures():
+    fixture = Path(__file__).parent / "fixtures" / "llm_utterance_cases.json"
+    cases = json.loads(fixture.read_text(encoding="utf-8"))
+    for case in cases:
+        name, arguments = parse_function_call(case["raw"])
+        assert name == case["name"], case["utterance"]
+        for key, value in case["expected_arguments"].items():
+            assert arguments.get(key) == value, case["utterance"]
+
+
 def test_unknown_tool_fails_closed():
     with pytest.raises(ValidationError):
         Action.model_validate({"name": "drop_database", "arguments": {}})
