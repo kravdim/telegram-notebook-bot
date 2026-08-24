@@ -3,7 +3,6 @@
 import html
 import logging
 import uuid
-from datetime import timedelta
 
 import pendulum
 from aiogram import F, Router
@@ -11,11 +10,12 @@ from aiogram.exceptions import TelegramBadRequest
 from aiogram.types import CallbackQuery
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
+from bot.db.crud.projects import complete_project_and_cancel_open_tasks
 from bot.db.crud.reminders import get_reminder_by_id, resolve_reminder, snooze_reminder
 from bot.db.crud.tasks import delete_task, get_task_by_id
 from bot.db.crud.users import get_user
-from bot.db.crud.projects import complete_project_and_cancel_open_tasks
 from bot.db.engine import async_session
+from bot.handlers.telegram import callback_data, callback_message
 from bot.services.tasks import complete_task_workflow
 
 logger = logging.getLogger(__name__)
@@ -39,7 +39,7 @@ async def cb_memoir_skip(callback: CallbackQuery) -> None:
                 await clear_state(session, user_id)
     except Exception as exc:
         logger.warning("Не удалось очистить persistent memoir state: %s", exc)
-    await callback.message.edit_text(
+    await callback_message(callback).edit_text(
         "📔 Сегодня без записи. Завтра спрошу снова.",
         reply_markup=None,
     )
@@ -50,21 +50,21 @@ async def cb_memoir_skip(callback: CallbackQuery) -> None:
 @router.callback_query(F.data.startswith("snooze_30:"))
 async def cb_snooze_30(callback: CallbackQuery) -> None:
     """Отложить на 30 минут."""
-    reminder_id = callback.data.split(":", 1)[1]
+    reminder_id = callback_data(callback).split(":", 1)[1]
     await _do_snooze(callback, reminder_id, minutes=30)
 
 
 @router.callback_query(F.data.startswith("snooze_60:"))
 async def cb_snooze_60(callback: CallbackQuery) -> None:
     """Отложить на 1 час."""
-    reminder_id = callback.data.split(":", 1)[1]
+    reminder_id = callback_data(callback).split(":", 1)[1]
     await _do_snooze(callback, reminder_id, minutes=60)
 
 
 @router.callback_query(F.data.startswith("snooze_morning:"))
 async def cb_snooze_morning(callback: CallbackQuery) -> None:
     """Отложить до завтра утром."""
-    reminder_id = callback.data.split(":", 1)[1]
+    reminder_id = callback_data(callback).split(":", 1)[1]
 
     async with async_session() as session:
         user = await get_user(session, callback.from_user.id)
@@ -83,7 +83,7 @@ async def cb_snooze_morning(callback: CallbackQuery) -> None:
 @router.callback_query(F.data.startswith("snooze_done:"))
 async def cb_snooze_done(callback: CallbackQuery) -> None:
     """Напоминание выполнено — отметить задачу если есть."""
-    reminder_id = callback.data.split(":", 1)[1]
+    reminder_id = callback_data(callback).split(":", 1)[1]
     await callback.answer("✅")
 
     result_text = "✅ Готово!"
@@ -117,7 +117,7 @@ async def cb_snooze_done(callback: CallbackQuery) -> None:
         result_text = "✅ Готово!"
 
     try:
-        await callback.message.edit_text(result_text, reply_markup=None)
+        await callback_message(callback).edit_text(result_text, reply_markup=None)
     except TelegramBadRequest:
         pass  # Сообщение уже отредактировано (двойной клик)
 
@@ -147,11 +147,11 @@ async def _do_snooze(
             user = await get_user(session, callback.from_user.id)
 
         if not reminder:
-            await callback.message.edit_text("Напоминание не найдено.", reply_markup=None)
+            await callback_message(callback).edit_text("Напоминание не найдено.", reply_markup=None)
             return
 
         if reminder.snooze_count >= MAX_SNOOZE:
-            await callback.message.edit_text(
+            await callback_message(callback).edit_text(
                 f"⚠️ Это напоминание уже откладывалось {reminder.snooze_count} раз.\n"
                 f"Напоминание: {reminder.message}\n\n"
                 "Может, пора взяться за это дело?",
@@ -164,7 +164,7 @@ async def _do_snooze(
         local_time = pendulum.instance(new_time).in_timezone(timezone)
         time_str = local_time.strftime("%d.%m %H:%M")
         delay_text = f"Отложено на {minutes} минут — " if minutes else ""
-        await callback.message.edit_text(
+        await callback_message(callback).edit_text(
             f"⏰ {delay_text}напомню: {time_str}\n{reminder.message}",
             parse_mode=None,
             reply_markup=None,
@@ -178,29 +178,29 @@ async def _do_snooze(
 @router.callback_query(F.data.startswith("task_delete_yes:"))
 async def cb_delete_yes(callback: CallbackQuery) -> None:
     """Подтверждение удаления задачи."""
-    task_id = callback.data.split(":", 1)[1]
+    task_id = callback_data(callback).split(":", 1)[1]
     await callback.answer()
 
     async with async_session() as session:
         deleted = await delete_task(session, uuid.UUID(task_id), callback.from_user.id)
 
     if deleted:
-        await callback.message.edit_text("🗑 Задача удалена.")
+        await callback_message(callback).edit_text("🗑 Задача удалена.")
     else:
-        await callback.message.edit_text("Не удалось удалить задачу.")
+        await callback_message(callback).edit_text("Не удалось удалить задачу.")
 
 
 @router.callback_query(F.data.startswith("task_delete_choose:"))
 async def cb_delete_choose(callback: CallbackQuery) -> None:
     """После неоднозначного поиска показать обычное подтверждение удаления."""
     await callback.answer()
-    task_id = uuid.UUID(callback.data.split(":", 1)[1])
+    task_id = uuid.UUID(callback_data(callback).split(":", 1)[1])
     async with async_session() as session:
         task = await get_task_by_id(session, task_id)
     if not task or task.user_id != callback.from_user.id:
-        await callback.message.edit_text("Задача не найдена.")
+        await callback_message(callback).edit_text("Задача не найдена.")
         return
-    await callback.message.edit_text(
+    await callback_message(callback).edit_text(
         f"Удалить задачу «{html.escape(task.title)}»?",
         parse_mode="HTML",
         reply_markup=build_delete_confirm_keyboard(str(task.id)).as_markup(),
@@ -211,7 +211,7 @@ async def cb_delete_choose(callback: CallbackQuery) -> None:
 async def cb_delete_no(callback: CallbackQuery) -> None:
     """Отмена удаления задачи."""
     await callback.answer()
-    await callback.message.edit_text("❌ Удаление отменено.")
+    await callback_message(callback).edit_text("❌ Удаление отменено.")
 
 
 def build_snooze_keyboard(reminder_id: str) -> InlineKeyboardBuilder:
@@ -252,7 +252,7 @@ def build_delete_choice_keyboard(choices: list[dict]) -> InlineKeyboardBuilder:
 @router.callback_query(F.data.startswith("project_complete_yes:"))
 async def cb_project_complete_yes(callback: CallbackQuery) -> None:
     """Закрыть проект и отменить оставшиеся открытые бифштексы."""
-    project_id = callback.data.split(":", 1)[1]
+    project_id = callback_data(callback).split(":", 1)[1]
     await callback.answer()
     async with async_session() as session:
         project = await complete_project_and_cancel_open_tasks(
@@ -262,13 +262,13 @@ async def cb_project_complete_yes(callback: CallbackQuery) -> None:
         f"🐘 Слон «{project.title}» закрыт; оставшиеся задачи отменены ✅"
         if project else "Не удалось закрыть слона. Возможно, он уже закрыт."
     )
-    await callback.message.edit_text(text, parse_mode=None, reply_markup=None)
+    await callback_message(callback).edit_text(text, parse_mode=None, reply_markup=None)
 
 
 @router.callback_query(F.data.startswith("project_complete_no:"))
 async def cb_project_complete_no(callback: CallbackQuery) -> None:
     await callback.answer()
-    await callback.message.edit_text(
+    await callback_message(callback).edit_text(
         "Закрытие слона отменено. Сначала заверши или перенеси оставшиеся задачи.",
         reply_markup=None,
     )

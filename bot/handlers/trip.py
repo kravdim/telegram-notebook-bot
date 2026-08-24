@@ -9,8 +9,8 @@ from aiogram import Router
 from aiogram.filters import Command, CommandObject
 from aiogram.types import Message
 
-from bot.db.crud.trips import complete_trip, create_trip, get_active_trip, get_open_trip
 from bot.db.crud.tasks import get_user_tasks
+from bot.db.crud.trips import complete_trip, create_trip, get_open_trip
 from bot.db.crud.users import get_user
 from bot.db.engine import async_session
 
@@ -80,6 +80,8 @@ async def cmd_trip(message: Message, command: CommandObject) -> None:
 
 async def _trip_on(message: Message, text: str) -> None:
     """Создать командировку."""
+    if not message.from_user:
+        return
     if not text:
         await message.answer("Укажи название и даты: /trip on Москва 20.03-25.03")
         return
@@ -177,6 +179,8 @@ async def _trip_on(message: Message, text: str) -> None:
 
 async def _trip_off(message: Message) -> None:
     """Завершить активную командировку."""
+    if not message.from_user:
+        return
     async with async_session() as session:
         user = await get_user(session, message.from_user.id)
         tz = user.timezone if user else "Europe/Moscow"

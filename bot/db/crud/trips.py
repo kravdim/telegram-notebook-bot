@@ -5,7 +5,7 @@ from datetime import date
 from typing import List, Optional
 
 import pendulum
-from sqlalchemy import select, and_
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from bot.db.models import Trip

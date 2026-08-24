@@ -2,8 +2,8 @@ from types import SimpleNamespace
 
 import pytest
 
-import bot.handlers.chronometry as chronometry_handler
 import bot.handlers.callbacks as callbacks
+import bot.handlers.chronometry as chronometry_handler
 import bot.handlers.messages as messages
 import bot.handlers.voice as voice
 import bot.scheduler.chronometry as chronometry_scheduler

@@ -5,7 +5,8 @@ import json
 import logging
 import re
 from datetime import date, datetime, time
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, Optional, Tuple, TypedDict
+from uuid import UUID
 
 import pendulum
 from json_repair import repair_json
@@ -15,15 +16,27 @@ from bot.db.crud.diary import create_diary_entry
 from bot.db.crud.notes import create_note
 from bot.db.crud.projects import (
     complete_project as crud_complete_project,
+)
+from bot.db.crud.projects import (
     create_project as crud_create_project,
+)
+from bot.db.crud.projects import (
     get_project_tasks,
     search_projects,
 )
 from bot.db.crud.reminders import create_reminder, is_valid_repeat_rule, upsert_task_reminder
 from bot.db.crud.tasks import (
-    ConcurrentTaskUpdateError, count_similar_completed, create_task, get_frog,
-    get_today_tasks, get_user_tasks, normalize_task_identity, search_tasks,
+    ConcurrentTaskUpdateError,
+    count_similar_completed,
+    create_task,
+    get_frog,
+    get_today_tasks,
+    get_user_tasks,
+    normalize_task_identity,
+    search_tasks,
     task_title_similarity,
+)
+from bot.db.crud.tasks import (
     update_task as crud_update_task,
 )
 from bot.db.crud.trips import get_active_trip
@@ -33,6 +46,17 @@ from bot.observability import metrics
 from bot.services.tasks import complete_task_workflow
 
 logger = logging.getLogger(__name__)
+
+
+class _DuplicateTask(TypedDict):
+    id: UUID
+    title: str
+    scheduled_date: date | None
+    due_date: date | None
+    due_time: time | None
+    is_frog: bool
+    priority: str
+    repeat_rule: str | None
 
 
 def _select_confident_task(query: str, tasks: list) -> Any | None:
@@ -131,7 +155,7 @@ async def dispatch(
             "Ошибка при выполнении tool call %s: %s",
             function_call.get("name", "?"), e, exc_info=True,
         )
-        return f"Произошла ошибка при обработке. Попробуй ещё раз."
+        return "Произошла ошибка при обработке. Попробуй ещё раз."
 
 
 def _validate_title(title: str) -> Optional[str]:
@@ -155,6 +179,8 @@ def _parse_date(date_str: Optional[str], tz: str) -> Optional[date]:
         return None
     try:
         dt = pendulum.parse(date_str, tz=tz)
+        if not isinstance(dt, datetime):
+            return None
         return dt.date()
     except Exception:
         return None
@@ -177,6 +203,8 @@ def _parse_datetime(dt_str: Optional[str], tz: str) -> Optional[datetime]:
         return None
     try:
         dt = pendulum.parse(dt_str, tz=tz)
+        if not isinstance(dt, datetime):
+            return None
         return dt
     except Exception:
         return None
@@ -227,7 +255,7 @@ async def _handle_create_task(
             current_trip_id = current_trip.id
 
     # Защита от дубликатов: если есть открытая задача с таким же названием — обновляем её
-    dup_info = None
+    dup_info: _DuplicateTask | None = None
     async with async_session() as session:
         existing = await search_tasks(session, user_id, title, status="open")
         for t in existing:
@@ -242,7 +270,7 @@ async def _handle_create_task(
 
     if dup_info:
         # Обновляем существующую задачу вместо создания дубликата
-        updates = {}
+        updates: dict[str, Any] = {}
         if scheduled_date and scheduled_date != dup_info["scheduled_date"]:
             updates["scheduled_date"] = scheduled_date
         if due_date and due_date != dup_info["due_date"]:
@@ -284,11 +312,11 @@ async def _handle_create_task(
                     )
                 await session.commit()
             changes = []
-            if "scheduled_date" in updates:
+            if "scheduled_date" in updates and scheduled_date is not None:
                 changes.append(f"📅 {scheduled_date.strftime('%d.%m.%Y')}")
-            if "due_date" in updates:
+            if "due_date" in updates and due_date is not None:
                 changes.append(f"⏳ до {due_date.strftime('%d.%m.%Y')}")
-            if "due_time" in updates:
+            if "due_time" in updates and due_time is not None:
                 changes.append(f"⏰ {due_time.strftime('%H:%M')}")
             if remind_at:
                 changes.append(f"🔔 {remind_at.strftime('%d.%m %H:%M')}")
@@ -534,7 +562,7 @@ async def _handle_create_note(user_id: int, args: Dict[str, Any]) -> str:
     async with async_session() as session:
         note = await create_note(session, user_id, content=content, title=title, tags=tags)
 
-    return f"Заметка сохранена ✅" + (f" ({note.title})" if note.title else "")
+    return "Заметка сохранена ✅" + (f" ({note.title})" if note.title else "")
 
 
 async def _handle_create_diary(user_id: int, args: Dict[str, Any], tz: str = "Europe/Moscow") -> str:
@@ -543,7 +571,7 @@ async def _handle_create_diary(user_id: int, args: Dict[str, Any], tz: str = "Eu
         return "Запись не может быть пустой."
 
     async with async_session() as session:
-        entry = await create_diary_entry(session, user_id, content=content, tz=tz)
+        await create_diary_entry(session, user_id, content=content, tz=tz)
 
     return "Записано в дневник ✅"
 
@@ -609,7 +637,7 @@ async def _handle_create_reminder(
         return "Не удалось распознать правило повторения. Уточни периодичность."
 
     async with async_session() as session:
-        reminder = await create_reminder(
+        await create_reminder(
             session, user_id,
             message=message,
             remind_at=remind_at,
@@ -628,7 +656,6 @@ async def _handle_list_tasks(
     async with async_session() as session:
         if scope == "today":
             tasks = await get_today_tasks(session, user_id, today)
-            frog = await get_frog(session, user_id)
             if not tasks:
                 return "На сегодня задач нет. Свободный день! 🎉"
 
@@ -655,17 +682,18 @@ async def _handle_list_tasks(
 
         elif scope == "overdue":
             all_tasks = await get_user_tasks(session, user_id, status="open")
-            overdue = [
-                t for t in all_tasks
-                if (getattr(t, "scheduled_date", None) or t.due_date)
-                and (getattr(t, "scheduled_date", None) or t.due_date) < today
-            ]
+            overdue = []
+            for task in all_tasks:
+                plan_date = getattr(task, "scheduled_date", None) or task.due_date
+                if plan_date is not None and plan_date < today:
+                    overdue.append(task)
             if not overdue:
                 return "Просроченных задач нет 👍"
             lines = ["⚠️ Просроченные задачи:\n"]
             for t in overdue:
                 plan_date = getattr(t, "scheduled_date", None) or t.due_date
-                lines.append(f"📌 {t.title} ({plan_date.strftime('%d.%m')})")
+                if plan_date is not None:
+                    lines.append(f"📌 {t.title} ({plan_date.strftime('%d.%m')})")
             return "\n".join(lines)
 
         else:  # all
@@ -920,7 +948,7 @@ async def _handle_add_birthday(user_id: int, args: Dict[str, Any], tz: str) -> s
     from bot.db.crud.birthdays import add_birthday
     async with async_session() as session:
         year_known = bool(args.get("year_known", bd.year != 1900))
-        entry = await add_birthday(
+        await add_birthday(
             session, user_id, name=name, birth_date=bd, note=note,
             year_known=year_known,
         )

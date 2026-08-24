@@ -2,15 +2,15 @@
 
 import json
 import logging
-from typing import List, Optional
+from typing import List
 
 from json_repair import repair_json
 
-from bot.db.crud.projects import get_project_by_id, update_project
+from bot.db.crud.projects import get_project_by_id
 from bot.db.engine import async_session
 from bot.db.models import Task
 from bot.llm.client import LLMClient
-from bot.llm.queue import LLMQueue, PRIORITY_DECOMPOSE
+from bot.llm.queue import PRIORITY_DECOMPOSE, LLMQueue
 
 logger = logging.getLogger(__name__)
 

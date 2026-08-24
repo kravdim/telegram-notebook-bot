@@ -67,4 +67,4 @@ async def hybrid_search_diary(
             .limit(limit)
         )
         return list(res.scalars().all())
-    return res.fetchall()
+    return list(res.fetchall())

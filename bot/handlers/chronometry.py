@@ -5,17 +5,15 @@ import logging
 import re
 from typing import Optional
 
-from aiogram import F, Router
-from aiogram.types import CallbackQuery, Message
+from aiogram import Router
 
-from bot.db.crud.chronometry import create_time_entry, get_day_stats
-from bot.db.crud.users import get_user, update_user_settings
+from bot.db.crud.chronometry import create_time_entry
 from bot.db.crud.tasks import get_today_tasks, search_tasks
+from bot.db.crud.users import get_user, update_user_settings
 from bot.db.engine import async_session
-from bot.formatters.chronometry import format_day_photo
 from bot.llm.client import LLMClient
 from bot.llm.prompts import get_prompt
-from bot.llm.queue import LLMQueue, PRIORITY_CHRONOMETRY
+from bot.llm.queue import PRIORITY_CHRONOMETRY, LLMQueue
 
 logger = logging.getLogger(__name__)
 
@@ -36,8 +34,10 @@ async def process_chronometry_response(
     user_id: int, text: str, user_tz: str,
 ) -> str:
     """Обработать ответ на вопрос хронометража через LLM."""
-    if not _llm_client:
+    if not _llm_client or not _llm_queue:
         return "LLM не доступен для обработки хронометража."
+    llm_client = _llm_client
+    llm_queue = _llm_queue
 
     import pendulum
     now = pendulum.now(user_tz)
@@ -68,9 +68,9 @@ async def process_chronometry_response(
     )
 
     try:
-        response = await _llm_queue.submit(
+        response = await llm_queue.submit(
             PRIORITY_CHRONOMETRY,
-            _llm_client.chat(
+            llm_client.chat(
                 messages=[
                     {"role": "system", "content": prompt},
                     {"role": "user", "content": text},

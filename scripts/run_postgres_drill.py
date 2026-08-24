@@ -42,8 +42,11 @@ def main() -> None:
     operator_url = make_url(operator_url_raw)
     if not operator_url.drivername.startswith("postgresql"):
         raise SystemExit("PostgreSQL operator URL is required")
+    if not operator_url.username or not operator_url.password:
+        raise SystemExit("OPERATOR_DATABASE_URL must contain operator credentials")
     database = f"dailyplanner_ci_drill_{secrets.token_hex(5)}"
     env = os.environ.copy()
+    env["OPERATOR_DATABASE_URL"] = operator_url.render_as_string(hide_password=False)
     env["PYTHONPATH"] = str(project)
     env["PGPASSWORD"] = operator_url.password or ""
     cli = [

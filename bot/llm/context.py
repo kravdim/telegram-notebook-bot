@@ -16,6 +16,7 @@ _yaml = settings.yaml_config
 _MAX_TOKENS = _yaml.get("context", {}).get("max_tokens", 3000)
 _KEEP_RECENT_PAIRS = _yaml.get("context", {}).get("keep_recent_pairs", 5)
 
+_enc: tiktoken.Encoding | None
 try:
     _enc = tiktoken.get_encoding("cl100k_base")
 except Exception:

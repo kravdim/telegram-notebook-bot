@@ -15,6 +15,7 @@ from aiogram.types import BotCommand, BotCommandScopeAllPrivateChats
 from bot.config import settings
 from bot.db.engine import engine
 from bot.db.fsm_storage import DatabaseFSMStorage
+from bot.embeddings.base import EmbeddingClient
 from bot.handlers import (
     admin,
     callbacks,
@@ -48,6 +49,7 @@ from bot.scheduler.reminders import send_pending_reminders
 from bot.scheduler.sweep import sweep_missed_reminders
 from bot.scheduler.task_reminders import send_task_reminders
 from bot.scheduler.weekly_review import send_weekly_review
+from bot.stt.base import STTClient
 
 logging.basicConfig(
     level=logging.INFO,
@@ -70,6 +72,7 @@ def _init_embedding_client():
     provider = yaml_cfg.get("embedding", {}).get("provider", "ollama")
 
     try:
+        client: EmbeddingClient
         if provider == "ollama":
             from bot.embeddings.ollama import OllamaEmbeddingClient
             client = OllamaEmbeddingClient()
@@ -94,6 +97,7 @@ def _init_stt_client():
     provider = yaml_cfg.get("stt", {}).get("provider", "local_whisper")
 
     try:
+        client: STTClient
         if provider == "local_whisper":
             from bot.stt.local_whisper import LocalWhisperClient
             client = LocalWhisperClient()

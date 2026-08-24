@@ -26,9 +26,12 @@ stt = ["faster-whisper"]
 
 [dependency-groups]
 dev = [
+  "bandit>=1.9.4",
   "mypy",
+  "pip-audit>=2.10.1",
   "pytest",
   "pytest-asyncio",
+  "pytest-cov>=7.1.0",
   "ruff",
 ]
 
@@ -49,3 +52,12 @@ check_untyped_defs = true
 no_implicit_optional = false
 warn_unused_ignores = true
 exclude = ["bot/db/migrations"]
+
+[tool.coverage.run]
+source = ["bot", "scripts"]
+omit = ["bot/db/migrations/*"]
+
+[tool.coverage.report]
+fail_under = 40
+show_missing = true
+skip_covered = true

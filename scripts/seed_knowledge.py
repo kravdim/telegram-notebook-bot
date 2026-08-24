@@ -12,7 +12,9 @@ from bot.config import settings
 from bot.db.crud.knowledge import add_chunk
 from bot.db.engine import async_session
 from bot.db.models import KnowledgeChunk
-from bot.embeddings.indexer import get_embedding, init as init_embeddings
+from bot.embeddings.base import EmbeddingClient
+from bot.embeddings.indexer import get_embedding
+from bot.embeddings.indexer import init as init_embeddings
 
 logger = logging.getLogger(__name__)
 
@@ -253,6 +255,7 @@ async def seed(force: bool = False):
         provider = settings.yaml_config.get("embedding", {}).get("provider", "ollama")
         if os.environ.get("SKIP_KNOWLEDGE_EMBEDDINGS") != "1":
             try:
+                client: EmbeddingClient
                 if provider == "ollama":
                     from bot.embeddings.ollama import OllamaEmbeddingClient
 

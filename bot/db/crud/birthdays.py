@@ -3,7 +3,7 @@
 from datetime import date, timedelta
 from typing import List, Optional
 
-from sqlalchemy import select, extract, and_, func
+from sqlalchemy import extract, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from bot.db.models import Birthday

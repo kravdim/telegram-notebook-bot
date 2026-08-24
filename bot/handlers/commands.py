@@ -3,7 +3,8 @@
 import html
 import logging
 import uuid as uuid_mod
-from datetime import date, datetime, timedelta
+from datetime import date, datetime
+from typing import cast
 
 import pendulum
 from aiogram import F, Router
@@ -11,10 +12,10 @@ from aiogram.filters import Command, CommandObject
 from aiogram.types import CallbackQuery, Message
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
-from bot.db.crud.birthdays import get_all_birthdays, get_upcoming_birthdays
+from bot.db.crud.birthdays import get_all_birthdays
 from bot.db.crud.chronometry import get_day_stats, get_week_stats
 from bot.db.crud.memoir import get_memoir_entries, get_value_stats
-from bot.db.crud.projects import get_project_progress, get_project_tasks, get_user_projects
+from bot.db.crud.projects import get_user_projects
 from bot.db.crud.tasks import (
     get_frog,
     get_today_tasks,
@@ -29,6 +30,7 @@ from bot.db.models import Note
 from bot.formatters import split_html_message
 from bot.formatters.chronometry import format_day_photo, format_week_summary
 from bot.formatters.memoir import format_memoir_entries, format_value_stats
+from bot.handlers.telegram import callback_data, callback_message, message_bot
 from bot.services.tasks import complete_task_workflow
 
 logger = logging.getLogger(__name__)
@@ -98,6 +100,7 @@ async def cmd_help(message: Message) -> None:
 
 # --- /tasks ---
 
+
 @router.message(Command("tasks"))
 async def cmd_tasks(message: Message) -> None:
     """Список открытых задач."""
@@ -119,6 +122,7 @@ async def cmd_tasks(message: Message) -> None:
 
 
 # --- /today ---
+
 
 @router.message(Command("today"))
 async def cmd_today(message: Message) -> None:
@@ -144,6 +148,7 @@ async def cmd_today(message: Message) -> None:
 
 
 # --- /frog ---
+
 
 @router.message(Command("frog"))
 async def cmd_frog(message: Message) -> None:
@@ -189,26 +194,26 @@ async def cmd_frog(message: Message) -> None:
 @router.callback_query(F.data.startswith("set_frog:"))
 async def cb_set_frog(callback: CallbackQuery) -> None:
     """Назначить лягушку."""
-    task_id = uuid_mod.UUID(callback.data.split(":", 1)[1])
+    task_id = uuid_mod.UUID(callback_data(callback).split(":", 1)[1])
     await callback.answer()
 
     async with async_session() as session:
         task = await set_frog(session, task_id, callback.from_user.id)
 
     if task:
-        await callback.message.edit_text(
+        await callback_message(callback).edit_text(
             f"🐸 Лягушка дня назначена: <b>{html.escape(task.title)}</b>\n"
             "Съешь её первой — остаток дня будет легче!",
             parse_mode="HTML",
         )
     else:
-        await callback.message.edit_text("Не удалось назначить лягушку.")
+        await callback_message(callback).edit_text("Не удалось назначить лягушку.")
 
 
 @router.callback_query(F.data.startswith("frog_done:"))
 async def cb_frog_done(callback: CallbackQuery) -> None:
     """Отметить лягушку выполненной."""
-    task_id = uuid_mod.UUID(callback.data.split(":", 1)[1])
+    task_id = uuid_mod.UUID(callback_data(callback).split(":", 1)[1])
     await callback.answer("🎉 Молодец!")
 
     async with async_session() as session:
@@ -224,16 +229,17 @@ async def cb_frog_done(callback: CallbackQuery) -> None:
     if task:
         next_text = (
             f"\n🔄 Следующая: {completion.next_date.strftime('%d.%m')}"
-            if completion.next_date else ""
+            if completion.next_date
+            else ""
         )
-        await callback.message.edit_text(
-            f"🐸✅ Лягушка «{html.escape(task.title)}» съедена! Отличная работа! 🎉"
-            f"{next_text}",
+        await callback_message(callback).edit_text(
+            f"🐸✅ Лягушка «{html.escape(task.title)}» съедена! Отличная работа! 🎉{next_text}",
             parse_mode="HTML",
         )
 
 
 # --- /done ---
+
 
 @router.message(Command("done"))
 async def cmd_done(message: Message, command: CommandObject) -> None:
@@ -295,11 +301,10 @@ async def cmd_done(message: Message, command: CommandObject) -> None:
         if completion.task:
             next_text = (
                 f"\n🔄 Следующая: {completion.next_date.strftime('%d.%m')}"
-                if completion.next_date else ""
+                if completion.next_date
+                else ""
             )
-            await message.answer(
-                f"✅ Задача «{completion.task.title}» выполнена! 🎉{next_text}"
-            )
+            await message.answer(f"✅ Задача «{completion.task.title}» выполнена! 🎉{next_text}")
         return
 
     # Несколько совпадений — предложить выбрать
@@ -320,7 +325,7 @@ async def cmd_done(message: Message, command: CommandObject) -> None:
 @router.callback_query(F.data.startswith("task_done:"))
 async def cb_task_done(callback: CallbackQuery) -> None:
     """Отметить задачу выполненной через inline-кнопку."""
-    task_id = uuid_mod.UUID(callback.data.split(":", 1)[1])
+    task_id = uuid_mod.UUID(callback_data(callback).split(":", 1)[1])
     await callback.answer("✅")
 
     async with async_session() as session:
@@ -336,15 +341,17 @@ async def cb_task_done(callback: CallbackQuery) -> None:
     if task:
         next_text = (
             f"\n🔄 Следующая: {completion.next_date.strftime('%d.%m')}"
-            if completion.next_date else ""
+            if completion.next_date
+            else ""
         )
-        await callback.message.edit_text(
+        await callback_message(callback).edit_text(
             f"✅ Задача «{html.escape(task.title)}» выполнена! 🎉{next_text}",
             parse_mode="HTML",
         )
 
 
 # --- /notes ---
+
 
 @router.message(Command("notes"))
 async def cmd_notes(message: Message) -> None:
@@ -390,6 +397,7 @@ def _format_note_line(note: Note) -> str:
 
 # --- /projects ---
 
+
 @router.message(Command("projects"))
 async def cmd_projects(message: Message) -> None:
     """Список проектов (слонов)."""
@@ -400,15 +408,13 @@ async def cmd_projects(message: Message) -> None:
         projects = await get_user_projects(session, message.from_user.id)
 
     if not projects:
-        await message.answer(
-            "🐘 Слонов пока нет.\n"
-            "Напиши «создай слона Название» чтобы начать."
-        )
+        await message.answer("🐘 Слонов пока нет.\nНапиши «создай слона Название» чтобы начать.")
         return
 
     lines = ["🐘 <b>Проекты (слоны):</b>\n"]
     async with async_session() as session:
         from bot.db.crud.projects import batch_project_progress
+
         progress_map = await batch_project_progress(session, [p.id for p in projects])
         for p in projects:
             progress = progress_map[p.id]
@@ -422,6 +428,7 @@ async def cmd_projects(message: Message) -> None:
 
 
 # --- /memoir ---
+
 
 @router.message(Command("memoir"))
 async def cmd_memoir(message: Message) -> None:
@@ -441,6 +448,7 @@ async def cmd_memoir(message: Message) -> None:
 
 
 # --- /chrono ---
+
 
 @router.message(Command("chrono"))
 async def cmd_chrono(message: Message, command: CommandObject) -> None:
@@ -463,12 +471,11 @@ async def cmd_chrono(message: Message, command: CommandObject) -> None:
             stats = await get_day_stats(session, message.from_user.id, tz)
         await message.answer(format_day_photo(stats), parse_mode="HTML")
     else:
-        await message.answer(
-            "Не понял аргумент. Используй /chrono или /chrono week."
-        )
+        await message.answer("Не понял аргумент. Используй /chrono или /chrono week.")
 
 
 # --- /focus ---
+
 
 @router.message(Command("focus"))
 async def cmd_focus(message: Message, command: CommandObject) -> None:
@@ -492,16 +499,13 @@ async def cmd_focus(message: Message, command: CommandObject) -> None:
             )
         else:
             await message.answer(
-                "🎯 Режим фокуса выключен.\n"
-                "Включить: /focus 30 (от 1 до 480 минут)."
+                "🎯 Режим фокуса выключен.\nВключить: /focus 30 (от 1 до 480 минут)."
             )
         return
 
     if args == "off":
         async with async_session() as session:
-            await update_user_settings(
-                session, message.from_user.id, focus_until=None
-            )
+            await update_user_settings(session, message.from_user.id, focus_until=None)
         await message.answer("🎯 Режим фокуса выключен.")
         return
 
@@ -517,17 +521,15 @@ async def cmd_focus(message: Message, command: CommandObject) -> None:
     focus_until = pendulum.now("UTC").add(minutes=minutes)
 
     async with async_session() as session:
-        await update_user_settings(
-            session, message.from_user.id, focus_until=focus_until
-        )
+        await update_user_settings(session, message.from_user.id, focus_until=focus_until)
 
     await message.answer(
-        f"🎯 Режим фокуса на {minutes} мин.\n"
-        "Не буду беспокоить хронометражем до окончания."
+        f"🎯 Режим фокуса на {minutes} мин.\nНе буду беспокоить хронометражем до окончания."
     )
 
 
 # --- /stats ---
+
 
 @router.message(Command("stats"))
 async def cmd_stats(message: Message, command: CommandObject) -> None:
@@ -555,24 +557,28 @@ async def cmd_stats(message: Message, command: CommandObject) -> None:
 
 async def _stats_frogs(message: Message) -> None:
     """Статистика лягушек."""
+    if not message.from_user:
+        return
     from sqlalchemy import func, or_, select
+
     from bot.db.models import Task
 
     async with async_session() as session:
+        user = await get_user(session, message.from_user.id)
+        tz = user.timezone if user else "Europe/Moscow"
         # За последние 30 дней
-        since = pendulum.now().subtract(days=30).date()
+        now = pendulum.now(tz)
+        since = now.subtract(days=30).date()
 
         result = await session.execute(
             select(func.count()).where(
                 Task.user_id == message.from_user.id,
-                Task.is_frog == True,
+                Task.is_frog.is_(True),
                 or_(
-                    Task.created_at >= pendulum.instance(
-                        datetime.combine(since, datetime.min.time())
-                    ),
-                    Task.completed_at >= pendulum.instance(
-                        datetime.combine(since, datetime.min.time())
-                    ),
+                    Task.created_at
+                    >= pendulum.instance(datetime.combine(since, datetime.min.time())),
+                    Task.completed_at
+                    >= pendulum.instance(datetime.combine(since, datetime.min.time())),
                 ),
             )
         )
@@ -581,22 +587,50 @@ async def _stats_frogs(message: Message) -> None:
         result = await session.execute(
             select(func.count()).where(
                 Task.user_id == message.from_user.id,
-                Task.is_frog == True,
+                Task.is_frog.is_(True),
                 Task.status == "done",
-                Task.completed_at >= pendulum.instance(
-                    datetime.combine(since, datetime.min.time())
-                ),
+                Task.completed_at
+                >= pendulum.instance(datetime.combine(since, datetime.min.time())),
             )
         )
         done = result.scalar() or 0
 
+        result = await session.execute(
+            select(Task.completed_at).where(
+                Task.user_id == message.from_user.id,
+                Task.is_frog.is_(True),
+                Task.status == "done",
+                Task.completed_at.is_not(None),
+                Task.completed_at >= now.subtract(days=31).in_tz("UTC"),
+            )
+        )
+        completed_dates = {
+            cast(date, pendulum.instance(cast(datetime, value)).in_tz(tz).date())
+            for value in result.scalars().all()
+            if value is not None
+        }
+
     from bot.formatters.stats import format_frog_stats
-    text = format_frog_stats(done, total, 0)
+
+    streak = _current_frog_streak(completed_dates, now.date())
+    text = format_frog_stats(done, total, streak)
     await message.answer(text, parse_mode="HTML")
+
+
+def _current_frog_streak(completed_dates: set[date], today: date) -> int:
+    """Count a streak ending today, or yesterday before today's completion."""
+    cursor = today if today in completed_dates else today - pendulum.duration(days=1)
+    streak = 0
+    while cursor in completed_dates:
+        streak += 1
+        cursor -= pendulum.duration(days=1)
+    return streak
 
 
 async def _stats_productivity(message: Message) -> None:
     """Статистика продуктивности."""
+    if not message.from_user:
+        return
     async with async_session() as session:
         user = await get_user(session, message.from_user.id)
     tz = user.timezone if user else "Europe/Moscow"
@@ -607,14 +641,15 @@ async def _stats_productivity(message: Message) -> None:
     # Месячная статистика: берём 4 недели назад
     async with async_session() as session:
         month_stats = await get_week_stats(
-            session, message.from_user.id, tz,
+            session,
+            message.from_user.id,
+            tz,
             days_back=28,
         )
 
     from bot.formatters.stats import format_productivity_stats
-    trend = _productivity_trend(
-        week["avg_productivity"], month_stats["avg_productivity"]
-    )
+
+    trend = _productivity_trend(week["avg_productivity"], month_stats["avg_productivity"])
     text = format_productivity_stats(
         avg_week=week["avg_productivity"],
         avg_month=month_stats["avg_productivity"],
@@ -634,6 +669,8 @@ def _productivity_trend(avg_week: float, avg_month: float) -> str:
 
 async def _stats_values(message: Message) -> None:
     """Статистика ценностей."""
+    if not message.from_user:
+        return
     async with async_session() as session:
         stats = await get_value_stats(session, message.from_user.id)
 
@@ -729,14 +766,15 @@ async def cmd_settings(message: Message) -> None:
 
 # --- Settings callbacks ---
 
+
 async def _show_settings(callback: CallbackQuery) -> None:
     """Вернуться к главному экрану настроек."""
     async with async_session() as session:
         user = await get_user(session, callback.from_user.id)
     if not user:
-        await callback.message.edit_text("Пользователь не найден. Используй /start.")
+        await callback_message(callback).edit_text("Пользователь не найден. Используй /start.")
         return
-    await callback.message.edit_text(
+    await callback_message(callback).edit_text(
         _format_settings_text(user),
         parse_mode="HTML",
         reply_markup=_build_settings_kb(user).as_markup(),
@@ -779,7 +817,7 @@ async def cb_timezone(callback: CallbackQuery) -> None:
         kb.button(text=label, callback_data=f"settings:set_tz:{timezone}")
     kb.button(text="◀️ Назад", callback_data="settings:back")
     kb.adjust(2)
-    await callback.message.edit_text(
+    await callback_message(callback).edit_text(
         "🌍 Выбери часовой пояс:", reply_markup=kb.as_markup()
     )
 
@@ -787,33 +825,35 @@ async def cb_timezone(callback: CallbackQuery) -> None:
 @router.callback_query(F.data.startswith("settings:set_tz:"))
 async def cb_set_timezone(callback: CallbackQuery) -> None:
     await callback.answer()
-    timezone = callback.data.split(":", 2)[2]
+    timezone = callback_data(callback).split(":", 2)[2]
     try:
         pendulum.now(timezone)
     except Exception:
-        await callback.message.edit_text("Неизвестный часовой пояс.")
+        await callback_message(callback).edit_text("Неизвестный часовой пояс.")
         return
     async with async_session() as session:
-        await update_user_settings(
-            session, callback.from_user.id, timezone=timezone
-        )
+        await update_user_settings(session, callback.from_user.id, timezone=timezone)
     await _show_settings(callback)
 
 
 # --- Время утреннего дайджеста ---
 
+
 @router.callback_query(F.data == "settings:morning_time")
 async def cb_morning_time(callback: CallbackQuery) -> None:
     await callback.answer()
     kb = _time_picker_kb("settings:set_morning", start=6, end=11)
-    await callback.message.edit_text("🌅 Выбери время утреннего дайджеста:", reply_markup=kb.as_markup())
+    await callback_message(callback).edit_text(
+        "🌅 Выбери время утреннего дайджеста:", reply_markup=kb.as_markup()
+    )
 
 
 @router.callback_query(F.data.startswith("settings:set_morning:"))
 async def cb_set_morning(callback: CallbackQuery) -> None:
     await callback.answer()
-    parts = callback.data.split(":")
+    parts = callback_data(callback).split(":")
     from datetime import time as dt_time
+
     t = dt_time(int(parts[2]), int(parts[3]))
     async with async_session() as session:
         await update_user_settings(session, callback.from_user.id, digest_morning_time=t)
@@ -822,18 +862,22 @@ async def cb_set_morning(callback: CallbackQuery) -> None:
 
 # --- Время вечернего итога ---
 
+
 @router.callback_query(F.data == "settings:evening_time")
 async def cb_evening_time(callback: CallbackQuery) -> None:
     await callback.answer()
     kb = _time_picker_kb("settings:set_evening", start=18, end=23)
-    await callback.message.edit_text("🌇 Выбери время вечернего итога:", reply_markup=kb.as_markup())
+    await callback_message(callback).edit_text(
+        "🌇 Выбери время вечернего итога:", reply_markup=kb.as_markup()
+    )
 
 
 @router.callback_query(F.data.startswith("settings:set_evening:"))
 async def cb_set_evening(callback: CallbackQuery) -> None:
     await callback.answer()
-    parts = callback.data.split(":")
+    parts = callback_data(callback).split(":")
     from datetime import time as dt_time
+
     t = dt_time(int(parts[2]), int(parts[3]))
     async with async_session() as session:
         await update_user_settings(session, callback.from_user.id, digest_evening_time=t)
@@ -842,18 +886,22 @@ async def cb_set_evening(callback: CallbackQuery) -> None:
 
 # --- Время мемуарника ---
 
+
 @router.callback_query(F.data == "settings:memoir_time")
 async def cb_memoir_time(callback: CallbackQuery) -> None:
     await callback.answer()
     kb = _time_picker_kb("settings:set_memoir", start=18, end=23)
-    await callback.message.edit_text("📔 Выбери время вопроса мемуарника:", reply_markup=kb.as_markup())
+    await callback_message(callback).edit_text(
+        "📔 Выбери время вопроса мемуарника:", reply_markup=kb.as_markup()
+    )
 
 
 @router.callback_query(F.data.startswith("settings:set_memoir:"))
 async def cb_set_memoir(callback: CallbackQuery) -> None:
     await callback.answer()
-    parts = callback.data.split(":")
+    parts = callback_data(callback).split(":")
     from datetime import time as dt_time
+
     t = dt_time(int(parts[2]), int(parts[3]))
     async with async_session() as session:
         await update_user_settings(session, callback.from_user.id, memoir_prompt_time=t)
@@ -862,18 +910,22 @@ async def cb_set_memoir(callback: CallbackQuery) -> None:
 
 # --- Начало рабочего дня ---
 
+
 @router.callback_query(F.data == "settings:work_start")
 async def cb_work_start(callback: CallbackQuery) -> None:
     await callback.answer()
     kb = _time_picker_kb("settings:set_wstart", start=6, end=12)
-    await callback.message.edit_text("🏢 Выбери начало рабочего дня:", reply_markup=kb.as_markup())
+    await callback_message(callback).edit_text(
+        "🏢 Выбери начало рабочего дня:", reply_markup=kb.as_markup()
+    )
 
 
 @router.callback_query(F.data.startswith("settings:set_wstart:"))
 async def cb_set_work_start(callback: CallbackQuery) -> None:
     await callback.answer()
-    parts = callback.data.split(":")
+    parts = callback_data(callback).split(":")
     from datetime import time as dt_time
+
     t = dt_time(int(parts[2]), int(parts[3]))
     async with async_session() as session:
         await update_user_settings(session, callback.from_user.id, work_start_time=t)
@@ -882,18 +934,22 @@ async def cb_set_work_start(callback: CallbackQuery) -> None:
 
 # --- Конец рабочего дня ---
 
+
 @router.callback_query(F.data == "settings:work_end")
 async def cb_work_end(callback: CallbackQuery) -> None:
     await callback.answer()
     kb = _time_picker_kb("settings:set_wend", start=15, end=23)
-    await callback.message.edit_text("🏠 Выбери конец рабочего дня:", reply_markup=kb.as_markup())
+    await callback_message(callback).edit_text(
+        "🏠 Выбери конец рабочего дня:", reply_markup=kb.as_markup()
+    )
 
 
 @router.callback_query(F.data.startswith("settings:set_wend:"))
 async def cb_set_work_end(callback: CallbackQuery) -> None:
     await callback.answer()
-    parts = callback.data.split(":")
+    parts = callback_data(callback).split(":")
     from datetime import time as dt_time
+
     t = dt_time(int(parts[2]), int(parts[3]))
     async with async_session() as session:
         await update_user_settings(session, callback.from_user.id, work_end_time=t)
@@ -902,11 +958,15 @@ async def cb_set_work_end(callback: CallbackQuery) -> None:
 
 # --- Рабочие дни ---
 
+
 @router.callback_query(F.data == "settings:work_days")
 async def cb_work_days(callback: CallbackQuery) -> None:
     await callback.answer()
     async with async_session() as session:
         user = await get_user(session, callback.from_user.id)
+    if not user:
+        await callback_message(callback).edit_text("Пользователь не найден. Используй /start.")
+        return
     current = set(user.work_days or [])
 
     kb = InlineKeyboardBuilder()
@@ -916,22 +976,23 @@ async def cb_work_days(callback: CallbackQuery) -> None:
     kb.button(text="◀️ Назад", callback_data="settings:back")
     kb.adjust(4)
 
-    await callback.message.edit_text(
+    await callback_message(callback).edit_text(
         "📅 Нажми на день чтобы вкл/выкл:", reply_markup=kb.as_markup()
     )
 
 
 @router.callback_query(F.data.startswith("settings:toggle_day:"))
 async def cb_toggle_day(callback: CallbackQuery) -> None:
-    day = int(callback.data.split(":")[2])
+    day = int(callback_data(callback).split(":")[2])
     async with async_session() as session:
         user = await get_user(session, callback.from_user.id)
+        if not user:
+            await callback.answer("Пользователь не найден.", show_alert=True)
+            return
         current = set(user.work_days or [])
         if day in current:
             if len(current) == 1:
-                await callback.answer(
-                    "Нужен хотя бы один рабочий день.", show_alert=True
-                )
+                await callback.answer("Нужен хотя бы один рабочий день.", show_alert=True)
                 return
             current.discard(day)
         else:
@@ -944,11 +1005,15 @@ async def cb_toggle_day(callback: CallbackQuery) -> None:
 
 # --- Хронометраж (вкл/выкл + интервал) ---
 
+
 @router.callback_query(F.data == "settings:chrono")
 async def cb_chrono(callback: CallbackQuery) -> None:
     await callback.answer()
     async with async_session() as session:
         user = await get_user(session, callback.from_user.id)
+    if not user:
+        await callback_message(callback).edit_text("Пользователь не найден. Используй /start.")
+        return
 
     kb = InlineKeyboardBuilder()
     chrono_label = "🔴 Выключить" if user.chronometry_enabled else "🟢 Включить"
@@ -959,7 +1024,7 @@ async def cb_chrono(callback: CallbackQuery) -> None:
     kb.button(text="◀️ Назад", callback_data="settings:back")
     kb.adjust(1, 3, 3, 1)
 
-    await callback.message.edit_text(
+    await callback_message(callback).edit_text(
         f"⏱ <b>Хронометраж</b>\n\n"
         f"Статус: {'✅ включён' if user.chronometry_enabled else '❌ выключен'}\n"
         f"Интервал: каждые {user.chronometry_interval_min} мин\n\n"
@@ -984,13 +1049,14 @@ async def cb_chrono_toggle(callback: CallbackQuery) -> None:
 @router.callback_query(F.data.startswith("settings:chrono_set:"))
 async def cb_chrono_set(callback: CallbackQuery) -> None:
     await callback.answer()
-    mins = int(callback.data.split(":")[2])
+    mins = int(callback_data(callback).split(":")[2])
     async with async_session() as session:
         await update_user_settings(session, callback.from_user.id, chronometry_interval_min=mins)
     await cb_chrono(callback)
 
 
 # --- Дайджесты вкл/выкл ---
+
 
 @router.callback_query(F.data == "settings:digest_toggle")
 async def cb_digest_toggle(callback: CallbackQuery) -> None:
@@ -1052,7 +1118,7 @@ async def cmd_export(message: Message) -> None:
         return
 
     user_id = message.from_user.id
-    await message.bot.send_chat_action(chat_id=message.chat.id, action="typing")
+    await message_bot(message).send_chat_action(chat_id=message.chat.id, action="typing")
 
     import io
     import zipfile
@@ -1072,8 +1138,10 @@ async def cmd_export(message: Message) -> None:
                 zf.writestr("tasks.md", md)
 
             # Заметки
-            from bot.db.models import Note
             from sqlalchemy import select
+
+            from bot.db.models import Note
+
             res = await session.execute(
                 select(Note).where(Note.user_id == user_id).order_by(Note.created_at.desc())
             )
@@ -1088,11 +1156,13 @@ async def cmd_export(message: Message) -> None:
 
             # Дневник
             from bot.db.models import DiaryEntry
-            res = await session.execute(
-                select(DiaryEntry).where(DiaryEntry.user_id == user_id)
+
+            diary_result = await session.execute(
+                select(DiaryEntry)
+                .where(DiaryEntry.user_id == user_id)
                 .order_by(DiaryEntry.entry_date.desc())
             )
-            diary = list(res.scalars().all())
+            diary = list(diary_result.scalars().all())
             if diary:
                 md = "# Дневник\n\n"
                 for d in diary:
@@ -1120,8 +1190,11 @@ async def cmd_export(message: Message) -> None:
     buf.seek(0)
 
     from aiogram.types import BufferedInputFile
+
     doc = BufferedInputFile(
         buf.read(),
         filename=f"export_{pendulum.now().format('YYYY-MM-DD')}.zip",
     )
-    await message.answer_document(doc, caption="📦 Экспорт данных в Markdown (Obsidian-совместимый)")
+    await message.answer_document(
+        doc, caption="📦 Экспорт данных в Markdown (Obsidian-совместимый)"
+    )

@@ -39,20 +39,23 @@
 - [x] Отдельный CREATEDB-only operator URL из macOS Keychain, закрытая extension
   template для pgvector, fail-closed capability checks, weekly LaunchAgent,
   JSONL evidence с SHA-256/row counts/RTO и гарантированный cleanup drill DB.
-- [ ] Полная выплата Ruff/mypy debt с расширением CI gate.
-- [ ] Файловая ротация launchd stdout/stderr и проверяемый deletion workflow.
-- [ ] Coverage/security/dependency gates и дальнейшая UX-полировка настроек.
+- [x] Полная выплата Ruff/mypy debt с расширением CI gate.
+- [x] Файловая ротация launchd stdout/stderr и проверяемый deletion workflow.
+- [x] Coverage/security/dependency gates и UX-полировка статистики и
+  хронометража.
 
-Эти пункты не следует объявлять закрытыми локальными workaround: для них нужны
-отдельные контракты, эксплуатационные проверки и миграционный план.
+Все этапы выше закрыты отдельными контрактами, CI-gates и эксплуатационными
+проверками; production-evidence текущего этапа фиксируется после установки
+LaunchAgent ротации.
 
 ## Проверка и production
 
-- `pytest`: 140 passed, 5 skipped;
-- PostgreSQL integration suite: 9 passed на disposable `pgvector:pg16`, включая
-  partial retry и конкурентный DB lease outbox;
-- CI-critical Ruff, operational Ruff, выбранные mypy-модули и compileall:
-  успешно;
+- `pytest`: 152 passed, 10 skipped, coverage 42,31% при обязательном floor 40%;
+- PostgreSQL integration suite: 10 passed на disposable migrated PostgreSQL,
+  включая verified privacy deletion, partial retry и конкурентный DB lease;
+- полный Ruff и mypy по `bot` и `scripts`: успешно;
+- coverage floor 40%, Bandit high/medium gate и frozen production dependency
+  audit без известных уязвимостей включены в CI;
 - tool-call fixtures: 6/6, invalid tool rate 0;
 - свежий production backup `notebook_bot_2026-08-24_085512.sql.gz` прошёл
   SHA-256 и `gzip -t`;

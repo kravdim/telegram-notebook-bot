@@ -2,11 +2,11 @@
 
 import logging
 import uuid
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import List, Optional
 
 import pendulum
-from sqlalchemy import select, and_
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from bot.db.models import Reminder
@@ -53,7 +53,7 @@ async def get_pending_reminders(
     result = await session.execute(
         select(Reminder)
         .where(
-            Reminder.is_sent == False,
+            Reminder.is_sent.is_(False),
             Reminder.remind_at <= before,
         )
         .order_by(Reminder.remind_at.asc())

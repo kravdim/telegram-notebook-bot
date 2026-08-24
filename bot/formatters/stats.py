@@ -1,9 +1,5 @@
 """Форматирование статистики: /stats frogs, productivity, values."""
 
-from typing import List
-
-from bot.db.models import Task
-
 
 def format_frog_stats(
     completed_frogs: int,
@@ -18,7 +14,8 @@ def format_frog_stats(
     ]
     if current_streak > 0:
         parts.append(f"🔥 Текущая серия: {current_streak} дней подряд")
-    bar = "█" * max(1, pct // 5) + "░" * (20 - max(1, pct // 5))
+    filled = min(20, pct // 5)
+    bar = "█" * filled + "░" * (20 - filled)
     parts.append(f"[{bar}]")
     return "\n".join(parts)
 
@@ -30,10 +27,13 @@ def format_productivity_stats(
 ) -> str:
     """Статистика продуктивности."""
     trend_emoji = {"up": "📈", "down": "📉", "stable": "➡️"}.get(trend, "➡️")
+    trend_label = {"up": "растёт", "down": "снижается", "stable": "стабильно"}.get(
+        trend, "стабильно"
+    )
     parts = [
         "📊 <b>Продуктивность</b>\n",
         f"Неделя: {avg_week}/5",
         f"Месяц: {avg_month}/5",
-        f"Тренд: {trend_emoji} {trend}",
+        f"Тренд: {trend_emoji} {trend_label}",
     ]
     return "\n".join(parts)

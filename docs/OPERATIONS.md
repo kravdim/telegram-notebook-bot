@@ -55,6 +55,37 @@ misclassification before changing prompts.
 7. Check logs, `/status`, current Alembic revision and one non-mutating Telegram
    command. Confirm the next reminder sweep and backup marker.
 
+## LaunchAgent log maintenance
+
+Install the independent daily maintenance job after the main service:
+
+```bash
+platform/macos/install-log-maintenance.sh
+launchctl print gui/$(id -u)/com.notebook-bot-log-maintenance
+```
+
+It runs at 02:30 and rotates only four exact regular files in
+`~/Library/Logs/notebook-bot`: main stdout/stderr and recovery-drill
+stdout/stderr. Files larger than 10 MiB are copied to `.1`, seven generations
+are retained, and the active inode is truncated in place because launchd and
+the bot keep their descriptors open. Symlinks and non-regular files are
+rejected. The first installer run also kickstarts the job; verify its JSON
+summary in `log-maintenance.stdout.log` and confirm the main bot PID remains
+healthy. Rotated artifacts are evidence and must not be deleted during deploy.
+
+## Verified privacy deletion
+
+Run `scripts/delete_user_data.py TELEGRAM_ID` first and review content-free row
+counts. If the target and scope are correct, stop the main bot LaunchAgent and
+repeat with `--execute --confirm DELETE-TELEGRAM_ID`. The command refuses
+administrator accounts and `ALLOW_ALL_USERS`, and acquires the bot's PostgreSQL
+singleton lease so the runtime cannot be active or restart mid-operation. It
+atomically removes ordinary-user access, executes deletion in one transaction
+and exits non-zero unless every associated table verifies zero. Restart the bot
+only after the zero-verification result.
+Never test this command against a production user; the PostgreSQL integration
+suite creates and deletes a disposable account in a disposable database.
+
 ## Rollback
 
 1. Stop the new process. Keep the pre-release backup and checksum immutable.

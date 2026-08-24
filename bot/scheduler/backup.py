@@ -71,6 +71,8 @@ async def run_backup() -> Path | None:
             stderr=asyncio.subprocess.PIPE,
             env=env,
         )
+        if pg_dump.stdout is None or pg_dump.stderr is None:
+            raise RuntimeError("pg_dump pipes were not created")
         with open(filepath, "wb") as backup_file:
             gzip_proc = await asyncio.create_subprocess_exec(
                 "gzip",
@@ -78,19 +80,20 @@ async def run_backup() -> Path | None:
                 stdout=backup_file,
                 stderr=asyncio.subprocess.PIPE,
             )
+            if gzip_proc.stdin is None or gzip_proc.stderr is None:
+                raise RuntimeError("gzip pipes were not created")
             pg_stderr_task = asyncio.create_task(pg_dump.stderr.read())
             gzip_stderr_task = asyncio.create_task(gzip_proc.stderr.read())
             async with asyncio.timeout(300):
-                if pg_dump.stdout and gzip_proc.stdin:
-                    while line := await pg_dump.stdout.readline():
-                        # pg_dump 17 emits this setting even when dumping an older
-                        # server; PostgreSQL <=16 rejects it during restore.
-                        if not _is_portable_dump_line(line):
-                            continue
-                        gzip_proc.stdin.write(line)
-                        await gzip_proc.stdin.drain()
-                    gzip_proc.stdin.close()
-                    await gzip_proc.stdin.wait_closed()
+                while line := await pg_dump.stdout.readline():
+                    # pg_dump 17 emits this setting even when dumping an older
+                    # server; PostgreSQL <=16 rejects it during restore.
+                    if not _is_portable_dump_line(line):
+                        continue
+                    gzip_proc.stdin.write(line)
+                    await gzip_proc.stdin.drain()
+                gzip_proc.stdin.close()
+                await gzip_proc.stdin.wait_closed()
 
                 await asyncio.gather(pg_dump.wait(), gzip_proc.wait())
                 pg_stderr, gzip_stderr = await asyncio.gather(

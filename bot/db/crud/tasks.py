@@ -4,10 +4,10 @@ import re
 import uuid
 from datetime import date, datetime
 from difflib import SequenceMatcher
-from typing import Any, Dict, List, Optional
+from typing import List, Optional
 
 import pendulum
-from sqlalchemy import select, and_
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm.exc import StaleDataError
 
@@ -147,7 +147,7 @@ async def get_frog(
     """Получить текущую лягушку (open, is_frog=True)."""
     result = await session.execute(
         select(Task)
-        .where(Task.user_id == user_id, Task.is_frog == True, Task.status == "open")
+        .where(Task.user_id == user_id, Task.is_frog.is_(True), Task.status == "open")
         .limit(1)
     )
     return result.scalar_one_or_none()
@@ -340,7 +340,7 @@ async def get_frogs_in_range(
         select(Task)
         .where(
             Task.user_id == user_id,
-            Task.is_frog == True,
+            Task.is_frog.is_(True),
             Task.created_at >= start,
             Task.created_at < end,
         )

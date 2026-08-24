@@ -66,4 +66,4 @@ async def hybrid_search_notes(
             .limit(limit)
         )
         return list(res.scalars().all())
-    return res.fetchall()
+    return list(res.fetchall())

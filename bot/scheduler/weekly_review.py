@@ -7,8 +7,8 @@ import pendulum
 from aiogram import Bot
 
 from bot.db.crud.chronometry import get_week_stats
-from bot.db.crud.memoir import get_memoir_entries, get_value_stats
-from bot.db.crud.projects import get_user_projects, get_project_progress
+from bot.db.crud.memoir import get_value_stats
+from bot.db.crud.projects import get_project_progress, get_user_projects
 from bot.db.crud.tasks import get_completed_in_range, get_frogs_in_range
 from bot.db.crud.users import claim_date_marker, get_all_users, release_date_marker
 from bot.db.engine import async_session

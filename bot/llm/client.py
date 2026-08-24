@@ -175,13 +175,16 @@ class LLMClient:
                 raise
             except APIError as e:
                 metrics.increment("llm.error")
-                if e.status_code and e.status_code >= 500:
+                status_code = getattr(e, "status_code", None)
+                if status_code and status_code >= 500:
                     last_error = e
                     if attempt < max_retries:
                         continue
                 raise
 
-        raise last_error  # type: ignore
+        if last_error is None:
+            raise RuntimeError("LLM request failed without an exception")
+        raise last_error
 
     async def health_check(self) -> bool:
         """Выполнить реальный короткий запрос к main provider."""

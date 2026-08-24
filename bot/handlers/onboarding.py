@@ -16,6 +16,7 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 from bot.db.crud.tasks import create_task
 from bot.db.crud.users import get_or_create_user, get_user, update_user_settings
 from bot.db.engine import async_session
+from bot.handlers.telegram import callback_message
 
 logger = logging.getLogger(__name__)
 
@@ -100,7 +101,7 @@ async def onb_name_use(callback: CallbackQuery, state: FSMContext) -> None:
 async def onb_name_custom(callback: CallbackQuery, state: FSMContext) -> None:
     """Пользователь хочет ввести другое имя."""
     await callback.answer()
-    await callback.message.answer("Введи своё имя:")
+    await callback_message(callback).answer("Введи своё имя:")
 
 
 @router.message(OnboardingStates.step_name)
@@ -166,11 +167,13 @@ async def _save_name_and_proceed(callback: CallbackQuery, state: FSMContext, nam
         await get_or_create_user(session, user_id, username=name)
 
     await state.update_data(username=name)
-    await _send_timezone_step(callback.message, state, name)
+    await _send_timezone_step(callback_message(callback), state, name)
 
 
 async def _save_name_and_proceed_msg(message: Message, state: FSMContext, name: str) -> None:
     """Сохраняет имя и переходит к шагу 2 (из текстового ввода)."""
+    if not message.from_user:
+        return
     user_id = message.from_user.id
 
     async with async_session() as session:
@@ -203,14 +206,14 @@ async def onb_tz_ok(callback: CallbackQuery, state: FSMContext) -> None:
     """Часовой пояс подтверждён."""
     await callback.answer()
     await state.update_data(timezone="Europe/Moscow")
-    await _send_digest_step(callback.message, state)
+    await _send_digest_step(callback_message(callback), state)
 
 
 @router.callback_query(OnboardingStates.step_timezone, F.data == "onb_tz_change")
 async def onb_tz_change(callback: CallbackQuery, state: FSMContext) -> None:
     """Пользователь хочет изменить часовой пояс."""
     await callback.answer()
-    await callback.message.answer(
+    await callback_message(callback).answer(
         "Введи свой часовой пояс (например, Europe/London, Asia/Novosibirsk):"
     )
     await state.set_state(OnboardingStates.step_timezone_input)
@@ -261,14 +264,14 @@ async def onb_digest_ok(callback: CallbackQuery, state: FSMContext) -> None:
         digest_evening="21:00",
         memoir_prompt="20:45",
     )
-    await _send_work_schedule_step(callback.message, state)
+    await _send_work_schedule_step(callback_message(callback), state)
 
 
 @router.callback_query(OnboardingStates.step_digest_times, F.data == "onb_digest_change")
 async def onb_digest_change(callback: CallbackQuery, state: FSMContext) -> None:
     """Пользователь хочет изменить время дайджестов."""
     await callback.answer()
-    await callback.message.answer(
+    await callback_message(callback).answer(
         "Введи время в формате:\n"
         "утро=08:00 вечер=21:00 мемуарник=20:45\n\n"
         "Можно изменить только нужные, например: утро=07:30"
@@ -311,7 +314,7 @@ async def onb_digest_text(message: Message, state: FSMContext) -> None:
         await message.answer("Используй формат: утро=08:00 вечер=21:00 мемуарник=20:45")
         return
 
-    await state.update_data(**data)
+    await state.update_data(data)
     await _send_work_schedule_step(message, state)
 
 
@@ -344,21 +347,21 @@ async def onb_work_ok(callback: CallbackQuery, state: FSMContext) -> None:
         work_start="09:00",
         work_end="18:00",
     )
-    await _send_concepts_step(callback.message, state)
+    await _send_concepts_step(callback_message(callback), state)
 
 
 @router.callback_query(OnboardingStates.step_work_schedule, F.data == "onb_work_skip")
 async def onb_work_skip(callback: CallbackQuery, state: FSMContext) -> None:
     """Пользователь пропустил настройку графика."""
     await callback.answer()
-    await _send_concepts_step(callback.message, state)
+    await _send_concepts_step(callback_message(callback), state)
 
 
 @router.callback_query(OnboardingStates.step_work_schedule, F.data == "onb_work_change")
 async def onb_work_change(callback: CallbackQuery, state: FSMContext) -> None:
     """Пользователь хочет изменить рабочий график."""
     await callback.answer()
-    await callback.message.answer(
+    await callback_message(callback).answer(
         "Введи рабочий график в формате:\n"
         "дни=пн,вт,ср,чт,пт начало=09:00 конец=18:00"
     )
@@ -452,7 +455,7 @@ async def onb_concepts_ok(callback: CallbackQuery, state: FSMContext) -> None:
     kb = InlineKeyboardBuilder()
     kb.button(text="Пропустить", callback_data="onb_task_skip")
 
-    await callback.message.answer(
+    await callback_message(callback).answer(
         "Хочешь создать первую задачу? Напиши что-нибудь, что нужно сделать — я сохраню.",
         reply_markup=kb.as_markup(),
     )
@@ -465,12 +468,14 @@ async def onb_concepts_ok(callback: CallbackQuery, state: FSMContext) -> None:
 async def onb_task_skip(callback: CallbackQuery, state: FSMContext) -> None:
     """Пользователь пропустил создание задачи."""
     await callback.answer()
-    await _finish_onboarding(callback.message, callback.from_user.id, state)
+    await _finish_onboarding(callback_message(callback), callback.from_user.id, state)
 
 
 @router.message(OnboardingStates.step_first_task)
 async def onb_first_task(message: Message, state: FSMContext) -> None:
     """Пользователь создал первую задачу."""
+    if not message.from_user:
+        return
     title = message.text.strip() if message.text else None
     if not title:
         await message.answer("Не понял задачу. Напиши текстом или нажми «Пропустить».")

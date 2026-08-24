@@ -27,7 +27,7 @@ async def get_prompt(session: AsyncSession, prompt_key: str) -> Optional[str]:
 
     result = await session.execute(
         select(PromptVersion.content)
-        .where(PromptVersion.prompt_key == prompt_key, PromptVersion.is_active == True)
+        .where(PromptVersion.prompt_key == prompt_key, PromptVersion.is_active.is_(True))
     )
     row = result.scalar_one_or_none()
 
@@ -43,7 +43,7 @@ async def get_all_prompts(session: AsyncSession) -> list:
     """Получить список всех активных промптов (для /prompts)."""
     result = await session.execute(
         select(PromptVersion)
-        .where(PromptVersion.is_active == True)
+        .where(PromptVersion.is_active.is_(True))
         .order_by(PromptVersion.prompt_key)
     )
     return list(result.scalars().all())

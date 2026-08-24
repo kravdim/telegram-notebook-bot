@@ -2,22 +2,23 @@
 
 import logging
 from html import escape as html_escape
-from pathlib import Path
 
 import anyio
-import yaml
 from aiogram import Router
 from aiogram.filters import Command, CommandObject
 from aiogram.types import Message
 
-from bot.config import settings, BASE_DIR
+from bot.config import BASE_DIR, settings
 from bot.db.crud.users import get_all_users, get_user
 from bot.db.engine import async_session
+from bot.handlers.telegram import message_bot
 from bot.llm.prompts import get_all_prompts
+from bot.services.access_config import write_allowed_telegram_ids
 
 logger = logging.getLogger(__name__)
 
 router = Router()
+_whitelist_lock = anyio.Lock()
 
 
 def _is_admin(user_id: int) -> bool:
@@ -82,8 +83,9 @@ async def cmd_digest_now(message: Message, command: CommandObject) -> None:
         return
 
     from bot.scheduler.digest import send_digest_now
+
     try:
-        sent = await send_digest_now(message.bot, user, parts[0].lower())
+        sent = await send_digest_now(message_bot(message), user, parts[0].lower())
     except Exception as exc:
         logger.error("Ручной digest завершился ошибкой: %s", exc, exc_info=True)
         await message.answer("Не удалось отправить дайджест; слот освобождён для повтора.")
@@ -111,8 +113,9 @@ async def cmd_review_now(message: Message, command: CommandObject) -> None:
         return
 
     from bot.scheduler.weekly_review import send_weekly_review_now
+
     try:
-        sent = await send_weekly_review_now(message.bot, user)
+        sent = await send_weekly_review_now(message_bot(message), user)
     except Exception as exc:
         logger.error("Ручной weekly review завершился ошибкой: %s", exc, exc_info=True)
         await message.answer("Не удалось отправить обзор; слот освобождён для повтора.")
@@ -137,8 +140,9 @@ async def cmd_chrono_ping(message: Message, command: CommandObject) -> None:
         return
 
     from bot.scheduler.chronometry import send_chronometry_prompt_now
+
     try:
-        status = await send_chronometry_prompt_now(message.bot, user)
+        status = await send_chronometry_prompt_now(message_bot(message), user)
     except Exception as exc:
         logger.error("Ручной chrono ping завершился ошибкой: %s", exc, exc_info=True)
         await message.answer("Не удалось отправить вопрос хронометража.")
@@ -225,9 +229,15 @@ async def cmd_adduser(message: Message, command: CommandObject) -> None:
         await message.answer("Telegram ID должен быть числом.")
         return
 
-    if user_id not in settings.allowed_telegram_ids:
-        settings.allowed_telegram_ids.append(user_id)
-        await _persist_whitelist()
+    async with _whitelist_lock:
+        if user_id not in settings.allowed_telegram_ids:
+            settings.allowed_telegram_ids.append(user_id)
+            try:
+                await _persist_whitelist()
+            except Exception:
+                settings.allowed_telegram_ids.remove(user_id)
+                await message.answer("Не удалось безопасно сохранить whitelist.")
+                return
 
     await message.answer(f"✅ Пользователь {user_id} добавлен в whitelist.")
 
@@ -249,9 +259,15 @@ async def cmd_removeuser(message: Message, command: CommandObject) -> None:
         await message.answer("Telegram ID должен быть числом.")
         return
 
-    if user_id in settings.allowed_telegram_ids:
-        settings.allowed_telegram_ids.remove(user_id)
-        await _persist_whitelist()
+    async with _whitelist_lock:
+        if user_id in settings.allowed_telegram_ids:
+            settings.allowed_telegram_ids.remove(user_id)
+            try:
+                await _persist_whitelist()
+            except Exception:
+                settings.allowed_telegram_ids.append(user_id)
+                await message.answer("Не удалось безопасно сохранить whitelist.")
+                return
 
     await message.answer(f"✅ Пользователь {user_id} удалён из whitelist.")
 
@@ -279,15 +295,11 @@ async def cmd_listusers(message: Message) -> None:
 
 
 async def _persist_whitelist() -> None:
-    """Сохранить текущий whitelist в config.yaml."""
+    """Сохранить текущий whitelist в config.yaml атомарной заменой."""
     config_path = BASE_DIR / "config.yaml"
-    try:
-        async with await anyio.open_file(config_path, "r", encoding="utf-8") as f:
-            content = await f.read()
-        cfg = yaml.safe_load(content) or {}
-        cfg.setdefault("bot", {})["allowed_telegram_ids"] = list(settings.allowed_telegram_ids)
-        async with await anyio.open_file(config_path, "w", encoding="utf-8") as f:
-            await f.write(yaml.dump(cfg, default_flow_style=False, allow_unicode=True))
-        logger.info("Whitelist сохранён в config.yaml: %s", settings.allowed_telegram_ids)
-    except Exception as e:
-        logger.error("Не удалось сохранить whitelist в config.yaml: %s", e)
+    await anyio.to_thread.run_sync(
+        write_allowed_telegram_ids,
+        config_path,
+        list(settings.allowed_telegram_ids),
+    )
+    logger.info("Whitelist сохранён в config.yaml: %s", settings.allowed_telegram_ids)

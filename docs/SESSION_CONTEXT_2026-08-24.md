@@ -22,11 +22,24 @@
    Keychain-backed role клонирует закрытую pgvector template, восстанавливает
    backup в случайную БД, пишет SHA-256/row counts/RTO evidence и удаляет drill
    DB. Weekly LaunchAgent запускается по воскресеньям после ночного backup.
+6. Engineering quality: полный Ruff и mypy debt закрыт без выборочного
+   исключения модулей; CI проверяет весь проект, coverage floor, Bandit и
+   frozen production dependency audit.
+7. Operations/privacy: отдельный ежедневный LaunchAgent делает bounded
+   copy-truncate ротацию четырёх точных log-файлов; deletion workflow работает
+   dry-run-first, требует target-bound confirmation и проверяет нулевые остатки
+   во всех user-owned таблицах до commit.
+8. UX polish: нулевой frog progress больше не показывает заполненный блок,
+   trend локализован, streak вычисляется по фактическим датам, а хронометраж
+   честно подписан как интервальная оценка.
 
 ## Проверка последнего этапа
 
-- `pytest`: 142 passed, 9 skipped;
-- strict operational Ruff и mypy: успешно;
+- `pytest`: 152 passed, 10 skipped, coverage 42,31% при floor 40%;
+- полный Ruff и mypy по 92 source-файлам: успешно;
+- Bandit medium/high gate, secret scan и dependency audit: успешно, известных
+  уязвимостей нет;
+- PostgreSQL integration suite: 10 passed, включая verified user deletion;
 - Compose config и CI YAML: валидны;
 - disposable Compose project собран с нуля и достиг `healthy`;
 - migration `f4b8c2d6e1a0`, `vector`/`pg_trgm`/`pgcrypto`, ORM lifecycle и
@@ -49,10 +62,19 @@ preflight прошёл. Docker/VPS теперь является проверя�
 но hermetic CI smoke не заменяет release-проверку реального Telegram `/status`
 и одной read-only команды с настоящими provider credentials.
 
-## Следующий архитектурный этап
+Перед текущим deploy создан и проверен backup
+`notebook_bot_2026-08-24_230526.sql.gz` с SHA-256 sidecar. LaunchAgent
+`com.notebook-bot-log-maintenance` установлен на 02:30 и первый раз завершился
+с exit 0: активный `stdout.log` copy-truncate ротирован, а 157-МиБ артефакт
+сохранён как `stdout.log.1`. Основной LaunchAgent после финальной проверки
+получил PID `21485`, singleton lease, migration `f4b8c2d6e1a0`, запустил
+Telegram polling и прогрел local Whisper; Ollama health виден в startup logs.
 
-Следующий незакрытый пункт review checklist — полная выплата Ruff/mypy debt с
-расширением CI gate на весь поддерживаемый код.
+## Текущий статус review
+
+Все инженерные и эксплуатационные пункты `REVIEW_2026-08-24.md`, выбранные как
+полезные и входящие в поддерживаемые продуктовые контракты, реализованы. Для
+финального release evidence остаётся commit/push и зелёный GitHub Actions run.
 
 ## Фиксация и deployment
 

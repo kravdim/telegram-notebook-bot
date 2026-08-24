@@ -55,9 +55,9 @@ async def rotate_llm_logs() -> None:
             )
         )
         await session.commit()
-        deleted = llm_result.rowcount
+        deleted = int(getattr(llm_result, "rowcount", 0) or 0)
         transient_deleted = sum(
-            result.rowcount or 0
+            int(getattr(result, "rowcount", 0) or 0)
             for result in (
                 interaction_result,
                 request_result,

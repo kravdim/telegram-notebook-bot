@@ -1,8 +1,8 @@
 import pendulum
 import pytest
 
-from bot.db.crud.reminders import _calc_next_occurrence
 from bot.db.crud import reminders as reminder_crud
+from bot.db.crud.reminders import _calc_next_occurrence
 from bot.llm.client import LLMClient
 
 

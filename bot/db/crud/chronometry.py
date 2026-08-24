@@ -1,11 +1,11 @@
 """CRUD-операции для хронометража."""
 
 import uuid
-from datetime import date, datetime
+from datetime import datetime
 from typing import List, Optional
 
 import pendulum
-from sqlalchemy import select, func, and_
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from bot.db.models import TimeTrackingEntry

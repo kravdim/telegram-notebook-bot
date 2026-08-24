@@ -4,8 +4,8 @@ from typing import Any, Dict, List, Optional
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from bot.db.models import LlmLog
 from bot.config import settings
+from bot.db.models import LlmLog
 
 
 def _metadata_only_function_call(call: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:

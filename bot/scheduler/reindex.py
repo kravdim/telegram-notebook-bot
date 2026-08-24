@@ -3,7 +3,6 @@
 import logging
 
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from bot.db.engine import async_session
 from bot.db.models import DiaryEntry, MemoirEntry, Note

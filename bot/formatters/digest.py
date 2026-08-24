@@ -4,8 +4,7 @@ from datetime import date
 from html import escape
 from typing import List, Optional
 
-from bot.db.models import Task, Project
-
+from bot.db.models import Project, Task
 
 _PRIORITY_EMOJI = {"high": "🔴", "medium": "🟡", "normal": "⚪"}
 _WEEKDAYS_RU = {
@@ -62,12 +61,11 @@ def format_morning_digest(
             parts.append(f"  {emoji} {escape(t.title)}{time_str}")
 
     if not is_weekend:
-        overdue = [
-            t for t in tasks
-            if (getattr(t, "scheduled_date", None) or t.due_date)
-            and (getattr(t, "scheduled_date", None) or t.due_date) < today
-            and t.status == "open"
-        ]
+        overdue = []
+        for task in tasks:
+            plan_date = getattr(task, "scheduled_date", None) or task.due_date
+            if plan_date is not None and plan_date < today and task.status == "open":
+                overdue.append(task)
         if overdue:
             parts.append(f"\n⚠️ Просроченных: {len(overdue)}")
 

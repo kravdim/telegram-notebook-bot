@@ -3,9 +3,9 @@ from types import SimpleNamespace
 import pytest
 
 from bot.db.crud.diary import hybrid_search_diary
+from bot.db.crud.knowledge import _topic_hint
 from bot.db.crud.memoir import hybrid_search_memoir
 from bot.db.crud.notes import hybrid_search_notes
-from bot.db.crud.knowledge import _topic_hint
 
 
 class FakeScalarResult:

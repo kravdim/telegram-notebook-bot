@@ -334,7 +334,7 @@ DATABASE_URL=postgresql+asyncpg://notebook:password@localhost:5432/notebook_bot
 ## Деплой
 
 ### macOS (LaunchAgent)
-Бот запускается как LaunchAgent с `KeepAlive=true`. Автоматический перезапуск при сбоях, логи в `~/Library/Logs/notebook-bot/`.
+Бот запускается как LaunchAgent с `KeepAlive=true`. Автоматический перезапуск при сбоях, логи в `~/Library/Logs/notebook-bot/`. Отдельный ежедневный LaunchAgent ограничивает stdout/stderr до семи поколений по 10 МиБ; установка описана в [operations runbook](docs/OPERATIONS.md).
 
 ### VPS (Docker, cloud adapters)
 `docker-compose.yml` с PostgreSQL (pgvector) + ботом — проверяемый переносимый

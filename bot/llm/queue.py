@@ -2,10 +2,10 @@
 from __future__ import annotations
 
 import asyncio
-import logging
 import itertools
+import logging
 from dataclasses import dataclass, field
-from typing import Any, Callable, Coroutine
+from typing import Any, Coroutine
 
 from bot.observability import metrics
 

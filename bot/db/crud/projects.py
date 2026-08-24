@@ -164,7 +164,7 @@ async def batch_project_progress(
     if not project_ids:
         return {}
 
-    from sqlalchemy import func, case
+    from sqlalchemy import case, func
     result = await session.execute(
         select(
             Task.project_id,

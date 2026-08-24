@@ -3,8 +3,8 @@ from types import SimpleNamespace
 
 import pendulum
 
-from bot.scheduler.chronometry import _awaiting_is_stale, _awaiting_since
 from bot.formatters.digest import format_morning_digest
+from bot.scheduler.chronometry import _awaiting_is_stale, _awaiting_since
 from bot.scheduler.digest import _digest_sent_flags
 from bot.scheduler.task_reminders import _format_task_reminder, _task_reminder_already_sent
 

@@ -8,7 +8,9 @@ from aiogram import Bot
 
 from bot.db.crud.tasks import get_completed_today, get_frog, get_today_tasks
 from bot.db.crud.users import (
-    claim_task_reminder_slot, get_all_users, release_task_reminder_slot,
+    claim_task_reminder_slot,
+    get_all_users,
+    release_task_reminder_slot,
 )
 from bot.db.engine import async_session
 from bot.formatters import split_html_message

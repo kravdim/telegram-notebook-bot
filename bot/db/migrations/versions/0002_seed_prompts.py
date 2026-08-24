@@ -7,7 +7,6 @@ Create Date: 2026-03-17 11:00:00.000000
 from typing import Sequence, Union
 
 from alembic import op
-import sqlalchemy as sa
 
 revision: str = '0002_seed_prompts'
 down_revision: Union[str, None] = '2f149b9afa71'

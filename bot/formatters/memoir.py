@@ -5,7 +5,6 @@ from typing import List
 
 from bot.db.models import MemoirEntry
 
-
 _VALUE_EMOJI = {
     "семья": "👨‍👩‍👧‍👦",
     "работа": "💼",
@@ -66,7 +65,7 @@ def format_weekly_review(entries: List[MemoirEntry]) -> str:
         return "На этой неделе записей в мемуарнике не было."
 
     parts = ["📔 <b>Неделя в мемуарнике</b>\n"]
-    values = {}
+    values: dict[str, int] = {}
     for entry in sorted(entries, key=lambda e: e.event_date):
         tag = entry.value_tag or "другое"
         values[tag] = values.get(tag, 0) + 1

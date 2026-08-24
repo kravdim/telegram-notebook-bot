@@ -4,6 +4,7 @@
 import asyncio
 import os
 import sys
+import tempfile
 from pathlib import Path
 
 from alembic.config import Config
@@ -21,7 +22,8 @@ async def main() -> None:
     if errors:
         raise SystemExit("Invalid runtime configuration: " + "; ".join(errors))
 
-    readiness_file = os.environ.get("READINESS_FILE", "/tmp/dailyplanner-ready.json")
+    default_readiness = str(Path(tempfile.gettempdir()) / "dailyplanner-ready.json")
+    readiness_file = os.environ.get("READINESS_FILE", default_readiness)
     max_age = float(os.environ.get("READINESS_MAX_AGE_SECONDS", "20"))
     try:
         heartbeat = validate_readiness_file(readiness_file, max_age)

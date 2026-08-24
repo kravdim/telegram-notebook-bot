@@ -5,7 +5,6 @@ from typing import List
 
 import pendulum
 
-
 _CATEGORY_EMOJI = {
     "work": "💼",
     "personal": "👤",
@@ -35,7 +34,7 @@ def format_day_photo(stats: dict) -> str:
     if not count:
         return "⏱ Записей хронометража за сегодня нет."
 
-    parts = [f"⏱ <b>Фотография дня</b> ({count} записей)\n"]
+    parts = [f"⏱ <b>Оценка дня</b> ({count} записей)\n"]
 
     for cat in ("work", "focus", "personal", "rest", "waste", "unknown"):
         minutes = cats.get(cat, 0)
@@ -51,6 +50,8 @@ def format_day_photo(stats: dict) -> str:
 
     if avg_prod:
         parts.append(f"\n📈 Средняя продуктивность: {avg_prod}/5")
+
+    parts.append("\n<i>Время оценено по настроенному интервалу опроса.</i>")
 
     return "\n".join(parts)
 
@@ -80,7 +81,7 @@ def format_week_summary(stats: dict) -> str:
         return "⏱ Данных хронометража за неделю нет."
 
     total = sum(cats.values())
-    parts = [f"⏱ <b>Неделя</b> ({count} записей)\n"]
+    parts = [f"⏱ <b>Оценка недели</b> ({count} записей)\n"]
 
     for cat in ("work", "focus", "personal", "rest", "waste", "unknown"):
         minutes = cats.get(cat, 0)
@@ -96,5 +97,7 @@ def format_week_summary(stats: dict) -> str:
 
     if avg_prod:
         parts.append(f"\n📈 Средняя продуктивность: {avg_prod}/5")
+
+    parts.append("\n<i>Время оценено по настроенному интервалу опроса.</i>")
 
     return "\n".join(parts)

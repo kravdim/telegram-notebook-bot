@@ -207,7 +207,7 @@ async def cleanup(
             )
         for name, statement in statements:
             result = await session.execute(statement)
-            counts[name] = result.rowcount or 0
+            counts[name] = int(getattr(result, "rowcount", 0) or 0)
 
         if all_user_data:
             reset = await session.execute(
@@ -215,7 +215,7 @@ async def cleanup(
                 .where(User.telegram_id == user_id)
                 .values(focus_until=None)
             )
-            counts["users_reset"] = reset.rowcount or 0
+            counts["users_reset"] = int(getattr(reset, "rowcount", 0) or 0)
 
         if execute:
             await session.commit()

@@ -11,14 +11,15 @@ from aiogram import F, Router
 from aiogram.types import Message
 
 from bot.db.crud.users import get_user
-from bot.formatters import split_message
 from bot.db.engine import async_session
+from bot.formatters import split_message
+from bot.handlers.telegram import message_bot
 from bot.llm.client import LLMClient, LLMUnavailableError
-from bot.llm.context import add_message, get_history, needs_compression, compress_history
+from bot.llm.context import add_message, compress_history, get_history, needs_compression
 from bot.llm.dispatcher import dispatch
 from bot.llm.functions import FUNCTIONS
 from bot.llm.prompts import get_prompt
-from bot.llm.queue import LLMQueue, PRIORITY_INTENT
+from bot.llm.queue import PRIORITY_INTENT, LLMQueue
 
 logger = logging.getLogger(__name__)
 
@@ -204,6 +205,7 @@ async def _claim_request(request_key: str, user_id: int) -> Optional[bool]:
     """True — новый запрос, False — дубль, None — DB недоступна."""
     try:
         from sqlalchemy import select
+
         from bot.db.models import ProcessedRequest
         async with async_session() as session:
             result = await session.execute(
@@ -237,6 +239,7 @@ async def _finish_request(request_key: str, status: str) -> None:
     try:
         import pendulum
         from sqlalchemy import select
+
         from bot.db.models import ProcessedRequest
         async with async_session() as session:
             result = await session.execute(
@@ -277,7 +280,7 @@ async def _process_text_message_unlocked(user_id: int, text: str, message: Messa
         await message.answer(reply, parse_mode=None)
         return
 
-    from bot.handlers.voice import consume_voice_edit, _load_voice_state, _clear_voice_state
+    from bot.handlers.voice import _clear_voice_state, _load_voice_state, consume_voice_edit
     voice_edit = consume_voice_edit(user_id)
     if not voice_edit:
         voice_edit = bool(await _load_voice_state(user_id, "voice_edit"))
@@ -286,7 +289,7 @@ async def _process_text_message_unlocked(user_id: int, text: str, message: Messa
 
     done_query = _extract_done_query(text)
     if done_query:
-        await message.bot.send_chat_action(chat_id=message.chat.id, action="typing")
+        await message_bot(message).send_chat_action(chat_id=message.chat.id, action="typing")
         result = await dispatch(
             {"name": "complete_task", "arguments": {"search_query": done_query}},
             user_id,
@@ -300,7 +303,7 @@ async def _process_text_message_unlocked(user_id: int, text: str, message: Messa
 
     reschedule_args = _extract_reschedule_request(text, user_tz)
     if reschedule_args:
-        await message.bot.send_chat_action(chat_id=message.chat.id, action="typing")
+        await message_bot(message).send_chat_action(chat_id=message.chat.id, action="typing")
         result = await dispatch(
             {"name": "update_task", "arguments": reschedule_args},
             user_id,
@@ -314,7 +317,7 @@ async def _process_text_message_unlocked(user_id: int, text: str, message: Messa
 
     cancel_args = _extract_cancel_request(text)
     if cancel_args:
-        await message.bot.send_chat_action(chat_id=message.chat.id, action="typing")
+        await message_bot(message).send_chat_action(chat_id=message.chat.id, action="typing")
         result = await dispatch(
             {"name": "update_task", "arguments": cancel_args},
             user_id,
@@ -328,7 +331,7 @@ async def _process_text_message_unlocked(user_id: int, text: str, message: Messa
 
     pending_state = await _consume_pending_interaction(user_id)
     if pending_state == "complete_project":
-        await message.bot.send_chat_action(chat_id=message.chat.id, action="typing")
+        await message_bot(message).send_chat_action(chat_id=message.chat.id, action="typing")
         result = await dispatch(
             {"name": "complete_project", "arguments": {"search_query": text}},
             user_id,
@@ -352,7 +355,7 @@ async def _process_text_message_unlocked(user_id: int, text: str, message: Messa
         if tool_name == "respond_to_user":
             result = str(arguments["message"])
         else:
-            await message.bot.send_chat_action(chat_id=message.chat.id, action="typing")
+            await message_bot(message).send_chat_action(chat_id=message.chat.id, action="typing")
             result = await dispatch(
                 {"name": tool_name, "arguments": arguments},
                 user_id,
@@ -365,7 +368,7 @@ async def _process_text_message_unlocked(user_id: int, text: str, message: Messa
 
     task_args = _extract_task_request(text, user_tz)
     if task_args:
-        await message.bot.send_chat_action(chat_id=message.chat.id, action="typing")
+        await message_bot(message).send_chat_action(chat_id=message.chat.id, action="typing")
         result = await dispatch(
             {"name": "create_task", "arguments": task_args},
             user_id,
@@ -388,14 +391,18 @@ async def _process_text_message_unlocked(user_id: int, text: str, message: Messa
         )
         if is_memoir_reply:
             await _clear_persisted_interaction(user_id, "memoir")
-            await message.bot.send_chat_action(chat_id=message.chat.id, action="typing")
+            await message_bot(message).send_chat_action(chat_id=message.chat.id, action="typing")
 
             await _save_memoir_answer(user_id, text, user_tz)
             await message.answer("📔 Записано в мемуарник! ✅")
             return
 
     # Проверяем, ожидается ли ответ на хронометраж
-    from bot.scheduler.chronometry import is_awaiting_response, clear_awaiting, get_chrono_message_id
+    from bot.scheduler.chronometry import (
+        clear_awaiting,
+        get_chrono_message_id,
+        is_awaiting_response,
+    )
     persisted_chrono = await _get_persisted_interaction(user_id, "chronometry")
     if is_awaiting_response(user_id) or persisted_chrono:
         # Определяем, куда направлять сообщение:
@@ -415,7 +422,7 @@ async def _process_text_message_unlocked(user_id: int, text: str, message: Messa
         if is_chrono_reply and _looks_like_chronometry_answer(text):
             clear_awaiting(user_id)
             await _clear_persisted_interaction(user_id, "chronometry")
-            await message.bot.send_chat_action(chat_id=message.chat.id, action="typing")
+            await message_bot(message).send_chat_action(chat_id=message.chat.id, action="typing")
 
             from bot.handlers.chronometry import process_chronometry_response
             result = await process_chronometry_response(user_id, text, user_tz)
@@ -423,7 +430,7 @@ async def _process_text_message_unlocked(user_id: int, text: str, message: Messa
             return
 
     # Typing indicator
-    await message.bot.send_chat_action(chat_id=message.chat.id, action="typing")
+    await message_bot(message).send_chat_action(chat_id=message.chat.id, action="typing")
 
     # Загружаем промпт
     async with async_session() as session:
@@ -590,14 +597,15 @@ async def _process_text_message_unlocked(user_id: int, text: str, message: Messa
                     project_prompt,
                     parse_mode=None,
                 )
-                await message.bot.send_chat_action(chat_id=message.chat.id, action="typing")
+                await message_bot(message).send_chat_action(chat_id=message.chat.id, action="typing")
 
-                from bot.llm.decompose import decompose_project, create_project_tasks
-                from bot.db.crud.projects import get_project_by_id
                 import uuid
+
+                from bot.db.crud.projects import get_project_by_id
+                from bot.llm.decompose import create_project_tasks, decompose_project
                 async with async_session() as session:
                     project = await get_project_by_id(session, uuid.UUID(project_id))
-                project_description = project.description if project else ""
+                project_description = (project.description or "") if project else ""
                 project_category = project.category if project else "work"
                 task_titles = await decompose_project(
                     llm_client,
@@ -687,8 +695,9 @@ async def handle_text(message: Message) -> None:
 async def _save_memoir_answer(user_id: int, text: str, tz: str) -> None:
     """Сохранить ответ на мемуарник как memoir_entry + diary_entry."""
     import pendulum
-    from bot.db.crud.memoir import create_memoir_entry
+
     from bot.db.crud.diary import create_diary_entry
+    from bot.db.crud.memoir import create_memoir_entry
     from bot.llm.dispatcher import _extract_value_tag
 
     today = pendulum.now(tz).date()

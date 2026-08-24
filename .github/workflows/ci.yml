@@ -39,19 +39,16 @@ jobs:
         with:
           enable-cache: true
       - run: uv sync --frozen --group dev
-      - name: Lint all code for correctness errors
-        run: uv run ruff check bot scripts tests --select E9,F63,F7,F82
-      - name: Strict lint for operational hardening code
-        run: >-
-          uv run ruff check bot/runtime bot/observability.py scripts/preflight.py
-          scripts/restore_drill.py scripts/secret_scan.py
-          scripts/evaluate_llm_contracts.py scripts/run_postgres_drill.py
-          tests/test_operational_reliability.py tests/integration
-      - name: Typecheck operational boundaries
-        run: >-
-          uv run mypy bot/runtime bot/observability.py bot/db/crud/operational.py
-          scripts/preflight.py scripts/restore_drill.py scripts/secret_scan.py
-          scripts/run_postgres_drill.py
+      - name: Lint all supported code
+        run: uv run ruff check .
+      - name: Typecheck all production and operational code
+        run: uv run mypy --explicit-package-bases bot scripts
+      - name: Block medium/high-confidence security findings
+        run: uv run bandit -q -r bot scripts -x bot/db/migrations -ll
+      - name: Audit frozen production dependencies
+        run: |
+          uv export --frozen --no-dev --no-emit-project -o /tmp/requirements.txt
+          uv run pip-audit -r /tmp/requirements.txt
       - run: uv run alembic upgrade head
       - name: Create least-privilege recovery operator
         run: |
@@ -75,7 +72,8 @@ jobs:
             "UPDATE pg_database SET datistemplate=true, datallowconn=false WHERE datname='dailyplanner_recovery_template'"
       - name: Require a single Alembic head
         run: test "$(uv run alembic heads | wc -l)" -eq 1
-      - run: uv run pytest
+      - name: Test with coverage floor
+        run: uv run pytest --cov --cov-report=term-missing
       - run: uv run python scripts/evaluate_llm_contracts.py
       - name: Create and restore a real backup
         run: |

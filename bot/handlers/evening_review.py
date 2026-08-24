@@ -8,8 +8,9 @@ from aiogram import F, Router
 from aiogram.types import CallbackQuery
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
-from bot.db.crud.tasks import get_task_by_id, update_task
+from bot.db.crud.tasks import update_task
 from bot.db.engine import async_session
+from bot.handlers.telegram import callback_data, callback_message
 
 logger = logging.getLogger(__name__)
 
@@ -29,10 +30,11 @@ def build_review_keyboard(task_id: str) -> InlineKeyboardBuilder:
 @router.callback_query(F.data.startswith("review_tomorrow:"))
 async def cb_review_tomorrow(callback: CallbackQuery) -> None:
     """Перенести задачу на завтра."""
-    task_id = uuid_mod.UUID(callback.data.split(":", 1)[1])
+    task_id = uuid_mod.UUID(callback_data(callback).split(":", 1)[1])
     await callback.answer()
 
     import pendulum
+
     from bot.db.crud.users import get_user
 
     async with async_session() as session:
@@ -45,18 +47,18 @@ async def cb_review_tomorrow(callback: CallbackQuery) -> None:
         )
 
     if task:
-        await callback.message.edit_text(
+        await callback_message(callback).edit_text(
             f"📅 «{html.escape(task.title)}» перенесена на завтра",
             reply_markup=None,
         )
     else:
-        await callback.message.edit_text("Задача не найдена.", reply_markup=None)
+        await callback_message(callback).edit_text("Задача не найдена.", reply_markup=None)
 
 
 @router.callback_query(F.data.startswith("review_cancel:"))
 async def cb_review_cancel(callback: CallbackQuery) -> None:
     """Отменить задачу."""
-    task_id = uuid_mod.UUID(callback.data.split(":", 1)[1])
+    task_id = uuid_mod.UUID(callback_data(callback).split(":", 1)[1])
     await callback.answer()
 
     async with async_session() as session:
@@ -66,7 +68,7 @@ async def cb_review_cancel(callback: CallbackQuery) -> None:
         )
 
     if task:
-        await callback.message.edit_text(
+        await callback_message(callback).edit_text(
             f"🗑 «{html.escape(task.title)}» отменена",
             reply_markup=None,
         )
@@ -76,7 +78,7 @@ async def cb_review_cancel(callback: CallbackQuery) -> None:
 async def cb_review_keep(callback: CallbackQuery) -> None:
     """Оставить задачу как есть."""
     await callback.answer()
-    await callback.message.edit_text(
+    await callback_message(callback).edit_text(
         "⏳ Оставлена без изменений.",
         reply_markup=None,
     )

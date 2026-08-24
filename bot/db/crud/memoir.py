@@ -1,10 +1,9 @@
 """CRUD-операции для мемуарника."""
 
-import uuid
 from datetime import date
 from typing import List, Optional
 
-from sqlalchemy import select, func, and_, text
+from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from bot.db.models import MemoirEntry
@@ -140,4 +139,4 @@ async def hybrid_search_memoir(
             .limit(limit)
         )
         return list(res.scalars().all())
-    return res.fetchall()
+    return list(res.fetchall())

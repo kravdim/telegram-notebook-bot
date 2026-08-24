@@ -7,10 +7,10 @@ import pytest
 
 from bot.db.crud.reminders import is_valid_repeat_rule
 from bot.db.crud.tasks import normalize_task_identity, task_title_similarity
-from bot.formatters.digest import format_morning_digest
 from bot.formatters import split_html_message
+from bot.formatters.digest import format_morning_digest
 from bot.llm import dispatcher
-from bot.llm.queue import LLMQueue, PRIORITY_INTENT
+from bot.llm.queue import PRIORITY_INTENT, LLMQueue
 from tests.fakes import FakeSessionContext
 
 

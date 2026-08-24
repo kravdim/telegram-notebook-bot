@@ -4,7 +4,6 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-
 ToolName = Literal[
     "create_task", "complete_task", "create_note", "create_diary_entry",
     "create_reminder", "list_tasks", "add_birthday", "get_advice",

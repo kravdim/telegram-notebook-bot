@@ -6,6 +6,7 @@ import asyncio
 import os
 import signal
 import sys
+import tempfile
 import uuid
 from pathlib import Path
 
@@ -75,7 +76,10 @@ async def main(once: bool = False) -> None:
     if not await singleton.acquire():
         raise SystemExit("container smoke could not acquire the runtime singleton")
     readiness = RuntimeReadiness(
-        os.environ.get("READINESS_FILE", "/tmp/dailyplanner-ready.json"),
+        os.environ.get(
+            "READINESS_FILE",
+            str(Path(tempfile.gettempdir()) / "dailyplanner-ready.json"),
+        ),
         interval_seconds=2,
     )
     try:

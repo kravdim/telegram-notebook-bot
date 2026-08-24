@@ -56,7 +56,10 @@ class LocalWhisperClient(STTClient):
     def _transcribe_sync(self, audio_path: Path) -> str:
         """Синхронная транскрибация."""
         self._load_model()
-        segments, info = self._model.transcribe(
+        model = self._model
+        if model is None:
+            raise RuntimeError("Whisper model failed to initialize")
+        segments, info = model.transcribe(
             str(audio_path),
             language=self.language,
             beam_size=5,

@@ -107,7 +107,8 @@ def _validate_operator(url: URL, env: dict[str, str]) -> None:
     query = (
         "SELECT rolcreatedb::int, rolsuper::int, rolcreaterole::int, "
         "rolreplication::int, (SELECT count(*) FROM pg_database "
-        f"WHERE datname='{RECOVERY_TEMPLATE}' AND datistemplate AND NOT datallowconn) "
+        "WHERE datname='dailyplanner_recovery_template' "
+        "AND datistemplate AND NOT datallowconn) "
         "FROM pg_roles WHERE rolname=current_user;"
     )
     result = _run(
