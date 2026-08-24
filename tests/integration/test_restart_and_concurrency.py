@@ -13,6 +13,7 @@ from bot.db.crud.reminders import create_reminder, get_pending_reminders, mark_s
 from bot.db.engine import async_session, engine
 from bot.db.models import ProcessedRequest, Reminder, Task, User
 from bot.runtime.singleton import SingletonLease
+from bot.services.tasks import complete_task_workflow
 
 pytestmark = pytest.mark.skipif(
     os.environ.get("RUN_DB_TESTS") != "1", reason="requires disposable migrated PostgreSQL"
@@ -116,3 +117,61 @@ async def test_task_version_rejects_lost_update():
     async with async_session() as cleanup:
         await cleanup.execute(delete(User).where(User.telegram_id == user_id))
         await cleanup.commit()
+
+
+@pytest.mark.asyncio
+async def test_completion_workflow_is_idempotent_and_continues_recurrence():
+    user_id = 8_300_000_000 + int(uuid.uuid4().hex[:6], 16)
+    now = pendulum.now("Europe/Moscow")
+    task_id = uuid.uuid4()
+    reminder_id = uuid.uuid4()
+    async with async_session() as setup:
+        setup.add(User(telegram_id=user_id, username="completion-test"))
+        await setup.commit()
+        setup.add(
+            Task(
+                id=task_id,
+                user_id=user_id,
+                title="Ежедневная зарядка",
+                scheduled_date=now.subtract(days=3).date(),
+                remind_at=now.subtract(days=3),
+                repeat_rule="daily",
+            )
+        )
+        await setup.flush()
+        setup.add(
+            Reminder(
+                id=reminder_id,
+                user_id=user_id,
+                task_id=task_id,
+                message="Ежедневная зарядка",
+                remind_at=now.add(hours=2),
+                occurrence_at=now.add(hours=2),
+            )
+        )
+        await setup.commit()
+
+    async with async_session() as first:
+        completed = await complete_task_workflow(
+            first, task_id, user_id, "Europe/Moscow"
+        )
+        assert completed.completed is True
+        assert completed.next_task is not None
+        assert completed.next_date >= now.date()
+        assert completed.closed_reminders == 1
+
+    async with async_session() as second:
+        repeated = await complete_task_workflow(
+            second, task_id, user_id, "Europe/Moscow"
+        )
+        assert repeated.completed is False
+        tasks = (
+            await second.execute(select(Task).where(Task.user_id == user_id))
+        ).scalars().all()
+        old_reminder = await second.get(Reminder, reminder_id)
+        assert len(tasks) == 2
+        assert old_reminder.status == "resolved"
+        assert old_reminder.is_sent is True
+
+        await second.execute(delete(User).where(User.telegram_id == user_id))
+        await second.commit()

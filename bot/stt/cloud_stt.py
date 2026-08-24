@@ -38,11 +38,12 @@ class CloudSTTClient(STTClient):
     async def transcribe(self, audio_path: Path) -> str:
         """Транскрибировать через API."""
         async with await anyio.open_file(audio_path, "rb") as f:
-            response = await self.client.audio.transcriptions.create(
-                model=self.model,
-                file=f,
-                language=self.language,
-            )
+            audio = await f.read()
+        response = await self.client.audio.transcriptions.create(
+            model=self.model,
+            file=(audio_path.name, audio, "application/octet-stream"),
+            language=self.language,
+        )
         return response.text
 
     async def health_check(self) -> bool:

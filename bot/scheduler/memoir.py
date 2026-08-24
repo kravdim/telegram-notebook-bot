@@ -16,24 +16,6 @@ from bot.formatters.memoir import format_memoir_question, format_weekly_review
 
 logger = logging.getLogger(__name__)
 
-# user_id → message_id вопроса мемуарника (для отслеживания ответа)
-_awaiting_memoir: dict[int, int] = {}
-
-
-def is_awaiting_memoir(user_id: int) -> bool:
-    """Проверить, ожидается ли ответ на мемуарник."""
-    return user_id in _awaiting_memoir
-
-
-def get_memoir_message_id(user_id: int) -> int | None:
-    """Вернуть message_id вопроса мемуарника."""
-    return _awaiting_memoir.get(user_id)
-
-
-def clear_awaiting_memoir(user_id: int) -> None:
-    """Очистить флаг ожидания ответа на мемуарник."""
-    _awaiting_memoir.pop(user_id, None)
-
 
 def build_memoir_keyboard():
     """Кнопка позволяет явно закрыть ожидание ответа."""
@@ -81,7 +63,6 @@ async def send_memoir_prompts(bot: Bot) -> None:
                             parse_mode="HTML",
                             reply_markup=build_memoir_keyboard(),
                         )
-                        _awaiting_memoir[user.telegram_id] = sent.message_id
                         await _persist_memoir_state(user.telegram_id, sent.message_id)
 
                 # Последний день месяца — месячный ревью
@@ -133,7 +114,6 @@ async def _send_weekly_review(bot: Bot, user, tz: str) -> None:
         parse_mode="HTML",
         reply_markup=build_memoir_keyboard(),
     )
-    _awaiting_memoir[user.telegram_id] = sent.message_id
     await _persist_memoir_state(user.telegram_id, sent.message_id)
 
 

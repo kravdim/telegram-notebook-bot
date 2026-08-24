@@ -16,24 +16,32 @@ from bot.db.crud.chronometry import get_day_stats, get_week_stats
 from bot.db.crud.memoir import get_memoir_entries, get_value_stats
 from bot.db.crud.projects import get_project_progress, get_project_tasks, get_user_projects
 from bot.db.crud.tasks import (
-    complete_task_by_id,
     get_frog,
     get_today_tasks,
     get_user_tasks,
     search_tasks,
     set_frog,
+    task_title_similarity,
 )
 from bot.db.crud.users import get_user, update_user_settings
 from bot.db.engine import async_session
 from bot.db.models import Note
+from bot.formatters import split_html_message
 from bot.formatters.chronometry import format_day_photo, format_week_summary
 from bot.formatters.memoir import format_memoir_entries, format_value_stats
+from bot.services.tasks import complete_task_workflow
 
 logger = logging.getLogger(__name__)
 
 router = Router()
 
 _PRIORITY_EMOJI = {"high": "🔴", "medium": "🟡", "normal": "⚪"}
+
+
+async def _answer_html_parts(message: Message, text: str) -> None:
+    """Отправить потенциально длинный HTML без превышения лимита Telegram."""
+    for part in split_html_message(text):
+        await message.answer(part, parse_mode="HTML")
 
 
 def _birthday_in_year(birth_date: date, year: int) -> date:
@@ -107,7 +115,7 @@ async def cmd_tasks(message: Message) -> None:
     for i, task in enumerate(tasks, 1):
         lines.append(f"{i}. {_format_task(task)}")
 
-    await message.answer("\n".join(lines), parse_mode="HTML")
+    await _answer_html_parts(message, "\n".join(lines))
 
 
 # --- /today ---
@@ -132,7 +140,7 @@ async def cmd_today(message: Message) -> None:
     for i, task in enumerate(tasks, 1):
         lines.append(f"{i}. {_format_task(task)}")
 
-    await message.answer("\n".join(lines), parse_mode="HTML")
+    await _answer_html_parts(message, "\n".join(lines))
 
 
 # --- /frog ---
@@ -204,11 +212,23 @@ async def cb_frog_done(callback: CallbackQuery) -> None:
     await callback.answer("🎉 Молодец!")
 
     async with async_session() as session:
-        task = await complete_task_by_id(session, task_id, callback.from_user.id)
+        user = await get_user(session, callback.from_user.id)
+        completion = await complete_task_workflow(
+            session,
+            task_id,
+            callback.from_user.id,
+            user.timezone if user else "Europe/Moscow",
+        )
+        task = completion.task
 
     if task:
+        next_text = (
+            f"\n🔄 Следующая: {completion.next_date.strftime('%d.%m')}"
+            if completion.next_date else ""
+        )
         await callback.message.edit_text(
-            f"🐸✅ Лягушка «{html.escape(task.title)}» съедена! Отличная работа! 🎉",
+            f"🐸✅ Лягушка «{html.escape(task.title)}» съедена! Отличная работа! 🎉"
+            f"{next_text}",
             parse_mode="HTML",
         )
 
@@ -248,17 +268,38 @@ async def cmd_done(message: Message, command: CommandObject) -> None:
 
     # Fuzzy-поиск
     async with async_session() as session:
-        tasks = await search_tasks(session, message.from_user.id, query)
+        tasks = await search_tasks(session, message.from_user.id, query, status="open")
 
     if not tasks:
         await message.answer(f"Не нашёл задачу по запросу «{query}».")
         return
 
-    if len(tasks) == 1:
+    exact = next(
+        (task for task in tasks if task_title_similarity(query, task.title) == 1.0),
+        None,
+    )
+    confident = exact or (
+        tasks[0]
+        if len(tasks) == 1 and task_title_similarity(query, tasks[0].title) >= 0.6
+        else None
+    )
+    if confident:
         async with async_session() as session:
-            task = await complete_task_by_id(session, tasks[0].id, message.from_user.id)
-        if task:
-            await message.answer(f"✅ Задача «{task.title}» выполнена! 🎉")
+            user = await get_user(session, message.from_user.id)
+            completion = await complete_task_workflow(
+                session,
+                confident.id,
+                message.from_user.id,
+                user.timezone if user else "Europe/Moscow",
+            )
+        if completion.task:
+            next_text = (
+                f"\n🔄 Следующая: {completion.next_date.strftime('%d.%m')}"
+                if completion.next_date else ""
+            )
+            await message.answer(
+                f"✅ Задача «{completion.task.title}» выполнена! 🎉{next_text}"
+            )
         return
 
     # Несколько совпадений — предложить выбрать
@@ -283,11 +324,22 @@ async def cb_task_done(callback: CallbackQuery) -> None:
     await callback.answer("✅")
 
     async with async_session() as session:
-        task = await complete_task_by_id(session, task_id, callback.from_user.id)
+        user = await get_user(session, callback.from_user.id)
+        completion = await complete_task_workflow(
+            session,
+            task_id,
+            callback.from_user.id,
+            user.timezone if user else "Europe/Moscow",
+        )
+        task = completion.task
 
     if task:
+        next_text = (
+            f"\n🔄 Следующая: {completion.next_date.strftime('%d.%m')}"
+            if completion.next_date else ""
+        )
         await callback.message.edit_text(
-            f"✅ Задача «{html.escape(task.title)}» выполнена! 🎉",
+            f"✅ Задача «{html.escape(task.title)}» выполнена! 🎉{next_text}",
             parse_mode="HTML",
         )
 
@@ -319,7 +371,7 @@ async def cmd_notes(message: Message) -> None:
     for note in notes:
         lines.append(_format_note_line(note))
 
-    await message.answer("\n".join(lines), parse_mode="HTML")
+    await _answer_html_parts(message, "\n".join(lines))
 
 
 def _format_note_line(note: Note) -> str:
@@ -366,7 +418,7 @@ async def cmd_projects(message: Message) -> None:
             bar = "▓" * (pct // 10) + "░" * (10 - pct // 10)
             lines.append(f"• <b>{html.escape(p.title)}</b> [{bar}] {pct}% ({done}/{total})")
 
-    await message.answer("\n".join(lines), parse_mode="HTML")
+    await _answer_html_parts(message, "\n".join(lines))
 
 
 # --- /memoir ---
@@ -385,7 +437,7 @@ async def cmd_memoir(message: Message) -> None:
     if stats:
         text += "\n\n" + format_value_stats(stats)
 
-    await message.answer(text, parse_mode="HTML")
+    await _answer_html_parts(message, text)
 
 
 # --- /chrono ---
@@ -871,16 +923,21 @@ async def cb_work_days(callback: CallbackQuery) -> None:
 
 @router.callback_query(F.data.startswith("settings:toggle_day:"))
 async def cb_toggle_day(callback: CallbackQuery) -> None:
-    await callback.answer()
     day = int(callback.data.split(":")[2])
     async with async_session() as session:
         user = await get_user(session, callback.from_user.id)
         current = set(user.work_days or [])
         if day in current:
+            if len(current) == 1:
+                await callback.answer(
+                    "Нужен хотя бы один рабочий день.", show_alert=True
+                )
+                return
             current.discard(day)
         else:
             current.add(day)
         await update_user_settings(session, callback.from_user.id, work_days=sorted(current))
+    await callback.answer()
     # Перерисовать кнопки дней
     await cb_work_days(callback)
 
@@ -985,7 +1042,7 @@ async def cmd_birthdays(message: Message) -> None:
         note = f" — {html.escape(b.note)}" if b.note else ""
         lines.append(f"  🎁 {html.escape(b.name)} — {date_str}{age}{note}")
 
-    await message.answer("\n".join(lines), parse_mode="HTML")
+    await _answer_html_parts(message, "\n".join(lines))
 
 
 @router.message(Command("export"))

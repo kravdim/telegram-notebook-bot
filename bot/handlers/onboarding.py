@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import re
+from datetime import time as dt_time
 
 from aiogram import F, Router
 from aiogram.filters import Command
@@ -19,6 +20,14 @@ from bot.db.engine import async_session
 logger = logging.getLogger(__name__)
 
 router = Router()
+
+
+def _parse_clock(value: str) -> dt_time | None:
+    try:
+        hour, minute = value.split(":", 1)
+        return dt_time(int(hour), int(minute))
+    except (AttributeError, TypeError, ValueError):
+        return None
 
 
 class OnboardingStates(StatesGroup):
@@ -273,17 +282,34 @@ async def onb_digest_text(message: Message, state: FSMContext) -> None:
     text = message.text or ""
     data = {"digest_morning": "08:00", "digest_evening": "21:00", "memoir_prompt": "20:45"}
 
+    recognized = 0
     for part in text.split():
         if "=" in part:
             key, val = part.split("=", 1)
             key = key.strip().lower()
             val = val.strip()
             if key in ("утро", "morning"):
+                recognized += 1
+                if not _parse_clock(val):
+                    await message.answer("Не понял время утра. Используй ЧЧ:ММ, например 08:00.")
+                    return
                 data["digest_morning"] = val
             elif key in ("вечер", "evening"):
+                recognized += 1
+                if not _parse_clock(val):
+                    await message.answer("Не понял время вечера. Используй ЧЧ:ММ, например 21:00.")
+                    return
                 data["digest_evening"] = val
             elif key in ("мемуарник", "memoir"):
+                recognized += 1
+                if not _parse_clock(val):
+                    await message.answer("Не понял время мемуарника. Используй ЧЧ:ММ.")
+                    return
                 data["memoir_prompt"] = val
+
+    if not recognized:
+        await message.answer("Используй формат: утро=08:00 вечер=21:00 мемуарник=20:45")
+        return
 
     await state.update_data(**data)
     await _send_work_schedule_step(message, state)
@@ -358,16 +384,41 @@ async def onb_work_text(message: Message, state: FSMContext) -> None:
             val = val.strip()
             if key in ("дни", "days"):
                 days = []
+                unknown_days = []
                 for d in val.split(","):
                     d = d.strip().lower()
                     if d in _DAY_MAP:
                         days.append(_DAY_MAP[d])
-                if days:
-                    data["work_days"] = days
+                    else:
+                        unknown_days.append(d)
+                if unknown_days or not days:
+                    await message.answer("Не понял рабочие дни. Пример: дни=пн,вт,ср,чт,пт")
+                    return
+                data["work_days"] = days
             elif key in ("начало", "start"):
+                if not _parse_clock(val):
+                    await message.answer("Не понял начало дня. Используй ЧЧ:ММ.")
+                    return
                 data["work_start"] = val
             elif key in ("конец", "end"):
+                if not _parse_clock(val):
+                    await message.answer("Не понял конец дня. Используй ЧЧ:ММ.")
+                    return
                 data["work_end"] = val
+
+    if set(data) != {"work_days", "work_start", "work_end"}:
+        await message.answer(
+            "Укажи весь график: дни=пн,вт,ср,чт,пт начало=09:00 конец=18:00"
+        )
+        return
+    work_start = _parse_clock(data["work_start"])
+    work_end = _parse_clock(data["work_end"])
+    if work_start is None or work_end is None:
+        await message.answer("Не понял рабочее время. Используй ЧЧ:ММ.")
+        return
+    if work_start >= work_end:
+        await message.answer("Конец рабочего дня должен быть позже начала.")
+        return
 
     await state.update_data(**data)
     await _send_concepts_step(message, state)
@@ -435,8 +486,6 @@ async def onb_first_task(message: Message, state: FSMContext) -> None:
 async def _finish_onboarding(message: Message, user_id: int, state: FSMContext) -> None:
     """Завершает онбординг: сохраняет настройки, очищает FSM."""
     data = await state.get_data()
-    from datetime import time as dt_time
-
     settings_update: dict = {"onboarding_completed": True}
 
     if tz := data.get("timezone"):

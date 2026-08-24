@@ -31,7 +31,7 @@ async def run_backup() -> Path | None:
     _BACKUP_DIR.mkdir(parents=True, exist_ok=True)
 
     now = pendulum.now()
-    filename = f"notebook_bot_{now.format('YYYY-MM-DD_HHmm')}.sql.gz"
+    filename = f"notebook_bot_{now.format('YYYY-MM-DD_HHmmss')}.sql.gz"
     filepath = _BACKUP_DIR / filename
 
     try:
@@ -59,6 +59,10 @@ async def run_backup() -> Path | None:
     env = os.environ.copy()
     env["PGPASSWORD"] = password
 
+    pg_dump = None
+    gzip_proc = None
+    pg_stderr_task = None
+    gzip_stderr_task = None
     try:
         pg_dump = await asyncio.create_subprocess_exec(
             pg_dump_bin, "-h", host, "-p", port, "-U", user, "-d", dbname,
@@ -74,28 +78,35 @@ async def run_backup() -> Path | None:
                 stdout=backup_file,
                 stderr=asyncio.subprocess.PIPE,
             )
-            if pg_dump.stdout and gzip_proc.stdin:
-                while line := await pg_dump.stdout.readline():
-                    # pg_dump 17 emits this setting even when dumping an older
-                    # server; PostgreSQL <=16 rejects it during restore.
-                    if not _is_portable_dump_line(line):
-                        continue
-                    gzip_proc.stdin.write(line)
-                    await gzip_proc.stdin.drain()
-                gzip_proc.stdin.close()
-                await gzip_proc.stdin.wait_closed()
+            pg_stderr_task = asyncio.create_task(pg_dump.stderr.read())
+            gzip_stderr_task = asyncio.create_task(gzip_proc.stderr.read())
+            async with asyncio.timeout(300):
+                if pg_dump.stdout and gzip_proc.stdin:
+                    while line := await pg_dump.stdout.readline():
+                        # pg_dump 17 emits this setting even when dumping an older
+                        # server; PostgreSQL <=16 rejects it during restore.
+                        if not _is_portable_dump_line(line):
+                            continue
+                        gzip_proc.stdin.write(line)
+                        await gzip_proc.stdin.drain()
+                    gzip_proc.stdin.close()
+                    await gzip_proc.stdin.wait_closed()
 
-            await asyncio.wait_for(gzip_proc.wait(), timeout=300)
-            await asyncio.wait_for(pg_dump.wait(), timeout=10)
+                await asyncio.gather(pg_dump.wait(), gzip_proc.wait())
+                pg_stderr, gzip_stderr = await asyncio.gather(
+                    pg_stderr_task, gzip_stderr_task
+                )
 
         if pg_dump.returncode != 0:
-            stderr = (await pg_dump.stderr.read()).decode() if pg_dump.stderr else ""
-            logger.error("pg_dump failed (rc=%d): %s", pg_dump.returncode, stderr)
+            logger.error(
+                "pg_dump failed (rc=%d): %s",
+                pg_dump.returncode,
+                pg_stderr.decode(errors="replace"),
+            )
             filepath.unlink(missing_ok=True)
             metrics.increment("backup.error")
         elif gzip_proc.returncode != 0:
-            gzip_err = (await gzip_proc.stderr.read()).decode() if gzip_proc.stderr else ""
-            logger.error("gzip failed: %s", gzip_err)
+            logger.error("gzip failed: %s", gzip_stderr.decode(errors="replace"))
             filepath.unlink(missing_ok=True)
             metrics.increment("backup.error")
         else:
@@ -123,10 +134,32 @@ async def run_backup() -> Path | None:
             logger.info("Бэкап создан: %s (%.1f MB)", filename, size_mb)
     except asyncio.TimeoutError:
         logger.error("Таймаут бэкапа")
+        for process in (pg_dump, gzip_proc):
+            if process and process.returncode is None:
+                process.kill()
+        await asyncio.gather(
+            *(process.wait() for process in (pg_dump, gzip_proc) if process),
+            return_exceptions=True,
+        )
+        await asyncio.gather(
+            *(task for task in (pg_stderr_task, gzip_stderr_task) if task),
+            return_exceptions=True,
+        )
         filepath.unlink(missing_ok=True)
         metrics.increment("backup.error")
     except Exception as e:
         logger.error("Ошибка бэкапа: %s", e)
+        for process in (pg_dump, gzip_proc):
+            if process and process.returncode is None:
+                process.kill()
+        await asyncio.gather(
+            *(process.wait() for process in (pg_dump, gzip_proc) if process),
+            return_exceptions=True,
+        )
+        await asyncio.gather(
+            *(task for task in (pg_stderr_task, gzip_stderr_task) if task),
+            return_exceptions=True,
+        )
         filepath.unlink(missing_ok=True)
         metrics.increment("backup.error")
 

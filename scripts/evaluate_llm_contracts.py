@@ -24,7 +24,7 @@ def main() -> None:
     accuracy = correct / total if total else 0.0
     invalid_rate = invalid / total if total else 1.0
     print(
-        f"golden_cases={total} intent_accuracy={accuracy:.3f} "
+        f"golden_cases={total} tool_call_parser_accuracy={accuracy:.3f} "
         f"invalid_tool_rate={invalid_rate:.3f}"
     )
     if accuracy < 1.0 or invalid_rate > 0:

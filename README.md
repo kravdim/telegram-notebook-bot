@@ -49,8 +49,8 @@
 | ORM | SQLAlchemy 2.x async + asyncpg |
 | Миграции | Alembic |
 | LLM | MiniMax M2.7 через OpenAI SDK |
-| Embedding | Ollama + nomic-embed-text (macOS) / API (VPS) |
-| STT | faster-whisper (macOS) / Groq API (VPS) |
+| Embedding | Ollama + nomic-embed-text (production) / experimental cloud adapter |
+| STT | faster-whisper (production) / experimental Groq/OpenAI adapter |
 | Конфиг | Pydantic Settings + config.yaml + .env |
 
 ## Быстрый старт
@@ -101,7 +101,11 @@ chmod +x platform/macos/install.sh
 
 Бот будет автоматически запускаться при загрузке macOS и перезапускаться при сбоях.
 
-### VPS — Docker
+### VPS — Docker (experimental)
+
+Официальный production target сейчас — macOS LaunchAgent на Mac mini. Docker
+собирается в CI, но пока не имеет полного container E2E/readiness gate и не
+считается поддерживаемым production deployment.
 
 ```bash
 cd platform/linux
@@ -137,7 +141,7 @@ bot/
 ├── llm/
 │   ├── client.py               # LLMClient: MiniMax M2.7 + опциональный fallback
 │   ├── queue.py                # PriorityQueue для LLM-запросов
-│   ├── functions.py            # JSON Schema function tools (13 функций)
+│   ├── functions.py            # JSON Schema function tools (14 функций)
 │   ├── dispatcher.py           # Исполнение function calls + валидация
 │   ├── decompose.py            # LLM-декомпозиция проектов на бифштексы
 │   ├── prompts.py              # Промпты из БД + 5-мин кэш
@@ -192,7 +196,7 @@ scripts/
 
 ## Модель данных
 
-16 таблиц, включая доменные данные, `interaction_states`, DB-backed FSM,
+17 таблиц, включая доменные данные, `interaction_states`, DB-backed FSM,
 `processed_requests`, версии промптов и обезличенные LLM-логи. Неиспользуемая
 таблица `llm_queue` удалена; runtime-очередь живёт в процессе, а входящие
 Telegram-сообщения дедуплицируются в PostgreSQL.
@@ -201,7 +205,7 @@ Telegram-сообщения дедуплицируются в PostgreSQL.
 
 ## LLM Function Calling
 
-Бот использует 13 функций через OpenAI-совместимый function calling. Поддерживает множественные tool_calls из одного сообщения.
+Бот использует 14 функций через OpenAI-совместимый function calling. Поддерживает множественные tool_calls из одного сообщения.
 
 | Функция | Описание |
 |---------|----------|
@@ -215,6 +219,7 @@ Telegram-сообщения дедуплицируются в PostgreSQL.
 | `create_reminder` | Напоминание на конкретное время |
 | `search` | Гибридный RAG-поиск по задачам, заметкам, дневнику, мемуарнику |
 | `create_project` | Создать «слона» с AI-декомпозицией на бифштексы |
+| `complete_project` | Завершить «слона» с подтверждением открытых задач |
 | `get_advice` | Совет по тайм-менеджменту из базы знаний Архангельского |
 | `add_birthday` | Запомнить день рождения |
 | `respond_to_user` | Свободный ответ (с ограничением роли) |
@@ -225,10 +230,11 @@ Telegram-сообщения дедуплицируются в PostgreSQL.
 - **Write-ahead** — сначала запись в БД, потом подтверждение, потом фон
 - **Двойной контур** — основной (30 сек) + sweep (5 мин) для пропущенных напоминаний
 - **LLM** — основной провайдер MiniMax M2.7, fallback опционален через config.yaml
-- **Health check** — восстановление main каждые 5 минут, если он был помечен недоступным
+- **Health check** — реальный короткий probe main-провайдера каждые 5 минут
 - **Идемпотентность** — `digest_sent_date`, `memoir_asked_date`, `chronometry_last_asked`, `tasks_reminder_last_hour`, `is_sent`
 - **Последовательность** — полный pipeline одного пользователя защищён per-user lock;
-  разные пользователи обрабатываются параллельно
+  входящие pipeline разных пользователей конкурентны, но LLM-вызовы намеренно
+  проходят через один priority worker
 - **Persistent UX** — onboarding, мемуарник, хронометраж и голосовые подтверждения
   переживают рестарт за счёт PostgreSQL-backed state
 - **Повторения** — единый формат: `daily`, `weekdays`, `weekly:1,3`,
@@ -321,8 +327,10 @@ DATABASE_URL=postgresql+asyncpg://notebook:password@localhost:5432/notebook_bot
 ### macOS (LaunchAgent)
 Бот запускается как LaunchAgent с `KeepAlive=true`. Автоматический перезапуск при сбоях, логи в `~/Library/Logs/notebook-bot/`.
 
-### VPS (Docker)
-`docker-compose.yml` с PostgreSQL (pgvector) + ботом. Или standalone через systemd.
+### VPS (Docker, experimental)
+`docker-compose.yml` с PostgreSQL (pgvector) + ботом существует как
+экспериментальный target. До появления container E2E/readiness gate он не
+имеет тех же production-гарантий, что macOS LaunchAgent.
 
 Перед Docker-запуском задайте `POSTGRES_PASSWORD` в `.env`; compose больше не
 содержит пароль по умолчанию. Контейнер сам ждёт БД, применяет миграции и
@@ -332,7 +340,7 @@ DATABASE_URL=postgresql+asyncpg://notebook:password@localhost:5432/notebook_bot
 
 ```bash
 DATABASE_URL=postgresql://user:password@host/database \
-  scripts/restore_backup.sh /path/to/notebook_bot_YYYY-MM-DD_HHmm.sql.gz
+  scripts/restore_backup.sh /path/to/notebook_bot_YYYY-MM-DD_HHmmss.sql.gz
 ```
 
 Скрипт проверяет checksum и требует явно ввести `RESTORE` перед изменением БД.
@@ -341,4 +349,4 @@ DATABASE_URL=postgresql://user:password@host/database \
 
 ## Лицензия
 
-MIT
+[MIT](LICENSE)

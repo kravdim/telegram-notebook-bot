@@ -11,9 +11,7 @@ from tests.fakes import FakeSessionContext
 
 @pytest.fixture(autouse=True)
 def clear_memoir_waiting_state():
-    memoir_scheduler._awaiting_memoir.clear()
     yield
-    memoir_scheduler._awaiting_memoir.clear()
 
 
 def entry(day, content, value_tag="работа"):

@@ -76,7 +76,7 @@ async def test_ambiguous_completion_does_not_change_database(monkeypatch):
 
     monkeypatch.setattr(dispatcher, "async_session", lambda: FakeSessionContext())
     monkeypatch.setattr(dispatcher, "search_tasks", fake_search)
-    monkeypatch.setattr(dispatcher, "complete_task_by_id", forbidden_complete)
+    monkeypatch.setattr(dispatcher, "complete_task_workflow", forbidden_complete)
 
     result = await dispatcher._handle_complete_task(
         42, {"search_query": "отчёт"}, "Europe/Moscow"

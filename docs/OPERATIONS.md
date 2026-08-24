@@ -13,14 +13,20 @@ Violations are logged and sent to configured Telegram admins, throttled to one
 alert per SLO per hour. In-process counters include LLM/STT errors, LLM queue
 depth, reminder lag and scheduler job duration.
 
-`scripts/evaluate_llm_contracts.py` reports intent accuracy and invalid-tool rate
-for anonymized golden provider responses. Runtime counters additionally expose
+Telegram delivery is currently at-least-once at the message boundary. If a
+multipart send fails partway through, a retry can repeat the already delivered
+parts. Durable per-part delivery ledger/outbox is tracked as a separate
+architectural change.
+
+`scripts/evaluate_llm_contracts.py` reports tool-call parser accuracy and
+invalid-tool rate for anonymized saved provider responses; это не online intent
+evaluation пользовательских utterance. Runtime counters additionally expose
 fallback and invalid-tool frequency; extend the fixture for every production
 misclassification before changing prompts.
 
 ## Release checklist
 
-1. Start from a clean checkout and run `uv sync --frozen --group dev`.
+1. Start from a clean checkout and run `uv sync --frozen --dev --extra stt`.
 2. Run `uv run ruff check ...`, `uv run mypy ...`, `uv run pytest` and
    `uv run alembic heads`; CI is the canonical command list.
 3. Create a pre-release backup and verify its `.sha256` sidecar.
@@ -29,9 +35,9 @@ misclassification before changing prompts.
    it cannot select the production database as its restore target.
    When drilling a backup made before the release migration, pass the database's
    recorded revision as `--expected-revision REVISION`.
-5. Build the Docker image. Apply `alembic upgrade head`, seed knowledge, then run
-   `scripts/preflight.py` before starting polling. All supported entrypoints do
-   these same steps.
+5. For the official macOS target run its installer/preflight. Docker build is an
+   experimental compatibility check until container E2E/readiness becomes a
+   release gate.
 6. Restart exactly one service. The PostgreSQL singleton lease makes a second
    instance exit before Telegram polling or scheduler startup.
 7. Check logs, `/status`, current Alembic revision and one non-mutating Telegram

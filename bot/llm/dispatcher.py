@@ -21,7 +21,7 @@ from bot.db.crud.projects import (
 )
 from bot.db.crud.reminders import create_reminder, is_valid_repeat_rule, upsert_task_reminder
 from bot.db.crud.tasks import (
-    ConcurrentTaskUpdateError, complete_task_by_id, count_similar_completed, create_task, get_frog,
+    ConcurrentTaskUpdateError, count_similar_completed, create_task, get_frog,
     get_today_tasks, get_user_tasks, normalize_task_identity, search_tasks,
     task_title_similarity,
     update_task as crud_update_task,
@@ -30,6 +30,7 @@ from bot.db.crud.trips import get_active_trip
 from bot.db.engine import async_session
 from bot.llm.contracts import Action
 from bot.observability import metrics
+from bot.services.tasks import complete_task_workflow
 
 logger = logging.getLogger(__name__)
 
@@ -388,40 +389,27 @@ async def _handle_complete_task(user_id: int, args: Dict[str, Any], tz: str) -> 
                 lines.append(f"  • {candidate.title}")
             return "\n".join(lines)
 
-        task = await complete_task_by_id(
-            session, confident.id, user_id
+        completion = await complete_task_workflow(
+            session, confident.id, user_id, tz
         )
+        task = completion.task
         if not task:
             return "Не нашёл такую задачу. Уточни название."
+        if not completion.completed:
+            return (
+                f"Задача «{task.title}» уже была выполнена.\n"
+                + await _format_today_planner_state(user_id, tz)
+            )
 
-        # Снимаем данные пока сессия открыта
         task_title = task.title
-        task_repeat_rule = task.repeat_rule
-        task_due_date = task.due_date
-        task_scheduled_date = task.scheduled_date
-        task_due_time = task.due_time
-        task_remind_at = task.remind_at
-        task_user_id = task.user_id
-        task_category = task.category
-        task_priority = task.priority
 
         # Считаем сколько раз подобное уже выполнялось (включая текущий)
         similar_count, _ = await count_similar_completed(session, user_id, task_title)
 
     result = f"Задача «{task_title}» выполнена! 🎉"
 
-    # Повторяющаяся задача — создаём следующую
-    if task_repeat_rule:
-        task_snapshot = {
-            "repeat_rule": task_repeat_rule, "due_date": task_due_date,
-            "scheduled_date": task_scheduled_date,
-            "due_time": task_due_time, "user_id": task_user_id,
-            "remind_at": task_remind_at,
-            "title": task_title, "category": task_category, "priority": task_priority,
-        }
-        next_task = await _create_next_recurring_task(task_snapshot)
-        if next_task:
-            result += f"\n🔄 Следующая: {next_task['due_date_str']}"
+    if completion.next_date:
+        result += f"\n🔄 Следующая: {completion.next_date.strftime('%d.%m')}"
     elif similar_count >= 2:
         result += "\n" + _recurring_complete_comment(task_title, similar_count)
 
@@ -450,63 +438,6 @@ def _format_open_today_state(open_today) -> str:
     if len(open_today) > 5:
         lines.append(f"... и ещё {len(open_today) - 5}")
     return "\n".join(lines)
-
-
-async def _create_next_recurring_task(task_info: dict) -> Optional[dict]:
-    """Создать следующую повторяющуюся задачу на основе завершённой.
-
-    task_info содержит даты, правило, reminder-конфигурацию и поля новой задачи.
-    """
-    from bot.db.crud.reminders import _calc_next_occurrence
-
-    anchor_date = task_info.get("scheduled_date") or task_info.get("due_date")
-    if not task_info["repeat_rule"] or not anchor_date:
-        return None
-
-    # Вычисляем следующую дату
-    import pendulum
-    due_date = anchor_date
-    due_time = task_info["due_time"]
-    current_dt = pendulum.datetime(
-        due_date.year, due_date.month, due_date.day,
-        hour=due_time.hour if due_time else 9,
-        minute=due_time.minute if due_time else 0,
-    )
-    next_dt = _calc_next_occurrence(current_dt, task_info["repeat_rule"])
-    if not next_dt:
-        return None
-
-    async with async_session() as session:
-        new_task = await create_task(
-            session,
-            user_id=task_info["user_id"],
-            title=task_info["title"],
-            category=task_info["category"],
-            priority=task_info["priority"],
-            scheduled_date=(next_dt.date() if task_info.get("scheduled_date") else None),
-            due_date=(next_dt.date() if task_info.get("due_date") else None),
-            due_time=due_time,
-            repeat_rule=task_info["repeat_rule"],
-            commit=False,
-        )
-        old_remind_at = task_info.get("remind_at")
-        if old_remind_at:
-            next_remind_at = _calc_next_occurrence(
-                old_remind_at, task_info["repeat_rule"]
-            )
-            if next_remind_at:
-                new_task.remind_at = next_remind_at
-                await create_reminder(
-                    session,
-                    task_info["user_id"],
-                    task_info["title"],
-                    next_remind_at,
-                    task_id=new_task.id,
-                    commit=False,
-                )
-        await session.commit()
-        next_date_str = next_dt.date().strftime('%d.%m')
-    return {"due_date_str": next_date_str}
 
 
 def _format_repeat_rule(rule: str) -> str:

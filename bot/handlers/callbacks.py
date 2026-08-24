@@ -12,10 +12,11 @@ from aiogram.types import CallbackQuery
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from bot.db.crud.reminders import get_reminder_by_id, resolve_reminder, snooze_reminder
-from bot.db.crud.tasks import complete_task_by_id, delete_task, get_task_by_id
+from bot.db.crud.tasks import delete_task, get_task_by_id
 from bot.db.crud.users import get_user
 from bot.db.crud.projects import complete_project_and_cancel_open_tasks
 from bot.db.engine import async_session
+from bot.services.tasks import complete_task_workflow
 
 logger = logging.getLogger(__name__)
 
@@ -28,10 +29,8 @@ MAX_SNOOZE = 5
 async def cb_memoir_skip(callback: CallbackQuery) -> None:
     """Закрыть ожидание мемуарника без создания записи."""
     from bot.db.crud.interaction_states import clear_state, get_state
-    from bot.scheduler.memoir import clear_awaiting_memoir
 
     user_id = callback.from_user.id
-    clear_awaiting_memoir(user_id)
     await callback.answer("Пропущено")
     try:
         async with async_session() as session:
@@ -94,11 +93,25 @@ async def cb_snooze_done(callback: CallbackQuery) -> None:
                 session, uuid.UUID(reminder_id), callback.from_user.id
             )
             if reminder:
-                await resolve_reminder(session, reminder.id, callback.from_user.id)
                 if reminder.task_id:
-                    task = await complete_task_by_id(session, reminder.task_id, callback.from_user.id)
-                    if task:
-                        result_text = f"✅ Задача «{html.escape(task.title)}» выполнена!"
+                    user = await get_user(session, callback.from_user.id)
+                    completion = await complete_task_workflow(
+                        session,
+                        reminder.task_id,
+                        callback.from_user.id,
+                        user.timezone if user else "Europe/Moscow",
+                    )
+                    if completion.task:
+                        next_text = (
+                            f"\n🔄 Следующая: {completion.next_date.strftime('%d.%m')}"
+                            if completion.next_date else ""
+                        )
+                        result_text = (
+                            f"✅ Задача «{html.escape(completion.task.title)}» выполнена!"
+                            f"{next_text}"
+                        )
+                else:
+                    await resolve_reminder(session, reminder.id, callback.from_user.id)
     except Exception as e:
         logger.error("Ошибка при обработке snooze_done: %s", e)
         result_text = "✅ Готово!"

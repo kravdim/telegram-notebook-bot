@@ -31,16 +31,30 @@ class CloudEmbeddingClient(EmbeddingClient):
         response = await self.client.embeddings.create(
             model=self.model,
             input=text,
+            dimensions=self.dimensions,
         )
-        return response.data[0].embedding
+        embedding = response.data[0].embedding
+        self._validate_dimensions(embedding)
+        return embedding
 
     async def embed_batch(self, texts: List[str]) -> List[List[float]]:
         """Получить embeddings для списка текстов."""
         response = await self.client.embeddings.create(
             model=self.model,
             input=texts,
+            dimensions=self.dimensions,
         )
-        return [item.embedding for item in response.data]
+        embeddings = [item.embedding for item in response.data]
+        for embedding in embeddings:
+            self._validate_dimensions(embedding)
+        return embeddings
+
+    def _validate_dimensions(self, embedding: List[float]) -> None:
+        if len(embedding) != self.dimensions:
+            raise ValueError(
+                f"Embedding dimension mismatch: expected {self.dimensions}, "
+                f"got {len(embedding)}"
+            )
 
     async def health_check(self) -> bool:
         """Проверить доступность API."""

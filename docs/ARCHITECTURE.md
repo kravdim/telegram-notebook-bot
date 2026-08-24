@@ -18,11 +18,14 @@ handlers ──► llm/contracts + dispatcher ──► db/crud ──► Postgr
 
 ## Dependency rules
 
-1. `handlers/` translates Telegram input/output and owns no persistence query.
+1. `handlers/` translates Telegram input/output. Простые scoped reads и
+   настройки пока могут открывать сессию напрямую; cross-entity invariants
+   обязаны жить в application service (например, task completion workflow).
 2. `llm/contracts.py` validates provider output before `dispatcher.py` invokes a
    mutation. Unknown tools and unknown fields fail closed.
-3. `db/crud/` is the repository boundary. Multi-row invariants and commits live
-   there; task writes use an optimistic `version` guard.
+3. `db/crud/` — repository boundary для операций одной сущности. Multi-row
+   workflows живут в `services/`; task writes используют optimistic `version`
+   guard и row locks там, где нужна межканальная идемпотентность.
 4. `scheduler/` reads durable state and records delivery before advancing. The
    runtime advisory lock permits only one scheduler/polling process.
 5. `observability.py` may read operational state but must never be required for a

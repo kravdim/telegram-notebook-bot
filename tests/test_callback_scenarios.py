@@ -11,7 +11,6 @@ from tests.fakes import FakeCallback, FakeSessionContext
 async def test_snooze_done_marks_reminder_and_task(monkeypatch):
     reminder_id = uuid4()
     task_id = uuid4()
-    resolved = []
     completed = []
 
     async def fake_get_reminder(session, rid, user_id):
@@ -19,24 +18,26 @@ async def test_snooze_done_marks_reminder_and_task(monkeypatch):
         assert user_id == 42
         return SimpleNamespace(id=reminder_id, task_id=task_id)
 
-    async def fake_resolve(session, rid, user_id):
-        resolved.append((rid, user_id))
+    async def fake_user(session, user_id):
+        return SimpleNamespace(timezone="Europe/Moscow")
 
-    async def fake_complete_task(session, tid, user_id):
-        completed.append((tid, user_id))
-        return SimpleNamespace(title="Подключить кассу")
+    async def fake_complete_task(session, tid, user_id, timezone):
+        completed.append((tid, user_id, timezone))
+        return SimpleNamespace(
+            task=SimpleNamespace(title="Подключить кассу"),
+            next_date=None,
+        )
 
     monkeypatch.setattr(callbacks, "async_session", lambda: FakeSessionContext())
     monkeypatch.setattr(callbacks, "get_reminder_by_id", fake_get_reminder)
-    monkeypatch.setattr(callbacks, "resolve_reminder", fake_resolve)
-    monkeypatch.setattr(callbacks, "complete_task_by_id", fake_complete_task)
+    monkeypatch.setattr(callbacks, "get_user", fake_user)
+    monkeypatch.setattr(callbacks, "complete_task_workflow", fake_complete_task)
 
     callback = FakeCallback(user_id=42)
     callback.data = f"snooze_done:{reminder_id}"
     await callbacks.cb_snooze_done(callback)
 
-    assert resolved == [(reminder_id, 42)]
-    assert completed == [(task_id, 42)]
+    assert completed == [(task_id, 42, "Europe/Moscow")]
     assert callback.message.edits[0][0] == "✅ Задача «Подключить кассу» выполнена!"
 
 

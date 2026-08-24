@@ -62,7 +62,7 @@ class LLMQueue:
             self._worker_task = None
 
     async def submit(self, priority: int, coro: Coroutine, timeout: float = 120.0) -> Any:
-        """Добавить запрос в очередь и дождаться результата."""
+        """Добавить запрос и дождаться результата в пределах общего timeout."""
         loop = asyncio.get_running_loop()
         future = loop.create_future()
         task = LLMTask(
@@ -71,14 +71,18 @@ class LLMQueue:
             coro=coro,
             future=future,
         )
-        await self._queue.put(task)
-        metrics.gauge("llm.queue_depth", float(self._queue.qsize()))
+        enqueued = False
         try:
-            return await asyncio.wait_for(future, timeout=timeout)
+            async with asyncio.timeout(timeout):
+                await self._queue.put(task)
+                enqueued = True
+                metrics.gauge("llm.queue_depth", float(self._queue.qsize()))
+                return await future
         except asyncio.TimeoutError:
+            future.cancel()
             if task.execution_task and not task.execution_task.done():
                 task.execution_task.cancel()
-            else:
+            elif not enqueued:
                 task.coro.close()
             raise
 
@@ -88,6 +92,9 @@ class LLMQueue:
             task = await self._queue.get()
             metrics.gauge("llm.queue_depth", float(self._queue.qsize()))
             try:
+                if task.future.cancelled():
+                    task.coro.close()
+                    continue
                 task.execution_task = asyncio.create_task(task.coro)
                 result = await task.execution_task
                 if not task.future.done():

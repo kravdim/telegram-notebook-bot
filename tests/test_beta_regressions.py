@@ -158,7 +158,6 @@ async def test_mutation_without_tool_retries_with_required_tool(monkeypatch):
     monkeypatch.setattr(voice, "_clear_voice_state", no_state)
     monkeypatch.setattr("bot.db.crud.llm_logs.log_llm_request", fake_log)
     monkeypatch.setattr(chronometry_scheduler, "is_awaiting_response", lambda _: False)
-    monkeypatch.setattr(memoir_scheduler, "is_awaiting_memoir", lambda _: False)
 
     msg = FakeMessage("Запомни: у мамы день рождения 15 марта", user_id=42)
     await messages._process_text_message_unlocked(42, msg.text, msg)
@@ -228,7 +227,6 @@ async def test_project_decomposition_has_no_duplicate_confirmation(monkeypatch):
     monkeypatch.setattr(decompose, "create_project_tasks", fake_create_tasks)
     monkeypatch.setattr("bot.db.crud.llm_logs.log_llm_request", fake_log)
     monkeypatch.setattr(chronometry_scheduler, "is_awaiting_response", lambda _: False)
-    monkeypatch.setattr(memoir_scheduler, "is_awaiting_memoir", lambda _: False)
 
     msg = FakeMessage("Создай слона: годовой отчёт", user_id=42)
     await messages._process_text_message_unlocked(42, msg.text, msg)

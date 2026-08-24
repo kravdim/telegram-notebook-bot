@@ -184,14 +184,7 @@ class LLMClient:
         raise last_error  # type: ignore
 
     async def health_check(self) -> bool:
-        """Проверка доступности main провайдера.
-
-        Если main уже здоров — не тратим запрос, просто возвращаем True.
-        Проверяем только когда main помечен как нездоровый (для детекции восстановления).
-        """
-        if self._main_healthy:
-            return True
-
+        """Выполнить реальный короткий запрос к main provider."""
         try:
             await self.main_client.chat.completions.create(
                 model=self.main_model,
@@ -199,8 +192,10 @@ class LLMClient:
                 max_tokens=1,
                 timeout=5,
             )
-            logger.info("Main LLM (%s) restored.", self.main_model)
+            if not self._main_healthy:
+                logger.info("Main LLM (%s) restored.", self.main_model)
             self._main_healthy = True
             return True
         except Exception:
+            self._main_healthy = False
             return False

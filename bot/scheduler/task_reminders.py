@@ -11,6 +11,7 @@ from bot.db.crud.users import (
     claim_task_reminder_slot, get_all_users, release_task_reminder_slot,
 )
 from bot.db.engine import async_session
+from bot.formatters import split_html_message
 
 logger = logging.getLogger(__name__)
 
@@ -66,11 +67,12 @@ async def send_task_reminders(bot: Bot) -> None:
             text = _format_task_reminder(tasks, completed, frog, today, current_hour)
 
             try:
-                await bot.send_message(
-                    chat_id=user.telegram_id,
-                    text=text,
-                    parse_mode="HTML",
-                )
+                for part in split_html_message(text):
+                    await bot.send_message(
+                        chat_id=user.telegram_id,
+                        text=part,
+                        parse_mode="HTML",
+                    )
             except Exception:
                 async with async_session() as session:
                     await release_task_reminder_slot(

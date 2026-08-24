@@ -270,6 +270,13 @@ async def _process_text_message_unlocked(user_id: int, text: str, message: Messa
         user = await get_user(session, user_id)
     user_tz = user.timezone if user else "Europe/Moscow"
 
+    if _INCOMPLETE_MUTATION_RE.fullmatch(text.strip()):
+        reply = "Уточни, что именно нужно сделать — например, название задачи."
+        add_message(user_id, "user", text)
+        add_message(user_id, "assistant", reply)
+        await message.answer(reply, parse_mode=None)
+        return
+
     from bot.handlers.voice import consume_voice_edit, _load_voice_state, _clear_voice_state
     voice_edit = consume_voice_edit(user_id)
     if not voice_edit:
@@ -370,25 +377,16 @@ async def _process_text_message_unlocked(user_id: int, text: str, message: Messa
             await message.answer(part, parse_mode=None)
         return
 
-    # Явная команда важнее устаревшего ожидания мемуарника, если пользователь
-    # не ответил reply'ем непосредственно на вопрос.
-    from bot.scheduler.memoir import is_awaiting_memoir, clear_awaiting_memoir, get_memoir_message_id
+    # Мемуарник имеет один источник истины — PostgreSQL state с TTL. Обычное
+    # сообщение без явного reply никогда не считается ответом на вопрос.
     persisted_memoir = await _get_persisted_interaction(user_id, "memoir")
-    if is_awaiting_memoir(user_id) or persisted_memoir:
-        memoir_msg_id = get_memoir_message_id(user_id)
-        if not memoir_msg_id and persisted_memoir:
-            memoir_msg_id = persisted_memoir.payload.get("message_id")
+    if persisted_memoir:
+        memoir_msg_id = persisted_memoir.payload.get("message_id")
         reply_to = message.reply_to_message
-
-        # Reply на другое сообщение → не мемуарник
-        is_memoir_reply = True
-        if reply_to and memoir_msg_id and reply_to.message_id != memoir_msg_id:
-            is_memoir_reply = False
-
-        if is_memoir_reply and not (
-            reply_to is None and _looks_like_mutation_request(text)
-        ):
-            clear_awaiting_memoir(user_id)
+        is_memoir_reply = bool(
+            reply_to and memoir_msg_id and reply_to.message_id == memoir_msg_id
+        )
+        if is_memoir_reply:
             await _clear_persisted_interaction(user_id, "memoir")
             await message.bot.send_chat_action(chat_id=message.chat.id, action="typing")
 
@@ -646,8 +644,9 @@ async def _process_text_message_unlocked(user_id: int, text: str, message: Messa
         content = response.content
         if _looks_like_fake_mutation(content):
             logger.warning(
-                "LLM tried to report mutation without function call: user=%s text=%.120s response=%.200s",
-                user_id, text, content,
+                "LLM tried to report mutation without function call: user=%s "
+                "input_chars=%d response_chars=%d",
+                user_id, len(text), len(content),
             )
             reply = (
                 "Я не сохранил это, потому что не получил реальную команду на изменение. "
