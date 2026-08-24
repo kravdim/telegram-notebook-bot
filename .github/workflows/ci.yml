@@ -61,7 +61,38 @@ jobs:
           backup="$(uv run python -c 'import asyncio; from bot.scheduler.backup import run_backup; print(asyncio.run(run_backup()))')"
           uv run python scripts/restore_drill.py "$backup"
       - run: uv run python scripts/secret_scan.py
-      - run: docker build -f platform/linux/Dockerfile -t dailyplanner:${{ github.sha }} .
+
+  container-e2e:
+    runs-on: ubuntu-latest
+    env:
+      POSTGRES_PASSWORD: container-smoke
+      BOT_TOKEN: container-smoke
+      OPENAI_API_KEY: container-smoke
+      EMBEDDING_API_KEY: container-smoke
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and wait for application readiness
+        run: >-
+          docker compose -p dailyplanner-ci
+          -f platform/linux/docker-compose.yml
+          -f platform/linux/docker-compose.smoke.yml
+          up --build --wait --wait-timeout 240
+      - name: Exercise the readiness probe explicitly
+        run: docker exec dailyplanner-ci-bot-1 python scripts/container_healthcheck.py
+      - name: Preserve container diagnostics
+        if: always()
+        run: >-
+          docker compose -p dailyplanner-ci
+          -f platform/linux/docker-compose.yml
+          -f platform/linux/docker-compose.smoke.yml
+          logs --no-color
+      - name: Remove disposable containers and volumes
+        if: always()
+        run: >-
+          docker compose -p dailyplanner-ci
+          -f platform/linux/docker-compose.yml
+          -f platform/linux/docker-compose.smoke.yml
+          down --volumes --remove-orphans
 
   secrets:
     runs-on: ubuntu-latest

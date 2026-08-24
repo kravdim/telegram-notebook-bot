@@ -12,7 +12,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Locked Python dependencies (application itself is copied afterwards so this
 # layer stays cacheable across source-only changes).
 COPY pyproject.toml uv.lock ./
-RUN uv sync --frozen --no-dev --extra stt
+RUN uv sync --frozen --no-dev
 
 # Application code
 COPY . .
@@ -23,3 +23,4 @@ ENV PYTHONPATH=/app
 ENV PYTHONUNBUFFERED=1
 
 ENTRYPOINT ["/app/platform/linux/docker-entrypoint.sh"]
+CMD ["python", "-m", "bot.main"]

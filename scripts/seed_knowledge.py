@@ -1,17 +1,18 @@
 """Загрузка базы знаний — выжимки из книг Глеба Архангельского."""
 
+import argparse
 import asyncio
 import logging
-import sys
 import os
-import argparse
+import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from bot.db.engine import async_session
+from bot.config import settings
 from bot.db.crud.knowledge import add_chunk
+from bot.db.engine import async_session
+from bot.db.models import KnowledgeChunk
 from bot.embeddings.indexer import get_embedding, init as init_embeddings
-from bot.embeddings.ollama import OllamaEmbeddingClient
 
 logger = logging.getLogger(__name__)
 
@@ -235,21 +236,9 @@ CHUNKS = [
 
 async def seed(force: bool = False):
     """Загрузить базу знаний в БД."""
-    # Инициализируем embedding-клиент
-    try:
-        client = OllamaEmbeddingClient()
-        if await client.health_check():
-            init_embeddings(client)
-            print("Embedding-клиент инициализирован: ollama")
-        else:
-            print("⚠️  Ollama недоступен, загрузка без embedding'ов")
-    except Exception as e:
-        print(f"⚠️  Ошибка инициализации embedding: {e}")
-
     async with async_session() as session:
         # Проверяем, не загружены ли уже
         from sqlalchemy import func, select
-        from bot.db.models import KnowledgeChunk
         count = await session.scalar(select(func.count()).select_from(KnowledgeChunk))
         if count and count > 0:
             if not force:
@@ -259,7 +248,29 @@ async def seed(force: bool = False):
             await session.execute(delete(KnowledgeChunk))
             await session.commit()
 
+        # Инициализируем именно настроенный embedding provider. Hermetic
+        # container smoke сознательно не обращается к внешним API.
+        provider = settings.yaml_config.get("embedding", {}).get("provider", "ollama")
+        if os.environ.get("SKIP_KNOWLEDGE_EMBEDDINGS") != "1":
+            try:
+                if provider == "ollama":
+                    from bot.embeddings.ollama import OllamaEmbeddingClient
+
+                    client = OllamaEmbeddingClient()
+                else:
+                    from bot.embeddings.cloud import CloudEmbeddingClient
+
+                    client = CloudEmbeddingClient()
+                if await client.health_check():
+                    init_embeddings(client)
+                    print(f"Embedding-клиент инициализирован: {provider}")
+                else:
+                    print(f"⚠️  Embedding provider {provider} недоступен; загрузка без векторов")
+            except Exception as e:
+                print(f"⚠️  Ошибка инициализации embedding ({provider}): {e}")
+
         loaded = 0
+        emb = None
         for chunk_data in CHUNKS:
             emb = await get_embedding(chunk_data["content"])
             await add_chunk(

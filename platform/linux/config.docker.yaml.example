@@ -1,0 +1,26 @@
+llm:
+  main:
+    provider: openai
+    model: gpt-4o-mini
+    base_url: https://api.openai.com/v1
+    timeout_sec: 25
+    max_retries: 2
+
+embedding:
+  provider: cloud
+  model: text-embedding-3-small
+  base_url: https://api.openai.com/v1
+  dimensions: 768
+
+stt:
+  provider: openai
+  model: whisper-1
+  language: ru
+  timeout_sec: 90
+
+bot:
+  default_timezone: Europe/Moscow
+
+scheduler:
+  backup_hour: 3
+  backup_retention_days: 30

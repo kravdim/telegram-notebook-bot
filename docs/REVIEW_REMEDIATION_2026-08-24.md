@@ -32,7 +32,10 @@
   возобновлением по частям и формальной гарантией at-least-once.
 - [x] Выделенный userbot account, уникальный run ID, pre-cleanup и обязательный
   teardown с allowlist-защитой от удаления данных обычного пользователя.
-- [ ] Полный container E2E/readiness либо удаление Docker target.
+- [x] Cloud-first Docker target с обязательным mounted config, чистым
+  PostgreSQL/Alembic/schema/pgvector E2E в CI и readiness по свежему heartbeat,
+  runtime PID, DB и точному migration head; negative stale-heartbeat probe
+  проверен на disposable Compose stack.
 - [ ] Operator DATABASE_URL и регулярный измеряемый recovery drill.
 - [ ] Полная выплата Ruff/mypy debt с расширением CI gate.
 - [ ] Файловая ротация launchd stdout/stderr и проверяемый deletion workflow.

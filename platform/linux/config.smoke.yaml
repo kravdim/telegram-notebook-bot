@@ -1,0 +1,13 @@
+llm:
+  main:
+    provider: openai
+    model: container-smoke
+embedding:
+  provider: cloud
+  model: container-smoke
+  dimensions: 768
+stt:
+  provider: openai
+  model: container-smoke
+bot:
+  default_timezone: UTC

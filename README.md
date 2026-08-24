@@ -101,15 +101,19 @@ chmod +x platform/macos/install.sh
 
 Бот будет автоматически запускаться при загрузке macOS и перезапускаться при сбоях.
 
-### VPS — Docker (experimental)
+### VPS — Docker (cloud adapters)
 
-Официальный production target сейчас — macOS LaunchAgent на Mac mini. Docker
-собирается в CI, но пока не имеет полного container E2E/readiness gate и не
-считается поддерживаемым production deployment.
+Основной production target остаётся macOS LaunchAgent на Mac mini. Переносимый
+Docker/VPS target использует cloud LLM, embedding и STT: образ не содержит
+локальную Whisper-модель или Ollama. В CI образ поднимается вместе с чистым
+PostgreSQL, применяет миграции и проходит schema/vector/readiness E2E.
 
 ```bash
 cd platform/linux
-POSTGRES_PASSWORD='replace-with-a-long-random-password' docker compose up -d
+cp config.docker.yaml.example config.docker.yaml
+# Задайте POSTGRES_PASSWORD, BOT_TOKEN, OPENAI_API_KEY, EMBEDDING_API_KEY,
+# ALLOWED_TELEGRAM_IDS и ADMIN_TELEGRAM_IDS в shell или env-файле.
+docker compose up -d --wait
 ```
 
 Или через systemd:
@@ -331,14 +335,20 @@ DATABASE_URL=postgresql+asyncpg://notebook:password@localhost:5432/notebook_bot
 ### macOS (LaunchAgent)
 Бот запускается как LaunchAgent с `KeepAlive=true`. Автоматический перезапуск при сбоях, логи в `~/Library/Logs/notebook-bot/`.
 
-### VPS (Docker, experimental)
-`docker-compose.yml` с PostgreSQL (pgvector) + ботом существует как
-экспериментальный target. До появления container E2E/readiness gate он не
-имеет тех же production-гарантий, что macOS LaunchAgent.
+### VPS (Docker, cloud adapters)
+`docker-compose.yml` с PostgreSQL (pgvector) + ботом — проверяемый переносимый
+target. CI запускает одноразовый Compose project, мигрирует пустую БД, проверяет
+extensions, ORM/schema и 768-мерный vector roundtrip, затем ждёт application
+readiness. Healthcheck требует свежий heartbeat event loop, валидную
+конфигурацию, доступную БД и точное совпадение Alembic head.
 
-Перед Docker-запуском задайте `POSTGRES_PASSWORD` в `.env`; compose больше не
-содержит пароль по умолчанию. Контейнер сам ждёт БД, применяет миграции и
-идемпотентно загружает базу знаний.
+Перед Docker-запуском скопируйте `config.docker.yaml.example` в отдельный файл,
+передайте его через `DAILYPLANNER_CONFIG_PATH` при нестандартном пути и задайте
+обязательные secrets/Telegram allowlists. Compose не содержит значений по
+умолчанию для паролей, токенов или API keys. Контейнер сам ждёт БД, применяет
+миграции и идемпотентно загружает базу знаний. Успешный readiness также означает,
+что Telegram API принял настройку меню команд; состояние LLM/embedding/STT после
+старта видно через `/status` как `ok` или `degraded`.
 
 Бэкапы сохраняются вместе с SHA-256 checksum. Проверенное восстановление:
 

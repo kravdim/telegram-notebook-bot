@@ -13,34 +13,41 @@ from aiogram.enums import ParseMode
 from aiogram.types import BotCommand, BotCommandScopeAllPrivateChats
 
 from bot.config import settings
-from bot.db.fsm_storage import DatabaseFSMStorage
 from bot.db.engine import engine
+from bot.db.fsm_storage import DatabaseFSMStorage
 from bot.handlers import (
-    admin, callbacks, commands, evening_review,
-    messages, onboarding, trip, voice,
+    admin,
+    callbacks,
+    commands,
+    evening_review,
+    messages,
+    onboarding,
+    trip,
+    voice,
 )
 from bot.llm.client import LLMClient
 from bot.llm.context import clear_all as clear_context
 from bot.llm.queue import LLMQueue
 from bot.middleware import RateLimitMiddleware, WhitelistMiddleware
-from bot.scheduler.backup import run_backup
-from bot.scheduler.chronometry import send_chronometry_prompts
-from bot.scheduler.digest import send_digests
-from bot.scheduler.healthcheck import check_llm_health
-from bot.scheduler.log_rotation import rotate_llm_logs
-from bot.scheduler.memoir import send_memoir_prompts
-from bot.scheduler.reminders import send_pending_reminders
-from bot.scheduler.task_reminders import send_task_reminders
-from bot.scheduler.weekly_review import send_weekly_review
-from bot.scheduler.reindex import reindex_missing_embeddings
-from bot.scheduler.sweep import sweep_missed_reminders
-from bot.runtime.singleton import SingletonLease
 from bot.observability import (
     alert_slo_violations,
     evaluate_slos,
     install_telegram_conflict_alert,
     observe_job,
 )
+from bot.runtime.readiness import RuntimeReadiness
+from bot.runtime.singleton import SingletonLease
+from bot.scheduler.backup import run_backup
+from bot.scheduler.chronometry import send_chronometry_prompts
+from bot.scheduler.digest import send_digests
+from bot.scheduler.healthcheck import check_llm_health
+from bot.scheduler.log_rotation import rotate_llm_logs
+from bot.scheduler.memoir import send_memoir_prompts
+from bot.scheduler.reindex import reindex_missing_embeddings
+from bot.scheduler.reminders import send_pending_reminders
+from bot.scheduler.sweep import sweep_missed_reminders
+from bot.scheduler.task_reminders import send_task_reminders
+from bot.scheduler.weekly_review import send_weekly_review
 
 logging.basicConfig(
     level=logging.INFO,
@@ -131,6 +138,9 @@ async def main() -> None:
         )
         await engine.dispose()
         return
+
+    readiness_file = os.environ.get("READINESS_FILE")
+    readiness = RuntimeReadiness(readiness_file) if readiness_file else None
 
     # Прокси для Telegram API (из env: ALL_PROXY или HTTPS_PROXY)
     proxy_url = os.environ.get("ALL_PROXY") or os.environ.get("HTTPS_PROXY")
@@ -343,8 +353,12 @@ async def main() -> None:
     conflict_handler = install_telegram_conflict_alert(bot, loop)
 
     try:
+        if readiness is not None:
+            await readiness.start()
         await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
     finally:
+        if readiness is not None:
+            await readiness.stop()
         logging.getLogger("aiogram.dispatcher").removeHandler(conflict_handler)
         for task in background_tasks:
             task.cancel()

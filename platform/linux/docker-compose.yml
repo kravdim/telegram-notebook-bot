@@ -3,25 +3,35 @@ services:
     build:
       context: ../..
       dockerfile: platform/linux/Dockerfile
+    init: true
     restart: always
-    env_file:
-      - ../../.env
     environment:
-      - DATABASE_URL=postgresql+asyncpg://notebook:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}@db:5432/notebook_bot
-      - BACKUP_DIR=/app/backups
+      DATABASE_URL: postgresql+asyncpg://notebook:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}@db:5432/notebook_bot
+      BOT_TOKEN: ${BOT_TOKEN:?set BOT_TOKEN}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:?set OPENAI_API_KEY}
+      EMBEDDING_API_KEY: ${EMBEDDING_API_KEY:?set EMBEDDING_API_KEY}
+      ALLOW_ALL_USERS: ${ALLOW_ALL_USERS:-false}
+      ALLOWED_TELEGRAM_IDS: ${ALLOWED_TELEGRAM_IDS:-[]}
+      ADMIN_TELEGRAM_IDS: ${ADMIN_TELEGRAM_IDS:-[]}
+      BACKUP_DIR: /app/backups
+      READINESS_FILE: /tmp/dailyplanner-ready.json
+      READINESS_MAX_AGE_SECONDS: "20"
     depends_on:
       db:
         condition: service_healthy
     volumes:
+      - ${DAILYPLANNER_CONFIG_PATH:-./config.docker.yaml}:/app/config.yaml:ro
       - backups:/app/backups
     healthcheck:
-      test: ["CMD-SHELL", "python -c 'import os; os.kill(1, 0)'"]
-      interval: 30s
+      test: ["CMD", "python", "scripts/container_healthcheck.py"]
+      interval: 5s
       timeout: 5s
-      retries: 3
+      retries: 12
+      start_period: 30s
+    stop_grace_period: 30s
 
   db:
-    image: pgvector/pgvector:pg15
+    image: pgvector/pgvector:pg16
     restart: always
     environment:
       POSTGRES_USER: notebook
@@ -34,9 +44,7 @@ services:
       test: ["CMD-SHELL", "pg_isready -U notebook -d notebook_bot"]
       interval: 5s
       timeout: 5s
-      retries: 5
-    ports:
-      - "127.0.0.1:5432:5432"
+      retries: 10
 
 volumes:
   pgdata:

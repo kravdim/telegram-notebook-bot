@@ -46,9 +46,9 @@ misclassification before changing prompts.
    it cannot select the production database as its restore target.
    When drilling a backup made before the release migration, pass the database's
    recorded revision as `--expected-revision REVISION`.
-5. For the official macOS target run its installer/preflight. Docker build is an
-   experimental compatibility check until container E2E/readiness becomes a
-   release gate.
+5. For the official macOS target run its installer/preflight. For Docker run
+   the same two-file Compose E2E used by the `container-e2e` CI job. It must
+   reach healthy from an empty PostgreSQL volume before a VPS release.
 6. Restart exactly one service. The PostgreSQL singleton lease makes a second
    instance exit before Telegram polling or scheduler startup.
 7. Check logs, `/status`, current Alembic revision and one non-mutating Telegram
@@ -66,3 +66,19 @@ misclassification before changing prompts.
    measured recovery time.
 
 Never pipe an unverified archive directly into the production database.
+
+## Docker readiness and E2E
+
+Docker is a cloud-adapter target; it intentionally omits the local Whisper
+extra and Ollama. Copy `platform/linux/config.docker.yaml.example`, provide the
+required environment values, and use `docker compose up -d --wait`. Do not
+publish PostgreSQL unless an operator explicitly needs temporary local access.
+
+The container entrypoint rejects a missing config, migrates to Alembic head,
+seeds knowledge and runs preflight before the application command. Runtime
+readiness is stricter than process liveness: a separate probe checks the event
+loop heartbeat, runtime PID, database query and migration revision. The CI
+smoke override additionally verifies required PostgreSQL extensions, an ORM
+write/read/delete cycle and a 768-dimensional pgvector roundtrip without using
+Telegram or provider secrets. This hermetic smoke does not replace the release
+check of `/status` and one non-mutating Telegram command with real adapters.

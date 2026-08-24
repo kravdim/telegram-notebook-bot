@@ -460,15 +460,15 @@ Telegram update
 
 ### Docker и VPS
 
-- [ ] Создать entrypoint ожидания PostgreSQL.
-- [ ] Выполнять `alembic upgrade head` перед запуском приложения.
-- [ ] Проверять наличие `vector`, `pg_trgm` и других extensions.
-- [ ] Сделать seed базы знаний идемпотентным.
-- [ ] Исправить backup volume в соответствии с фактическим путём записи.
-- [ ] Добавить healthcheck контейнера бота.
-- [ ] Убрать жёсткий пароль БД из compose.
-- [ ] Добавить profiles/config для macOS и VPS.
-- [ ] Не устанавливать тяжёлый local STT в cloud-образ без необходимости.
+- [x] Создать entrypoint ожидания PostgreSQL.
+- [x] Выполнять `alembic upgrade head` перед запуском приложения.
+- [x] Проверять наличие `vector`, `pg_trgm` и других extensions.
+- [x] Сделать seed базы знаний идемпотентным.
+- [x] Исправить backup volume в соответствии с фактическим путём записи.
+- [x] Добавить healthcheck контейнера бота.
+- [x] Убрать жёсткий пароль БД из compose.
+- [x] Добавить отдельные config/Compose contracts для macOS и VPS.
+- [x] Не устанавливать тяжёлый local STT в cloud-образ без необходимости.
 
 ### Graceful shutdown
 

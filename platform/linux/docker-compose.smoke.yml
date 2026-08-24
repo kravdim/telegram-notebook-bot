@@ -1,0 +1,14 @@
+services:
+  bot:
+    command: ["python", "scripts/container_smoke.py"]
+    restart: "no"
+    environment:
+      BOT_TOKEN: container-smoke-placeholder
+      OPENAI_API_KEY: container-smoke-placeholder
+      EMBEDDING_API_KEY: container-smoke-placeholder
+      ALLOW_ALL_USERS: "true"
+      SKIP_KNOWLEDGE_EMBEDDINGS: "1"
+    volumes:
+      - ./config.smoke.yaml:/app/config.yaml:ro
+  db:
+    restart: "no"

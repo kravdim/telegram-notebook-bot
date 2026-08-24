@@ -35,3 +35,14 @@ handlers ──► llm/contracts + dispatcher ──► db/crud ──► Postgr
 
 New business workflows should first become a service function callable without
 Telegram objects. Handlers should remain thin adapters around that function.
+
+## Deployment boundaries
+
+The macOS LaunchAgent is the primary production target and may use local Ollama
+and Whisper. The Docker target is cloud-only and has no host model dependency.
+Both targets run the same migrations and preflight. Docker additionally exposes
+an out-of-process readiness contract backed by an atomic event-loop heartbeat;
+the probe combines that liveness evidence with config, PostgreSQL and Alembic
+head checks. Its hermetic CI E2E exercises image, entrypoint, extensions, schema
+and vector storage while deliberately replacing Telegram/provider traffic with
+a long-running smoke runtime.
