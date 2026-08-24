@@ -15,7 +15,6 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
-    String,
     Text,
     Time,
     UniqueConstraint,
@@ -228,6 +227,78 @@ class OperationalState(Base):
     value: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default="now()"
+    )
+
+
+class DeliveryBatch(Base):
+    """Durable logical Telegram delivery, split into independently tracked parts."""
+
+    __tablename__ = "delivery_batches"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    delivery_key: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
+    user_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("users.telegram_id", ondelete="CASCADE"), nullable=False
+    )
+    kind: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(Text, nullable=False, default="pending")
+    lease_token: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True))
+    lease_expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    last_error: Mapped[Optional[str]] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default="now()"
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default="now()"
+    )
+    completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('pending', 'delivering', 'delivered')",
+            name="ck_delivery_batches_status",
+        ),
+        Index("idx_delivery_batches_pending", "status", "lease_expires_at"),
+    )
+
+
+class DeliveryPart(Base):
+    """One Telegram message in a durable delivery batch."""
+
+    __tablename__ = "delivery_parts"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    batch_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("delivery_batches.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    position: Mapped[int] = mapped_column(Integer, nullable=False)
+    chat_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    text: Mapped[str] = mapped_column(Text, nullable=False)
+    parse_mode: Mapped[Optional[str]] = mapped_column(Text)
+    reply_markup: Mapped[Optional[dict]] = mapped_column(JSONB)
+    status: Mapped[str] = mapped_column(Text, nullable=False, default="pending")
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    telegram_message_id: Mapped[Optional[int]] = mapped_column(BigInteger)
+    last_error: Mapped[Optional[str]] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default="now()"
+    )
+    delivered_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('pending', 'delivered')",
+            name="ck_delivery_parts_status",
+        ),
+        UniqueConstraint("batch_id", "position", name="uq_delivery_part_position"),
+        Index("idx_delivery_parts_pending", "batch_id", "status", "position"),
     )
 
 

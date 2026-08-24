@@ -1,5 +1,6 @@
 """PostgreSQL scenarios. Enabled explicitly in CI with RUN_DB_TESTS=1."""
 
+import asyncio
 import os
 import uuid
 
@@ -11,8 +12,9 @@ from sqlalchemy import delete, select
 from bot.db.crud.interaction_states import get_state, set_state
 from bot.db.crud.reminders import create_reminder, get_pending_reminders, mark_sent
 from bot.db.engine import async_session, engine
-from bot.db.models import ProcessedRequest, Reminder, Task, User
+from bot.db.models import DeliveryBatch, DeliveryPart, ProcessedRequest, Reminder, Task, User
 from bot.runtime.singleton import SingletonLease
+from bot.services.delivery import DeliveryPartSpec, deliver_batch
 from bot.services.tasks import complete_task_workflow
 
 pytestmark = pytest.mark.skipif(
@@ -175,3 +177,119 @@ async def test_completion_workflow_is_idempotent_and_continues_recurrence():
 
         await second.execute(delete(User).where(User.telegram_id == user_id))
         await second.commit()
+
+
+@pytest.mark.asyncio
+async def test_delivery_outbox_resumes_after_partial_failure_without_repeating_parts():
+    user_id = 8_400_000_000 + int(uuid.uuid4().hex[:6], 16)
+    delivery_key = f"integration:delivery:{uuid.uuid4()}"
+
+    class Bot:
+        def __init__(self):
+            self.calls = []
+            self.fail_second_once = True
+
+        async def send_message(self, **kwargs):
+            self.calls.append(kwargs["text"])
+            if kwargs["text"] == "two" and self.fail_second_once:
+                self.fail_second_once = False
+                raise RuntimeError("temporary Telegram failure")
+            return type("Sent", (), {"message_id": len(self.calls)})()
+
+    async with async_session() as setup:
+        setup.add(User(telegram_id=user_id, username="delivery-test"))
+        await setup.commit()
+
+    bot = Bot()
+    specs = [
+        DeliveryPartSpec(user_id, "one"),
+        DeliveryPartSpec(user_id, "two"),
+        DeliveryPartSpec(user_id, "three"),
+    ]
+    with pytest.raises(RuntimeError, match="temporary Telegram failure"):
+        await deliver_batch(
+            bot,
+            delivery_key=delivery_key,
+            user_id=user_id,
+            kind="integration",
+            parts=specs,
+        )
+
+    resumed = await deliver_batch(
+        bot,
+        delivery_key=delivery_key,
+        user_id=user_id,
+        kind="integration",
+        parts=specs,
+    )
+    repeated = await deliver_batch(
+        bot,
+        delivery_key=delivery_key,
+        user_id=user_id,
+        kind="integration",
+        parts=specs,
+    )
+
+    assert resumed.completed is True
+    assert repeated.already_completed is True
+    assert bot.calls == ["one", "two", "two", "three"]
+
+    async with async_session() as check:
+        batch = await check.scalar(
+            select(DeliveryBatch).where(DeliveryBatch.delivery_key == delivery_key)
+        )
+        parts = list(
+            (await check.execute(
+                select(DeliveryPart)
+                .where(DeliveryPart.batch_id == batch.id)
+                .order_by(DeliveryPart.position)
+            )).scalars().all()
+        )
+        assert batch.status == "delivered"
+        assert [part.status for part in parts] == ["delivered"] * 3
+        assert [part.attempts for part in parts] == [1, 2, 1]
+        await check.execute(delete(User).where(User.telegram_id == user_id))
+        await check.commit()
+
+
+@pytest.mark.asyncio
+async def test_delivery_outbox_lease_excludes_concurrent_sender():
+    user_id = 8_500_000_000 + int(uuid.uuid4().hex[:6], 16)
+    delivery_key = f"integration:delivery-lease:{uuid.uuid4()}"
+
+    class BlockingBot:
+        def __init__(self):
+            self.started = asyncio.Event()
+            self.release = asyncio.Event()
+            self.calls = 0
+
+        async def send_message(self, **kwargs):
+            self.calls += 1
+            self.started.set()
+            await self.release.wait()
+            return type("Sent", (), {"message_id": 101})()
+
+    async with async_session() as setup:
+        setup.add(User(telegram_id=user_id, username="delivery-lease-test"))
+        await setup.commit()
+
+    bot = BlockingBot()
+    kwargs = {
+        "delivery_key": delivery_key,
+        "user_id": user_id,
+        "kind": "integration",
+        "parts": [DeliveryPartSpec(user_id, "only once")],
+    }
+    first = asyncio.create_task(deliver_batch(bot, **kwargs))
+    await bot.started.wait()
+    concurrent = await deliver_batch(bot, **kwargs)
+    assert concurrent.busy is True
+    assert concurrent.completed is False
+
+    bot.release.set()
+    assert (await first).completed is True
+    assert bot.calls == 1
+
+    async with async_session() as cleanup:
+        await cleanup.execute(delete(User).where(User.telegram_id == user_id))
+        await cleanup.commit()

@@ -28,8 +28,8 @@
 
 ## Отдельные архитектурные этапы
 
-- [ ] Delivery ledger/outbox для multipart-рассылок и формальная гарантия
-  at-least-once на границе Telegram.
+- [x] Delivery ledger/outbox для multipart digest/memoir с DB lease,
+  возобновлением по частям и формальной гарантией at-least-once.
 - [ ] Изолированный userbot namespace с уникальным run ID и teardown.
 - [ ] Полный container E2E/readiness либо удаление Docker target.
 - [ ] Operator DATABASE_URL и регулярный измеряемый recovery drill.
@@ -43,12 +43,14 @@
 ## Проверка и production
 
 - `pytest`: 140 passed, 5 skipped;
-- PostgreSQL integration suite: 5 passed на disposable `pgvector:pg16`;
+- PostgreSQL integration suite: 7 passed на disposable `pgvector:pg16`, включая
+  partial retry и конкурентный DB lease outbox;
 - CI-critical Ruff, operational Ruff, выбранные mypy-модули и compileall:
   успешно;
 - tool-call fixtures: 6/6, invalid tool rate 0;
 - свежий production backup `notebook_bot_2026-08-24_085512.sql.gz` прошёл
   SHA-256 и `gzip -t`;
 - restore drill ожидаемо заблокирован отсутствием `CREATEDB` у application role;
-- LaunchAgent перезапущен одним экземпляром; PostgreSQL preflight, Telegram,
-  Ollama embedding, LLM health и прогрев Whisper прошли.
+- LaunchAgent перезапущен одним экземпляром; migration `f4b8c2d6e1a0`, обе
+  outbox-таблицы, PostgreSQL preflight, Telegram, Ollama embedding, LLM health и
+  прогрев Whisper проверены в production.

@@ -73,31 +73,25 @@ async def test_review_now_alias_and_chrono_pending(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_manual_digest_claims_scheduler_slot_and_releases_on_error(monkeypatch):
+async def test_manual_digest_does_not_mark_date_when_delivery_fails(monkeypatch):
     user = SimpleNamespace(telegram_id=42, timezone="Europe/Moscow")
     claimed = []
-    released = []
 
     async def claim(session, user_id, marker, today):
         claimed.append((user_id, marker, today))
         return True
-
-    async def release(session, user_id, marker, today):
-        released.append((user_id, marker, today))
 
     async def fail_send(*args):
         raise RuntimeError("telegram unavailable")
 
     monkeypatch.setattr(digest, "async_session", lambda: FakeSessionContext())
     monkeypatch.setattr(digest, "claim_date_marker", claim)
-    monkeypatch.setattr(digest, "release_date_marker", release)
     monkeypatch.setattr(digest, "_send_morning", fail_send)
 
     with pytest.raises(RuntimeError, match="telegram unavailable"):
         await digest.send_digest_now(object(), user, "morning")
 
-    assert claimed[0][:2] == (42, "digest_sent_date")
-    assert released == claimed
+    assert claimed == []
 
 
 @pytest.mark.asyncio

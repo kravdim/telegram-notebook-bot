@@ -10,10 +10,10 @@ Telegram updates
       ▼
 handlers ──► llm/contracts + dispatcher ──► db/crud ──► PostgreSQL
       │                                              ▲
-      └──────────────── schedulers ──────────────────┘
-                         │
-                         ├──► Telegram delivery
-                         └──► observability/SLO alerts
+      └──────── schedulers ──► delivery service/outbox┘
+                                      │
+                                      ├──► Telegram delivery
+                                      └──► observability/SLO alerts
 ```
 
 ## Dependency rules
@@ -26,7 +26,9 @@ handlers ──► llm/contracts + dispatcher ──► db/crud ──► Postgr
 3. `db/crud/` — repository boundary для операций одной сущности. Multi-row
    workflows живут в `services/`; task writes используют optimistic `version`
    guard и row locks там, где нужна межканальная идемпотентность.
-4. `scheduler/` reads durable state and records delivery before advancing. The
+4. `scheduler/` reads durable state. Multipart digest/memoir payloads are
+   immutable `delivery_batches` with per-message progress in `delivery_parts`;
+   a DB lease excludes concurrent senders and retries resume pending parts. The
    runtime advisory lock permits only one scheduler/polling process.
 5. `observability.py` may read operational state but must never be required for a
    successful domain write or a valid backup archive.

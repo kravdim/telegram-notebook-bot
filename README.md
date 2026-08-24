@@ -148,7 +148,7 @@ bot/
 │   └── context.py              # История диалога + компрессия
 ├── db/
 │   ├── engine.py               # Async engine + session factory
-│   ├── models.py               # SQLAlchemy модели (14 таблиц)
+│   ├── models.py               # SQLAlchemy модели (19 таблиц)
 │   ├── crud/                   # CRUD-операции
 │   │   ├── tasks.py            # Задачи, лягушки, поиск, повторяющиеся
 │   │   ├── users.py            # Пользователи, настройки
@@ -196,8 +196,8 @@ scripts/
 
 ## Модель данных
 
-17 таблиц, включая доменные данные, `interaction_states`, DB-backed FSM,
-`processed_requests`, версии промптов и обезличенные LLM-логи. Неиспользуемая
+19 таблиц, включая доменные данные, `interaction_states`, DB-backed FSM,
+`processed_requests`, delivery outbox, версии промптов и обезличенные LLM-логи. Неиспользуемая
 таблица `llm_queue` удалена; runtime-очередь живёт в процессе, а входящие
 Telegram-сообщения дедуплицируются в PostgreSQL.
 
@@ -231,7 +231,8 @@ Telegram-сообщения дедуплицируются в PostgreSQL.
 - **Двойной контур** — основной (30 сек) + sweep (5 мин) для пропущенных напоминаний
 - **LLM** — основной провайдер MiniMax M2.7, fallback опционален через config.yaml
 - **Health check** — реальный короткий probe main-провайдера каждые 5 минут
-- **Идемпотентность** — `digest_sent_date`, `memoir_asked_date`, `chronometry_last_asked`, `tasks_reminder_last_hour`, `is_sent`
+- **Идемпотентность** — durable per-part outbox для digest/memoir,
+  `chronometry_last_asked`, `tasks_reminder_last_hour` и reminder occurrences
 - **Последовательность** — полный pipeline одного пользователя защищён per-user lock;
   входящие pipeline разных пользователей конкурентны, но LLM-вызовы намеренно
   проходят через один priority worker

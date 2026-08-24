@@ -81,8 +81,21 @@ async def test_weekly_review_splits_long_messages(monkeypatch):
     async def fake_get_entries(session, user_id, limit):
         return entries
 
+    async def fake_deliver(bot, **kwargs):
+        ids = []
+        for part in kwargs["parts"]:
+            message = await bot.send_message(
+                part.chat_id,
+                part.text,
+                parse_mode=part.parse_mode,
+                reply_markup=part.reply_markup,
+            )
+            ids.append(message.message_id)
+        return memoir_scheduler.DeliveryResult(True, message_ids=tuple(ids))
+
     monkeypatch.setattr(memoir_scheduler, "async_session", lambda: FakeSessionContext())
     monkeypatch.setattr(memoir_scheduler, "get_memoir_entries", fake_get_entries)
+    monkeypatch.setattr(memoir_scheduler, "deliver_batch", fake_deliver)
 
     await memoir_scheduler._send_weekly_review(Bot(), user, "Europe/Moscow")
 
@@ -115,8 +128,14 @@ async def test_day_timeline_splits_long_messages(monkeypatch):
     async def fake_get_today_entries(session, user_id, tz):
         return entries
 
+    async def fake_deliver(bot, **kwargs):
+        for part in kwargs["parts"]:
+            await bot.send_message(part.chat_id, part.text, parse_mode=part.parse_mode)
+        return memoir_scheduler.DeliveryResult(True)
+
     monkeypatch.setattr(memoir_scheduler, "async_session", lambda: FakeSessionContext())
     monkeypatch.setattr(memoir_scheduler, "get_today_entries", fake_get_today_entries)
+    monkeypatch.setattr(memoir_scheduler, "deliver_batch", fake_deliver)
 
     await memoir_scheduler._send_day_timeline(Bot(), user, "Europe/Moscow")
 

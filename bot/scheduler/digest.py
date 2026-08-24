@@ -9,12 +9,11 @@ from bot.db.crud.birthdays import get_birthdays_on_date
 from bot.db.crud.projects import get_project_progress, get_user_projects
 from bot.db.crud.tasks import get_completed_today, get_frog, get_today_tasks, get_user_tasks
 from bot.db.crud.trips import get_active_trip
-from bot.db.crud.users import (
-    claim_date_marker, get_all_users, release_date_marker,
-)
+from bot.db.crud.users import claim_date_marker, get_all_users
 from bot.db.engine import async_session
 from bot.formatters import split_html_message
 from bot.formatters.digest import format_evening_digest, format_morning_digest
+from bot.services.delivery import DeliveryPartSpec, DeliveryResult, deliver_batch
 
 logger = logging.getLogger(__name__)
 
@@ -30,21 +29,15 @@ async def send_digest_now(bot: Bot, user, period: str) -> bool:
         "digest_sent_date" if period == "morning"
         else "digest_evening_sent_date"
     )
-    async with async_session() as session:
-        claimed = await claim_date_marker(session, user.telegram_id, marker, today)
-    if not claimed:
-        return False
-
-    try:
-        if period == "morning":
-            await _send_morning(bot, user, today, tz)
-        else:
-            await _send_evening(bot, user, today, tz)
-    except Exception:
+    result = (
+        await _send_morning(bot, user, today, tz)
+        if period == "morning"
+        else await _send_evening(bot, user, today, tz)
+    )
+    if result.completed:
         async with async_session() as session:
-            await release_date_marker(session, user.telegram_id, marker, today)
-        raise
-    return True
+            await claim_date_marker(session, user.telegram_id, marker, today)
+    return result.completed and not result.already_completed
 
 
 async def send_digests(bot: Bot) -> None:
@@ -79,39 +72,21 @@ async def send_digests(bot: Bot) -> None:
                 and now <= morning_target.add(hours=4)
                 and not morning_sent
             ):
-                async with async_session() as session:
-                    claimed = await claim_date_marker(
-                        session, user.telegram_id, "digest_sent_date", today
-                    )
-                if not claimed:
-                    continue
-                try:
-                    await _send_morning(bot, user, today, tz)
-                except Exception:
-                    # Откатываем маркер при ошибке
+                result = await _send_morning(bot, user, today, tz)
+                if result.completed:
                     async with async_session() as session:
-                        await release_date_marker(
+                        await claim_date_marker(
                             session, user.telegram_id, "digest_sent_date", today
                         )
-                    raise
 
             # Вечерний дайджест (write-ahead: маркер до отправки)
             if now >= evening_target and not evening_sent:
-                async with async_session() as session:
-                    claimed = await claim_date_marker(
-                        session, user.telegram_id, "digest_evening_sent_date", today
-                    )
-                if not claimed:
-                    continue
-                try:
-                    await _send_evening(bot, user, today, tz)
-                except Exception:
-                    # Откатываем вечерний маркер при ошибке
+                result = await _send_evening(bot, user, today, tz)
+                if result.completed:
                     async with async_session() as session:
-                        await release_date_marker(
+                        await claim_date_marker(
                             session, user.telegram_id, "digest_evening_sent_date", today
                         )
-                    raise
 
         except Exception as e:
             logger.error(
@@ -120,7 +95,7 @@ async def send_digests(bot: Bot) -> None:
             )
 
 
-async def _send_morning(bot: Bot, user, today, tz: str) -> None:
+async def _send_morning(bot: Bot, user, today, tz: str) -> DeliveryResult:
     """Отправить утренний дайджест."""
     is_weekend = today.weekday() >= 5
 
@@ -147,11 +122,19 @@ async def _send_morning(bot: Bot, user, today, tz: str) -> None:
         birthdays=birthdays,
     )
 
-    for part in split_html_message(text):
-        await bot.send_message(
-            chat_id=user.telegram_id, text=part, parse_mode="HTML"
-        )
-    logger.info("Утренний дайджест отправлен: %s", user.telegram_id)
+    result = await deliver_batch(
+        bot,
+        delivery_key=f"digest:morning:{user.telegram_id}:{today.isoformat()}",
+        user_id=user.telegram_id,
+        kind="digest_morning",
+        parts=[
+            DeliveryPartSpec(user.telegram_id, part, parse_mode="HTML")
+            for part in split_html_message(text)
+        ],
+    )
+    if result.completed:
+        logger.info("Утренний дайджест отправлен: %s", user.telegram_id)
+    return result
 
 
 def _digest_sent_flags(user, today) -> tuple[bool, bool]:
@@ -164,7 +147,7 @@ def _digest_sent_flags(user, today) -> tuple[bool, bool]:
     return morning_sent, evening_sent
 
 
-async def _send_evening(bot: Bot, user, today, tz: str) -> None:
+async def _send_evening(bot: Bot, user, today, tz: str) -> DeliveryResult:
     """Отправить вечерний дайджест."""
     async with async_session() as session:
         all_tasks = await get_user_tasks(session, user.telegram_id, status="open")
@@ -181,7 +164,7 @@ async def _send_evening(bot: Bot, user, today, tz: str) -> None:
         )
     ]
 
-    frog_done = frog is None or (frog and frog.status == "done")
+    frog_done = frog is None or frog.status == "done"
     frog_title = frog.title if frog else None
 
     text = format_evening_digest(
@@ -192,21 +175,31 @@ async def _send_evening(bot: Bot, user, today, tz: str) -> None:
         frog_title=frog_title,
     )
 
-    for part in split_html_message(text):
-        await bot.send_message(
-            chat_id=user.telegram_id, text=part, parse_mode="HTML"
-        )
+    parts = [
+        DeliveryPartSpec(user.telegram_id, part, parse_mode="HTML")
+        for part in split_html_message(text)
+    ]
 
     # Действия вечернего разбора раньше были недостижимы: formatter и callback
     # существовали, но кнопки никто не отправлял.
     if remaining:
         from html import escape
+
         from bot.handlers.evening_review import build_review_keyboard
         for task in remaining[:10]:
-            await bot.send_message(
+            parts.append(DeliveryPartSpec(
                 chat_id=user.telegram_id,
                 text=f"Что сделать с задачей «{escape(task.title)}»?",
                 parse_mode="HTML",
                 reply_markup=build_review_keyboard(str(task.id)).as_markup(),
-            )
-    logger.info("Вечерний дайджест отправлен: %s", user.telegram_id)
+            ))
+    result = await deliver_batch(
+        bot,
+        delivery_key=f"digest:evening:{user.telegram_id}:{today.isoformat()}",
+        user_id=user.telegram_id,
+        kind="digest_evening",
+        parts=parts,
+    )
+    if result.completed:
+        logger.info("Вечерний дайджест отправлен: %s", user.telegram_id)
+    return result

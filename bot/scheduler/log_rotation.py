@@ -7,7 +7,13 @@ from sqlalchemy import delete
 
 from bot.config import settings
 from bot.db.engine import async_session
-from bot.db.models import FsmState, InteractionState, LlmLog, ProcessedRequest
+from bot.db.models import (
+    DeliveryBatch,
+    FsmState,
+    InteractionState,
+    LlmLog,
+    ProcessedRequest,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -42,11 +48,22 @@ async def rotate_llm_logs() -> None:
         fsm_result = await session.execute(
             delete(FsmState).where(FsmState.updated_at < transient_cutoff)
         )
+        delivery_result = await session.execute(
+            delete(DeliveryBatch).where(
+                DeliveryBatch.status == "delivered",
+                DeliveryBatch.completed_at < transient_cutoff,
+            )
+        )
         await session.commit()
         deleted = llm_result.rowcount
         transient_deleted = sum(
             result.rowcount or 0
-            for result in (interaction_result, request_result, fsm_result)
+            for result in (
+                interaction_result,
+                request_result,
+                fsm_result,
+                delivery_result,
+            )
         )
 
     if deleted:

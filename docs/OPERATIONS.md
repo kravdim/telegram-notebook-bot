@@ -13,10 +13,13 @@ Violations are logged and sent to configured Telegram admins, throttled to one
 alert per SLO per hour. In-process counters include LLM/STT errors, LLM queue
 depth, reminder lag and scheduler job duration.
 
-Telegram delivery is currently at-least-once at the message boundary. If a
-multipart send fails partway through, a retry can repeat the already delivered
-parts. Durable per-part delivery ledger/outbox is tracked as a separate
-architectural change.
+Telegram delivery is at-least-once at the message boundary. If a multipart
+digest or memoir fails partway through, its durable ledger resumes from the
+first part not acknowledged in PostgreSQL. A crash after Telegram accepts a
+part but before its database commit can still repeat that one part; Telegram
+offers no atomic transaction with PostgreSQL.
+Completed delivery payloads are removed by the transient-state retention job
+after 30 days; pending batches are retained for recovery and investigation.
 
 `scripts/evaluate_llm_contracts.py` reports tool-call parser accuracy and
 invalid-tool rate for anonymized saved provider responses; это не online intent
