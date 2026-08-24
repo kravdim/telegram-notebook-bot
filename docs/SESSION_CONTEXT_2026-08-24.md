@@ -98,5 +98,8 @@ Telegram polling и прогрел local Whisper; Ollama health виден в st
 - Production уже исполняет содержимое commit `93b2002`: основной LaunchAgent
   работает как PID `21485`, singleton lease и Telegram polling активны,
   migration остаётся `f4b8c2d6e1a0`, local Whisper прогрет.
-- Этот handoff фиксируется отдельным context commit; после push необходимо
-  сохранить номер и результат соответствующего GitHub Actions run.
+- Context commit `b7bbc94` и implementation commit `93b2002` отправлены в
+  `origin/main`. GitHub Actions CI run `32773353999` завершился успешно:
+  `container-e2e`, `quality` и `secrets` зелёные; quality включал полный
+  Ruff/mypy, Bandit, dependency audit, coverage, disposable PostgreSQL,
+  backup/restore и secret scan.
