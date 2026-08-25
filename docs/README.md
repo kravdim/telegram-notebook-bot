@@ -5,6 +5,8 @@
 - [`ARCHITECTURE.md`](ARCHITECTURE.md) — компоненты и контракты;
 - [`OPERATIONS.md`](OPERATIONS.md) — эксплуатация, release gate и recovery;
 - [`PRIVACY.md`](PRIVACY.md) — хранение, экспорт и удаление данных;
+- [`REVIEW_REMEDIATION_2026-08-25.md`](REVIEW_REMEDIATION_2026-08-25.md) —
+  текущий пакет исправлений по повторному аудиту;
 - [`SESSION_CONTEXT_2026-08-25.md`](SESSION_CONTEXT_2026-08-25.md) — последний
   завершённый release handoff; новый handoff создаётся при следующем релизе.
 

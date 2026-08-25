@@ -95,6 +95,11 @@ PYTHONPATH=. python -m bot.main
 
 ### macOS — автозапуск через LaunchAgent
 
+Для production-профиля с локальным Whisper `medium` закладывайте не менее
+3 ГиБ свободной RAM для процесса и системного запаса. В полном live E2E на
+Mac mini процесс использовал около 1,46 ГиБ RSS; cloud STT-профиль не загружает
+локальную модель и требует заметно меньше памяти.
+
 ```bash
 chmod +x platform/macos/install.sh
 ./platform/macos/install.sh

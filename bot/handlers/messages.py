@@ -10,6 +10,8 @@ from typing import Optional
 from aiogram import F, Router
 from aiogram.types import Message
 
+from bot.application.interactions import WorkflowType, interaction_service
+from bot.application.normalizer import intent_normalizer
 from bot.db.crud.users import get_user
 from bot.db.engine import async_session
 from bot.formatters import split_message
@@ -108,7 +110,6 @@ _MUTATING_TOOLS = {
     "complete_project",
 }
 
-_pending_project_completion: dict[int, bool] = {}
 _user_locks: dict[int, asyncio.Lock] = {}
 
 # Глобальные экземпляры — инициализируются в main.py
@@ -123,56 +124,37 @@ def init(client: LLMClient, queue: LLMQueue) -> None:
     llm_queue = queue
 
 
-async def _set_pending_interaction(user_id: int, state_type: str) -> None:
-    """Persist pending state, with in-memory fallback for tests/local failures."""
-    _pending_project_completion[user_id] = state_type == "complete_project"
+async def _set_pending_interaction(user_id: int, state_type: WorkflowType) -> bool:
+    """Persist pending state without replacing another active workflow."""
     try:
-        from bot.db.crud.interaction_states import set_state
-        async with async_session() as session:
-            await set_state(session, user_id, state_type)
+        return await interaction_service.claim(user_id, state_type) is not None
     except Exception as e:
-        logger.debug("Не удалось сохранить interaction state, fallback in-memory: %s", e)
+        logger.warning("Не удалось сохранить interaction state: %s", e)
+        return False
 
 
 async def _consume_pending_interaction(user_id: int) -> Optional[str]:
-    """Consume pending interaction state."""
-    fallback = "complete_project" if _pending_project_completion.pop(user_id, False) else None
+    """Consume a persisted project-completion interaction state."""
     try:
-        from bot.db.crud.interaction_states import clear_state, get_state
-        async with async_session() as session:
-            state = await get_state(session, user_id)
-            if not state:
-                return fallback
-            if state.state_type != "complete_project":
-                return fallback
-            state_type = state.state_type
-            await clear_state(session, user_id)
-            return state_type
+        state = await interaction_service.consume(user_id, "complete_project")
+        return state.state_type if state else None
     except Exception as e:
-        logger.debug("Не удалось прочитать interaction state, fallback in-memory: %s", e)
-        return fallback
+        logger.warning("Не удалось прочитать interaction state: %s", e)
+        return None
 
 
-async def _get_persisted_interaction(user_id: int, state_type: str):
+async def _get_persisted_interaction(user_id: int, state_type: WorkflowType):
     """Получить состояние нужного типа без удаления."""
     try:
-        from bot.db.crud.interaction_states import get_state
-        async with async_session() as session:
-            state = await get_state(session, user_id)
-            if state and state.state_type == state_type:
-                return state
+        return await interaction_service.get(user_id, state_type)
     except Exception as e:
         logger.debug("Не удалось прочитать persisted state %s: %s", state_type, e)
     return None
 
 
-async def _clear_persisted_interaction(user_id: int, state_type: str) -> None:
+async def _clear_persisted_interaction(user_id: int, state_type: WorkflowType) -> None:
     try:
-        from bot.db.crud.interaction_states import clear_state, get_state
-        async with async_session() as session:
-            state = await get_state(session, user_id)
-            if state and state.state_type == state_type:
-                await clear_state(session, user_id)
+        await interaction_service.clear(user_id, state_type)
     except Exception as e:
         logger.debug("Не удалось очистить persisted state %s: %s", state_type, e)
 
@@ -344,8 +326,13 @@ async def _process_text_message_unlocked(user_id: int, text: str, message: Messa
         return
 
     if _PROJECT_DONE_RE.match(text):
-        await _set_pending_interaction(user_id, "complete_project")
-        await message.answer("Какой слон закрываем? Напиши название проекта.")
+        claimed = await _set_pending_interaction(user_id, "complete_project")
+        if claimed:
+            await message.answer("Какой слон закрываем? Напиши название проекта.")
+        else:
+            await message.answer(
+                "Сначала заверши текущий диалог с ботом, затем закрой слона."
+            )
         return
 
     delete_query = _extract_explicit_delete(text)
@@ -1336,16 +1323,7 @@ def _close_dangling_history(user_id: int) -> None:
 
 def _normalize_common_intent_text(text: str) -> str:
     """Маленький словарь частых опечаток без попытки заменить NLU."""
-    normalized = re.sub(r"^\s*напмни\b", "напомни", text, flags=re.IGNORECASE)
-    normalized = re.sub(
-        r"\bчерез\s+пол\s*часа\b", "через 30 минут", normalized,
-        flags=re.IGNORECASE,
-    )
-    normalized = re.sub(
-        r"^\s*забей\s+в\s+задач[иу]\s*", "создай задачу: ", normalized,
-        flags=re.IGNORECASE,
-    )
-    return normalized.strip()
+    return intent_normalizer.normalize(text).text
 
 
 def _preserve_user_marker_in_call(text: str, function_call: dict) -> dict:

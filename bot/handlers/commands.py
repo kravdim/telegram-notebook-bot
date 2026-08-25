@@ -37,7 +37,7 @@ from bot.formatters.chronometry import format_day_photo, format_week_summary
 from bot.formatters.memoir import format_memoir_entries, format_value_stats
 from bot.handlers.telegram import callback_data, callback_message, message_bot
 from bot.services.export import ExportTooLargeError, write_export_archive
-from bot.services.tasks import complete_task_workflow
+from bot.services.tasks import closed_task_status, complete_task_workflow
 
 logger = logging.getLogger(__name__)
 
@@ -266,7 +266,7 @@ async def cb_frog_done(callback: CallbackQuery) -> None:
         )
         task = completion.task
 
-    if task:
+    if task and completion.completed:
         next_text = (
             f"\n🔄 Следующая: {completion.next_date.strftime('%d.%m')}"
             if completion.next_date
@@ -274,6 +274,11 @@ async def cb_frog_done(callback: CallbackQuery) -> None:
         )
         await callback_message(callback).edit_text(
             f"🐸✅ Лягушка «{html.escape(task.title)}» съедена! Отличная работа! 🎉{next_text}",
+            parse_mode="HTML",
+        )
+    elif task:
+        await callback_message(callback).edit_text(
+            f"ℹ️ Лягушка «{html.escape(task.title)}» {closed_task_status(task)}.",
             parse_mode="HTML",
         )
 
@@ -338,13 +343,18 @@ async def cmd_done(message: Message, command: CommandObject) -> None:
                 message.from_user.id,
                 user.timezone if user else "Europe/Moscow",
             )
-        if completion.task:
+        if completion.task and completion.completed:
             next_text = (
                 f"\n🔄 Следующая: {completion.next_date.strftime('%d.%m')}"
                 if completion.next_date
                 else ""
             )
             await message.answer(f"✅ Задача «{completion.task.title}» выполнена! 🎉{next_text}")
+        elif completion.task:
+            await message.answer(
+                f"ℹ️ Задача «{completion.task.title}» "
+                f"{closed_task_status(completion.task)}."
+            )
         return
 
     # Несколько совпадений — предложить выбрать
@@ -378,7 +388,7 @@ async def cb_task_done(callback: CallbackQuery) -> None:
         )
         task = completion.task
 
-    if task:
+    if task and completion.completed:
         next_text = (
             f"\n🔄 Следующая: {completion.next_date.strftime('%d.%m')}"
             if completion.next_date
@@ -386,6 +396,11 @@ async def cb_task_done(callback: CallbackQuery) -> None:
         )
         await callback_message(callback).edit_text(
             f"✅ Задача «{html.escape(task.title)}» выполнена! 🎉{next_text}",
+            parse_mode="HTML",
+        )
+    elif task:
+        await callback_message(callback).edit_text(
+            f"ℹ️ Задача «{html.escape(task.title)}» {closed_task_status(task)}.",
             parse_mode="HTML",
         )
 

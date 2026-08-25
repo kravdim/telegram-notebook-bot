@@ -5,13 +5,15 @@ import json
 import logging
 import re
 from datetime import date, datetime, time
-from typing import Any, Dict, Optional, Tuple, TypedDict
+from typing import Any, Awaitable, Callable, Dict, Optional, Tuple, TypedDict
 from uuid import UUID
 
 import pendulum
 from json_repair import repair_json
 from pydantic import ValidationError
 
+from bot.application.command_bus import CommandBus, CommandContext, CommandResult
+from bot.application.intents import ApplicationIntent, intent_from_parts
 from bot.db.crud.diary import create_diary_entry
 from bot.db.crud.notes import create_note
 from bot.db.crud.projects import (
@@ -41,7 +43,7 @@ from bot.db.crud.tasks import (
 )
 from bot.db.crud.trips import get_active_trip
 from bot.db.engine import async_session
-from bot.llm.contracts import Action
+from bot.llm.contracts import Action, ToolName
 from bot.observability import metrics
 from bot.services.tasks import complete_task_workflow
 
@@ -94,7 +96,7 @@ def _select_confident_task(query: str, tasks: list) -> Any | None:
     return strong[0] if len(strong) == 1 else None
 
 
-def parse_function_call(raw: Dict[str, Any]) -> Tuple[str, Dict[str, Any]]:
+def parse_function_call(raw: Dict[str, Any]) -> Tuple[ToolName, Dict[str, Any]]:
     """Парсинг function call с json_repair."""
     name = raw.get("name", "")
     args_raw = raw.get("arguments", "{}")
@@ -125,37 +127,11 @@ async def dispatch(
     """Исполнить function call и вернуть текст ответа для пользователя."""
     try:
         name, args = parse_function_call(function_call)
-        if name == "create_task":
-            return await _handle_create_task(user_id, args, user_timezone)
-        elif name == "complete_task":
-            return await _handle_complete_task(user_id, args, user_timezone)
-        elif name == "create_note":
-            return await _handle_create_note(user_id, args)
-        elif name == "create_diary_entry":
-            return await _handle_create_diary(user_id, args, user_timezone)
-        elif name == "create_reminder":
-            return await _handle_create_reminder(user_id, args, user_timezone)
-        elif name == "list_tasks":
-            return await _handle_list_tasks(user_id, args, user_timezone)
-        elif name == "add_birthday":
-            return await _handle_add_birthday(user_id, args, user_timezone)
-        elif name == "get_advice":
-            return await _handle_get_advice(user_id, args)
-        elif name == "respond_to_user":
-            return args.get("message", "")
-        elif name == "search":
-            return await _handle_search(user_id, args)
-        elif name == "update_task":
-            return await _handle_update_task(user_id, args, user_timezone)
-        elif name == "delete_task":
-            return await _handle_delete_task(user_id, args)
-        elif name == "create_project":
-            return await _handle_create_project(user_id, args)
-        elif name == "complete_project":
-            return await _handle_complete_project(user_id, args)
-        else:
-            logger.warning("Неизвестная функция: %s", name)
-            return "Не удалось обработать команду. Попробуй переформулировать."
+        intent = intent_from_parts(name, args)
+        result = await _get_command_bus().execute(
+            intent, CommandContext(user_id=user_id, timezone=user_timezone)
+        )
+        return result.text
     except ConcurrentTaskUpdateError:
         logger.warning("Конкурентное изменение задачи: %s", function_call.get("name", "?"))
         return "Задача уже изменилась в другом запросе. Проверь актуальное состояние и повтори команду."
@@ -170,6 +146,104 @@ async def dispatch(
             function_call.get("name", "?"), e, exc_info=True,
         )
         return "Произошла ошибка при обработке. Попробуй ещё раз."
+
+
+async def _execute_registered_intent(
+    context: CommandContext, intent: ApplicationIntent
+) -> CommandResult:
+    """Adapt validated commands to the stable business handlers below."""
+    args = intent.arguments()
+    executor = _COMMAND_EXECUTORS[intent.name]
+    text = await executor(context.user_id, args, context.timezone)
+    return CommandResult.from_legacy_text(text)
+
+
+async def _exec_create_task(user_id: int, args: Dict[str, Any], tz: str) -> str:
+    return await _handle_create_task(user_id, args, tz)
+
+
+async def _exec_complete_task(user_id: int, args: Dict[str, Any], tz: str) -> str:
+    return await _handle_complete_task(user_id, args, tz)
+
+
+async def _exec_create_note(user_id: int, args: Dict[str, Any], tz: str) -> str:
+    return await _handle_create_note(user_id, args)
+
+
+async def _exec_create_diary(user_id: int, args: Dict[str, Any], tz: str) -> str:
+    return await _handle_create_diary(user_id, args, tz)
+
+
+async def _exec_create_reminder(user_id: int, args: Dict[str, Any], tz: str) -> str:
+    return await _handle_create_reminder(user_id, args, tz)
+
+
+async def _exec_list_tasks(user_id: int, args: Dict[str, Any], tz: str) -> str:
+    return await _handle_list_tasks(user_id, args, tz)
+
+
+async def _exec_add_birthday(user_id: int, args: Dict[str, Any], tz: str) -> str:
+    return await _handle_add_birthday(user_id, args, tz)
+
+
+async def _exec_get_advice(user_id: int, args: Dict[str, Any], tz: str) -> str:
+    return await _handle_get_advice(user_id, args)
+
+
+async def _exec_respond(user_id: int, args: Dict[str, Any], tz: str) -> str:
+    return str(args["message"])
+
+
+async def _exec_search(user_id: int, args: Dict[str, Any], tz: str) -> str:
+    return await _handle_search(user_id, args)
+
+
+async def _exec_update_task(user_id: int, args: Dict[str, Any], tz: str) -> str:
+    return await _handle_update_task(user_id, args, tz)
+
+
+async def _exec_delete_task(user_id: int, args: Dict[str, Any], tz: str) -> str:
+    return await _handle_delete_task(user_id, args)
+
+
+async def _exec_create_project(user_id: int, args: Dict[str, Any], tz: str) -> str:
+    return await _handle_create_project(user_id, args)
+
+
+async def _exec_complete_project(user_id: int, args: Dict[str, Any], tz: str) -> str:
+    return await _handle_complete_project(user_id, args)
+
+
+_CommandExecutor = Callable[[int, Dict[str, Any], str], Awaitable[str]]
+
+_COMMAND_EXECUTORS: Dict[ToolName, _CommandExecutor] = {
+    "create_task": _exec_create_task,
+    "complete_task": _exec_complete_task,
+    "create_note": _exec_create_note,
+    "create_diary_entry": _exec_create_diary,
+    "create_reminder": _exec_create_reminder,
+    "list_tasks": _exec_list_tasks,
+    "add_birthday": _exec_add_birthday,
+    "get_advice": _exec_get_advice,
+    "respond_to_user": _exec_respond,
+    "search": _exec_search,
+    "update_task": _exec_update_task,
+    "delete_task": _exec_delete_task,
+    "create_project": _exec_create_project,
+    "complete_project": _exec_complete_project,
+}
+
+_command_bus: CommandBus | None = None
+
+
+def _get_command_bus() -> CommandBus:
+    global _command_bus
+    if _command_bus is None:
+        bus = CommandBus()
+        for command_name in _COMMAND_EXECUTORS:
+            bus.register(command_name, _execute_registered_intent)
+        _command_bus = bus
+    return _command_bus
 
 
 def _validate_title(title: str) -> Optional[str]:

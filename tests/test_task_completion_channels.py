@@ -77,6 +77,43 @@ async def test_task_and_frog_buttons_use_completion_service(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("handler", "prefix"),
+    [(commands.cb_task_done, "task_done"), (commands.cb_frog_done, "frog_done")],
+)
+async def test_repeated_completion_button_reports_actual_closed_status(
+    monkeypatch, handler, prefix
+):
+    task = SimpleNamespace(
+        id=uuid4(),
+        title="Уже закрытая задача",
+        status="cancelled",
+        resolution="cancelled",
+    )
+
+    async def get_user(session, user_id):
+        return SimpleNamespace(timezone="Europe/Moscow")
+
+    async def complete(session, task_id, user_id, timezone):
+        return SimpleNamespace(
+            task=task,
+            completed=False,
+            next_task=None,
+            next_date=None,
+        )
+
+    monkeypatch.setattr(commands, "async_session", lambda: FakeSessionContext())
+    monkeypatch.setattr(commands, "get_user", get_user)
+    monkeypatch.setattr(commands, "complete_task_workflow", complete)
+    callback = FakeCallback(user_id=42)
+    callback.data = f"{prefix}:{task.id}"
+
+    await handler(callback)
+
+    assert "уже отменена" in callback.message.edits[-1][0]
+
+
+@pytest.mark.asyncio
 async def test_llm_completion_uses_completion_service(monkeypatch):
     task = SimpleNamespace(id=uuid4(), title="Ежедневная зарядка", status="open")
     calls = []

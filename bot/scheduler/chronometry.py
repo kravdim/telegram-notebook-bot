@@ -7,6 +7,7 @@ import random
 import pendulum
 from aiogram import Bot
 
+from bot.application.interactions import interaction_service
 from bot.db.crud.users import get_all_users, update_user_settings
 from bot.db.engine import async_session
 
@@ -71,32 +72,46 @@ async def _send_prompt(bot: Bot, user, now: pendulum.DateTime) -> str:
         if user_id in _awaiting_response:
             return "pending"
 
-        from bot.db.crud.interaction_states import get_state, set_state
-        async with async_session() as session:
-            state = await get_state(session, user_id)
+        state = await interaction_service.get(user_id)
         if state:
             return "pending" if state.state_type == "chronometry" else "busy"
+
+        claimed = await interaction_service.claim(
+            user_id,
+            "chronometry",
+            {},
+            max(user.chronometry_interval_min * 2, 60),
+        )
+        if not claimed:
+            return "busy"
 
         last_idx = _last_question_idx.get(user_id, -1)
         available = [i for i in range(len(_CHRONOMETRY_QUESTIONS)) if i != last_idx]
         idx = random.choice(available)
         _last_question_idx[user_id] = idx
 
-        sent = await bot.send_message(
-            chat_id=user_id,
-            text=_CHRONOMETRY_QUESTIONS[idx],
-        )
+        try:
+            sent = await bot.send_message(
+                chat_id=user_id,
+                text=_CHRONOMETRY_QUESTIONS[idx],
+            )
+        except Exception:
+            await interaction_service.clear(user_id, "chronometry")
+            raise
         _awaiting_response[user_id] = sent.message_id
         _awaiting_since[user_id] = now
 
-        async with async_session() as session:
-            await set_state(
-                session,
-                user_id,
-                "chronometry",
-                payload={"message_id": sent.message_id},
-                ttl_minutes=max(user.chronometry_interval_min * 2, 60),
-            )
+        updated = await interaction_service.transition(
+            user_id,
+            "chronometry",
+            "chronometry",
+            {"message_id": sent.message_id},
+            max(user.chronometry_interval_min * 2, 60),
+        )
+        if not updated:
+            _awaiting_response.pop(user_id, None)
+            _awaiting_since.pop(user_id, None)
+            return "busy"
 
         async with async_session() as session:
             await update_user_settings(

@@ -240,19 +240,25 @@ async def test_project_decomposition_has_no_duplicate_confirmation(monkeypatch):
 async def test_memoir_state_ttl_is_one_hour(monkeypatch):
     captured = {}
 
-    async def fake_set_state(session, user_id, state_type, payload, ttl_minutes):
+    async def fake_transition_state(
+        user_id, expected_type, state_type, payload, ttl_minutes
+    ):
         captured.update(
             user_id=user_id,
+            expected_type=expected_type,
             state_type=state_type,
             payload=payload,
             ttl_minutes=ttl_minutes,
         )
+        return SimpleNamespace()
 
-    monkeypatch.setattr(memoir_scheduler, "async_session", lambda: FakeSessionContext())
-    monkeypatch.setattr("bot.db.crud.interaction_states.set_state", fake_set_state)
+    monkeypatch.setattr(
+        memoir_scheduler.interaction_service, "transition", fake_transition_state
+    )
 
-    await memoir_scheduler._persist_memoir_state(42, 100)
+    assert await memoir_scheduler._persist_memoir_state(42, 100) is True
     assert captured["ttl_minutes"] == 60
+    assert captured["expected_type"] == "memoir"
     assert captured["payload"] == {"message_id": 100}
 
 

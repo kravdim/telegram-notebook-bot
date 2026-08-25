@@ -8,9 +8,12 @@ AI adapter must not stop scheduler delivery.
 Telegram updates
       │
       ▼
-handlers ──► llm/contracts + dispatcher ──► db/crud ──► PostgreSQL
-      │                                              ▲
-      └──────── schedulers ──► delivery service/outbox┘
+handlers ──► IntentNormalizer / typed intents ◄── LLM adapter
+      │                    │
+      │                    ▼
+      │                command bus ──► services / db/crud ──► PostgreSQL
+      │                                                        ▲
+      └──────── schedulers ──► delivery service/outbox──────────┘
                                       │
                                       ├──► Telegram delivery
                                       └──► observability/SLO alerts
@@ -21,8 +24,11 @@ handlers ──► llm/contracts + dispatcher ──► db/crud ──► Postgr
 1. `handlers/` translates Telegram input/output. Простые scoped reads и
    настройки пока могут открывать сессию напрямую; cross-entity invariants
    обязаны жить в application service (например, task completion workflow).
-2. `llm/contracts.py` validates provider output before `dispatcher.py` invokes a
-   mutation. Unknown tools and unknown fields fail closed.
+2. `application/intents.py` is the provider-independent command contract.
+   Deterministic rules and `llm/contracts.py` both enter the same typed command
+   bus; unknown tools and fields fail closed. `llm/dispatcher.py` is now an
+   adapter from provider calls to stable business handlers, not an intent
+   router.
 3. `db/crud/` — repository boundary для операций одной сущности. Multi-row
    workflows живут в `services/`; task writes используют optimistic `version`
    guard и row locks там, где нужна межканальная идемпотентность.
@@ -34,6 +40,14 @@ handlers ──► llm/contracts + dispatcher ──► db/crud ──► Postgr
    successful domain write or a valid backup archive.
 6. User export is disk-backed and bounded in `services/export.py`; Telegram
    handlers never hold the complete ZIP payload in process memory.
+7. Multi-step interaction workflows have one PostgreSQL slot per user and are
+   accessed through `application/interactions.py`. Claims, transitions and
+   clears are compare-and-set operations; schedulers must not replace voice,
+   chronometry, memoir or project-completion state owned by another workflow.
+   Process-local flags are not a source of truth.
+8. `application/normalizer.py` performs only conservative, meaning-preserving
+   normalization and retains opaque user markers. Language-provider heuristics
+   do not belong in domain services.
 
 New business workflows should first become a service function callable without
 Telegram objects. Handlers should remain thin adapters around that function.

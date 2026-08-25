@@ -21,6 +21,15 @@ class TaskCompletionResult:
     closed_reminders: int = 0
 
 
+def closed_task_status(task: Task) -> str:
+    """Return a truthful short status for an idempotent completion response."""
+    if task.status == "done" or task.resolution == "completed":
+        return "уже выполнена"
+    if task.status == "cancelled" or task.resolution == "cancelled":
+        return "уже отменена"
+    return f"уже закрыта (статус: {task.status})"
+
+
 def _next_future_occurrence(current, rule: str, now: pendulum.DateTime):
     """Ближайшее occurrence строго в будущем, без создания просроченного хвоста."""
     candidate = current
@@ -29,6 +38,22 @@ def _next_future_occurrence(current, rule: str, now: pendulum.DateTime):
         if candidate is None or candidate > now:
             return candidate
     raise ValueError(f"repeat rule did not reach future occurrence: {rule}")
+
+
+def _next_reminder_for_occurrence(
+    anchor: pendulum.DateTime,
+    original_reminder: pendulum.DateTime,
+    next_at: pendulum.DateTime,
+    now: pendulum.DateTime,
+) -> pendulum.DateTime:
+    """Preserve the reminder-to-due offset for the selected occurrence.
+
+    If that reminder time has already passed, the explicit product policy is to
+    enqueue it immediately. A reminder is never moved beyond its task due time.
+    """
+    offset_seconds = max(0.0, (anchor - original_reminder).total_seconds())
+    candidate = next_at.subtract(seconds=offset_seconds)
+    return now if candidate <= now else candidate
 
 
 async def complete_task_workflow(
@@ -107,20 +132,22 @@ async def complete_task_workflow(
 
             if task.remind_at:
                 reminder_at = pendulum.instance(task.remind_at).in_tz(timezone)
-                next_reminder_at = _next_future_occurrence(
-                    reminder_at, task.repeat_rule, now_local
+                next_reminder_at = _next_reminder_for_occurrence(
+                    anchor,
+                    reminder_at,
+                    next_at,
+                    now_local,
                 )
-                if next_reminder_at:
-                    next_task.remind_at = next_reminder_at
-                    session.add(
-                        Reminder(
-                            user_id=user_id,
-                            task_id=next_task.id,
-                            message=task.title,
-                            remind_at=next_reminder_at,
-                            occurrence_at=next_reminder_at,
-                        )
+                next_task.remind_at = next_reminder_at
+                session.add(
+                    Reminder(
+                        user_id=user_id,
+                        task_id=next_task.id,
+                        message=task.title,
+                        remind_at=next_reminder_at,
+                        occurrence_at=next_reminder_at,
                     )
+                )
 
     await session.commit()
     await session.refresh(task)

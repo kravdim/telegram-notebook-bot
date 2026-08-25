@@ -50,6 +50,8 @@ jobs:
           uv export --frozen --no-dev --no-emit-project -o /tmp/requirements.txt
           uv run pip-audit -r /tmp/requirements.txt
       - run: uv run alembic upgrade head
+      - name: Reject ORM and migration schema drift
+        run: uv run alembic check
       - name: Create least-privilege recovery operator
         run: |
           export PGPASSWORD=planner

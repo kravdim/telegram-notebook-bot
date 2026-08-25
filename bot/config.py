@@ -188,6 +188,7 @@ class Settings(BaseSettings):
             "gemini": self.gemini_api_key,
             "minimax": self.minimax_api_key,
             "zhipu": self.zhipu_api_key,
+            "groq": self.groq_api_key,
             "openai": self.openai_api_key,
             "embedding": self.embedding_api_key,
         }

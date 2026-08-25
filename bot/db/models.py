@@ -156,6 +156,12 @@ class Task(Base):
         Index("idx_tasks_scheduled_date", "scheduled_date", postgresql_where="status = 'open'"),
         Index("idx_tasks_due_date", "due_date", postgresql_where="status = 'open'"),
         Index("idx_tasks_frog", "user_id", postgresql_where="is_frog = TRUE AND status = 'open'"),
+        Index(
+            "uq_tasks_one_open_frog_per_user",
+            "user_id",
+            unique=True,
+            postgresql_where="is_frog = TRUE AND status = 'open'",
+        ),
     )
 
 

@@ -10,6 +10,10 @@
 
 `/status` shows PostgreSQL/LLM/embedding/STT health, the latest observed STT
 transcription latency, plus reminder and backup SLOs.
+Backup status is `ok` only when the persistent marker is fresh and its named
+archive, recorded byte size and checksum sidecar still agree. The hourly
+maintenance loop uses that marker as a daily slot and performs catch-up after a
+restart that missed the configured backup hour.
 Violations are logged and sent to configured Telegram admins, throttled to one
 alert per SLO per hour. In-process counters include LLM/STT errors, LLM queue
 depth, reminder lag and scheduler job duration.
@@ -19,6 +23,9 @@ digest or memoir fails partway through, its durable ledger resumes from the
 first part not acknowledged in PostgreSQL. A crash after Telegram accepts a
 part but before its database commit can still repeat that one part; Telegram
 offers no atomic transaction with PostgreSQL.
+The worker renews its lease after every acknowledged part and fences every
+progress/final update by lease token; a worker that loses ownership never
+reports the batch as completed.
 Completed delivery payloads are removed by the transient-state retention job
 after 30 days; pending batches are retained for recovery and investigation.
 

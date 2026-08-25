@@ -32,6 +32,10 @@ class DeliveryResult:
     message_ids: tuple[int | None, ...] = ()
 
 
+class _DeliveryLeaseLost(RuntimeError):
+    """The current worker no longer owns the durable delivery batch."""
+
+
 def _serialize_markup(markup) -> dict[str, Any] | None:
     if markup is None or isinstance(markup, dict):
         return markup
@@ -180,7 +184,24 @@ async def deliver_batch(
             )
             delivered_at = pendulum.now("UTC")
             async with async_session() as session:
-                await session.execute(
+                renewed = await session.execute(
+                    update(DeliveryBatch)
+                    .where(
+                        DeliveryBatch.id == batch_id,
+                        DeliveryBatch.lease_token == lease_token,
+                        DeliveryBatch.lease_expires_at >= delivered_at,
+                    )
+                    .values(
+                        lease_expires_at=delivered_at
+                        + timedelta(seconds=lease_seconds),
+                        updated_at=delivered_at,
+                    )
+                    .returning(DeliveryBatch.id)
+                )
+                if renewed.scalar_one_or_none() is None:
+                    await session.rollback()
+                    raise _DeliveryLeaseLost
+                recorded = await session.execute(
                     update(DeliveryPart)
                     .where(
                         DeliveryPart.id == part.id,
@@ -193,8 +214,34 @@ async def deliver_batch(
                         last_error=None,
                         delivered_at=delivered_at,
                     )
+                    .returning(DeliveryPart.id)
                 )
+                if recorded.scalar_one_or_none() is None:
+                    await session.rollback()
+                    raise _DeliveryLeaseLost
                 await session.commit()
+    except _DeliveryLeaseLost:
+        async with async_session() as session:
+            status = await session.scalar(
+                select(DeliveryBatch.status).where(DeliveryBatch.id == batch_id)
+            )
+            ids = tuple(
+                (
+                    await session.execute(
+                        select(DeliveryPart.telegram_message_id)
+                        .where(DeliveryPart.batch_id == batch_id)
+                        .order_by(DeliveryPart.position)
+                    )
+                )
+                .scalars()
+                .all()
+            )
+        return DeliveryResult(
+            completed=status == "delivered",
+            busy=status == "delivering",
+            already_completed=status == "delivered",
+            message_ids=ids,
+        )
     except Exception as exc:
         failed_at = pendulum.now("UTC")
         async with async_session() as session:
@@ -225,7 +272,7 @@ async def deliver_batch(
 
     completed_at = pendulum.now("UTC")
     async with async_session() as session:
-        await session.execute(
+        completed = await session.execute(
             update(DeliveryBatch)
             .where(
                 DeliveryBatch.id == batch_id,
@@ -238,7 +285,9 @@ async def deliver_batch(
                 completed_at=completed_at,
                 updated_at=completed_at,
             )
+            .returning(DeliveryBatch.id)
         )
+        owns_completion = completed.scalar_one_or_none() is not None
         ids = tuple(
             (await session.execute(
                 select(DeliveryPart.telegram_message_id)
@@ -247,4 +296,8 @@ async def deliver_batch(
             )).scalars().all()
         )
         await session.commit()
-    return DeliveryResult(completed=True, message_ids=ids)
+    return DeliveryResult(
+        completed=owns_completion,
+        busy=not owns_completion,
+        message_ids=ids,
+    )

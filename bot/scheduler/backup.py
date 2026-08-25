@@ -12,7 +12,7 @@ import pendulum
 from sqlalchemy.engine import make_url
 
 from bot.config import settings
-from bot.db.crud.operational import set_operational_state
+from bot.db.crud.operational import get_operational_state, set_operational_state
 from bot.db.engine import async_session
 from bot.observability import metrics
 
@@ -169,6 +169,34 @@ async def run_backup() -> Path | None:
     # Ротация
     _rotate_backups(retention_days)
     return filepath if filepath.exists() else None
+
+
+def is_backup_due(
+    last_success_at,
+    now: pendulum.DateTime,
+    backup_hour: int,
+) -> bool:
+    """Return whether today's persisted backup slot has been missed."""
+    scheduled = now.start_of("day").add(hours=backup_hour)
+    if now < scheduled:
+        return False
+    if last_success_at is None:
+        return True
+    last_local = pendulum.instance(last_success_at).in_tz(now.timezone)
+    return last_local.date() < now.date()
+
+
+async def run_backup_if_due(now: pendulum.DateTime | None = None) -> Path | None:
+    """Run the daily backup after its slot, including catch-up after downtime."""
+    current = now or pendulum.now()
+    backup_hour = int(
+        settings.yaml_config.get("scheduler", {}).get("backup_hour", 3)
+    )
+    async with async_session() as session:
+        marker = await get_operational_state(session, "backup.last_success")
+    if not is_backup_due(marker.updated_at if marker else None, current, backup_hour):
+        return None
+    return await run_backup()
 
 
 def _is_portable_dump_line(line: bytes) -> bool:

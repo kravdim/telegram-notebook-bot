@@ -10,13 +10,14 @@ from aiogram.exceptions import TelegramBadRequest
 from aiogram.types import CallbackQuery
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
+from bot.application.interactions import interaction_service
 from bot.db.crud.projects import complete_project_and_cancel_open_tasks
 from bot.db.crud.reminders import get_reminder_by_id, resolve_reminder, snooze_reminder
 from bot.db.crud.tasks import delete_task, get_task_by_id
 from bot.db.crud.users import get_user
 from bot.db.engine import async_session
 from bot.handlers.telegram import callback_data, callback_message
-from bot.services.tasks import complete_task_workflow
+from bot.services.tasks import closed_task_status, complete_task_workflow
 
 logger = logging.getLogger(__name__)
 
@@ -28,15 +29,10 @@ MAX_SNOOZE = 5
 @router.callback_query(F.data == "memoir_skip")
 async def cb_memoir_skip(callback: CallbackQuery) -> None:
     """Закрыть ожидание мемуарника без создания записи."""
-    from bot.db.crud.interaction_states import clear_state, get_state
-
     user_id = callback.from_user.id
     await callback.answer("Пропущено")
     try:
-        async with async_session() as session:
-            state = await get_state(session, user_id)
-            if state and state.state_type == "memoir":
-                await clear_state(session, user_id)
+        await interaction_service.clear(user_id, "memoir")
     except Exception as exc:
         logger.warning("Не удалось очистить persistent memoir state: %s", exc)
     await callback_message(callback).edit_text(
@@ -101,7 +97,7 @@ async def cb_snooze_done(callback: CallbackQuery) -> None:
                         callback.from_user.id,
                         user.timezone if user else "Europe/Moscow",
                     )
-                    if completion.task:
+                    if completion.task and completion.completed:
                         next_text = (
                             f"\n🔄 Следующая: {completion.next_date.strftime('%d.%m')}"
                             if completion.next_date else ""
@@ -109,6 +105,11 @@ async def cb_snooze_done(callback: CallbackQuery) -> None:
                         result_text = (
                             f"✅ Задача «{html.escape(completion.task.title)}» выполнена!"
                             f"{next_text}"
+                        )
+                    elif completion.task:
+                        result_text = (
+                            f"ℹ️ Задача «{html.escape(completion.task.title)}» "
+                            f"{closed_task_status(completion.task)}."
                         )
                 else:
                     await resolve_reminder(session, reminder.id, callback.from_user.id)

@@ -4,9 +4,12 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
+import os
 import time
 from collections import defaultdict, deque
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import TYPE_CHECKING, AsyncIterator
 
 import pendulum
@@ -115,7 +118,7 @@ class MetricsRegistry:
         for name, values in self._samples.items():
             if values:
                 ordered = sorted(values)
-                p95_index = max(0, int(len(ordered) * 0.95) - 1)
+                p95_index = max(0, math.ceil(len(ordered) * 0.95) - 1)
                 observations[name] = {
                     "count": len(values),
                     "avg": round(sum(values) / len(values), 3),
@@ -130,6 +133,41 @@ class MetricsRegistry:
 
 
 metrics = MetricsRegistry()
+
+
+def backup_artifact_status(value: dict) -> tuple[bool, str]:
+    """Verify that the persisted backup marker still points to its archive."""
+    filename = value.get("file")
+    expected_bytes = value.get("bytes")
+    if not isinstance(filename, str) or Path(filename).name != filename:
+        return False, "invalid-marker"
+    if not isinstance(expected_bytes, int) or expected_bytes <= 0:
+        return False, "invalid-marker"
+    backup_dir = Path(
+        os.environ.get("BACKUP_DIR", str(Path.home() / "backups" / "notebook-bot"))
+    )
+    archive = backup_dir / filename
+    checksum = archive.with_suffix(archive.suffix + ".sha256")
+    if not archive.is_file():
+        return False, "archive-missing"
+    if archive.stat().st_size != expected_bytes:
+        return False, "size-mismatch"
+    if not checksum.is_file():
+        return False, "checksum-missing"
+    try:
+        digest, separator, listed_name = checksum.read_text(
+            encoding="ascii"
+        ).strip().partition("  ")
+    except (OSError, UnicodeError):
+        return False, "checksum-marker-invalid"
+    if (
+        separator != "  "
+        or listed_name != filename
+        or len(digest) != 64
+        or any(character not in "0123456789abcdefABCDEF" for character in digest)
+    ):
+        return False, "checksum-marker-invalid"
+    return True, "ok"
 
 
 @asynccontextmanager
@@ -169,10 +207,13 @@ async def evaluate_slos() -> dict[str, dict[str, object]]:
     metrics.gauge("reminders.oldest_lag_seconds", reminder_lag)
 
     backup_age_hours = None
+    artifact_ok = False
+    artifact_status = "marker-missing"
     if backup:
         backup_age_hours = max(
             0.0, (now - pendulum.instance(backup.updated_at)).total_hours()
         )
+        artifact_ok, artifact_status = backup_artifact_status(backup.value)
         metrics.gauge("backup.age_hours", backup_age_hours)
 
     slo_result: dict[str, dict[str, object]] = {
@@ -185,11 +226,12 @@ async def evaluate_slos() -> dict[str, dict[str, object]]:
         "backup": {
             "status": (
                 "unknown" if backup_age_hours is None
-                else "ok" if backup_age_hours <= max_backup_age_hours
+                else "ok" if backup_age_hours <= max_backup_age_hours and artifact_ok
                 else "error"
             ),
             "age_hours": round(backup_age_hours, 1) if backup_age_hours is not None else None,
             "target_hours": max_backup_age_hours,
+            "artifact": artifact_status,
         },
     }
     for name, info in slo_result.items():

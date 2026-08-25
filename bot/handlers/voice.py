@@ -11,8 +11,8 @@ from aiogram import F, Router
 from aiogram.types import CallbackQuery, Message
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
+from bot.application.interactions import WorkflowType, interaction_service
 from bot.config import settings
-from bot.db.engine import async_session
 from bot.handlers.telegram import callback_message, message_bot
 from bot.observability import metrics
 from bot.stt.base import STTClient
@@ -49,22 +49,35 @@ def consume_voice_edit(user_id: int) -> bool:
     return True
 
 
-async def _persist_voice_state(user_id: int, state_type: str, payload: dict) -> None:
+async def _persist_voice_state(
+    user_id: int,
+    state_type: WorkflowType,
+    payload: dict,
+    *,
+    expected_type: WorkflowType | None = None,
+) -> bool:
     try:
-        from bot.db.crud.interaction_states import set_state
-        async with async_session() as session:
-            await set_state(session, user_id, state_type, payload=payload, ttl_minutes=30)
+        if expected_type:
+            state = await interaction_service.transition(
+                user_id,
+                expected_type,
+                state_type,
+                payload,
+                30,
+            )
+        else:
+            state = await interaction_service.claim(
+                user_id, state_type, payload, 30
+            )
+        return state is not None
     except Exception as e:
-        logger.debug("Не удалось сохранить voice state: %s", e)
+        logger.warning("Не удалось сохранить voice state: %s", e)
+        return False
 
 
-async def _load_voice_state(user_id: int, state_type: str):
+async def _load_voice_state(user_id: int, state_type: WorkflowType):
     try:
-        from bot.db.crud.interaction_states import get_state
-        async with async_session() as session:
-            state = await get_state(session, user_id)
-            if state and state.state_type == state_type:
-                return state
+        return await interaction_service.get(user_id, state_type)
     except Exception as e:
         logger.debug("Не удалось прочитать voice state: %s", e)
     return None
@@ -72,9 +85,12 @@ async def _load_voice_state(user_id: int, state_type: str):
 
 async def _clear_voice_state(user_id: int) -> None:
     try:
-        from bot.db.crud.interaction_states import clear_state
-        async with async_session() as session:
-            await clear_state(session, user_id)
+        state = await interaction_service.get(user_id)
+        if state and state.state_type in {"voice_confirm", "voice_edit"}:
+            expected_type: WorkflowType = (
+                "voice_confirm" if state.state_type == "voice_confirm" else "voice_edit"
+            )
+            await interaction_service.clear(user_id, expected_type)
     except Exception as e:
         logger.debug("Не удалось очистить voice state: %s", e)
 
@@ -146,12 +162,17 @@ async def handle_voice(message: Message) -> None:
         return
 
     # Сохраняем и показываем для подтверждения
-    _pending_transcripts[message.from_user.id] = text
-    await _persist_voice_state(
+    persisted = await _persist_voice_state(
         message.from_user.id,
         "voice_confirm",
         {"transcript": text},
     )
+    if not persisted:
+        await message.answer(
+            "Сначала заверши текущий диалог с ботом, затем отправь голосовое снова."
+        )
+        return
+    _pending_transcripts[message.from_user.id] = text
 
     kb = InlineKeyboardBuilder()
     kb.button(text="✅ Да, верно", callback_data="voice_confirm")
@@ -202,8 +223,19 @@ async def cb_voice_edit(callback: CallbackQuery) -> None:
         "Введи исправленный текст — я обработаю его как обычное сообщение.",
         reply_markup=None,
     )
-    _awaiting_edit.add(callback.from_user.id)
-    await _persist_voice_state(callback.from_user.id, "voice_edit", {})
+    persisted = await _persist_voice_state(
+        callback.from_user.id,
+        "voice_edit",
+        {},
+        expected_type="voice_confirm",
+    )
+    if persisted:
+        _awaiting_edit.add(callback.from_user.id)
+    else:
+        await callback_message(callback).edit_text(
+            "Сессия истекла. Отправь голосовое ещё раз.",
+            reply_markup=None,
+        )
 
 
 @router.callback_query(F.data == "voice_cancel")

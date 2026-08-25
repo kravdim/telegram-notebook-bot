@@ -38,7 +38,7 @@ from bot.observability import (
 )
 from bot.runtime.readiness import RuntimeReadiness
 from bot.runtime.singleton import SingletonLease
-from bot.scheduler.backup import run_backup
+from bot.scheduler.backup import run_backup_if_due
 from bot.scheduler.chronometry import send_chronometry_prompts
 from bot.scheduler.digest import send_digests
 from bot.scheduler.healthcheck import check_llm_health
@@ -285,20 +285,14 @@ async def main() -> None:
     async def _maintenance_loop():
         """Обслуживание: бэкап, ротация логов, реиндекс — раз в час."""
         while True:
-            await asyncio.sleep(3600)
             try:
                 async with observe_job("maintenance"):
                     await reindex_missing_embeddings()
                     await rotate_llm_logs()
-
-                    # Бэкап в 3:00
-                    import pendulum
-                    now = pendulum.now()
-                    backup_hour = settings.yaml_config.get("scheduler", {}).get("backup_hour", 3)
-                    if now.hour == backup_hour:
-                        await run_backup()
+                    await run_backup_if_due()
             except Exception as e:
                 logger.error("Maintenance loop error: %s", e)
+            await asyncio.sleep(3600)
 
     background_tasks = [
         asyncio.create_task(loop_fn(), name=loop_fn.__name__)

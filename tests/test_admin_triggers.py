@@ -125,18 +125,28 @@ async def test_manual_chrono_does_not_send_second_pending_question(monkeypatch):
             sent_messages.append((chat_id, text))
             return SimpleNamespace(message_id=123)
 
-    async def no_state(session, user_id):
+    async def no_state(user_id, expected_type=None):
         return None
 
-    async def set_state(*args, **kwargs):
-        return None
+    async def claim_state(*args, **kwargs):
+        return SimpleNamespace()
+
+    async def transition_state(*args, **kwargs):
+        return SimpleNamespace()
 
     async def update_settings(*args, **kwargs):
         return None
 
     monkeypatch.setattr(chronometry, "async_session", lambda: FakeSessionContext())
-    monkeypatch.setattr("bot.db.crud.interaction_states.get_state", no_state)
-    monkeypatch.setattr("bot.db.crud.interaction_states.set_state", set_state)
+    monkeypatch.setattr(
+        chronometry.interaction_service, "get", no_state
+    )
+    monkeypatch.setattr(
+        chronometry.interaction_service, "claim", claim_state
+    )
+    monkeypatch.setattr(
+        chronometry.interaction_service, "transition", transition_state
+    )
     monkeypatch.setattr(chronometry, "update_user_settings", update_settings)
     chronometry.clear_awaiting(42)
     chronometry._prompt_locks.pop(42, None)

@@ -6,6 +6,7 @@ import pendulum
 from aiogram import Bot
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
+from bot.application.interactions import interaction_service
 from bot.db.crud.chronometry import get_today_entries
 from bot.db.crud.memoir import get_memoir_entries
 from bot.db.crud.users import claim_date_marker, get_all_users
@@ -48,20 +49,30 @@ async def send_memoir_prompts(bot: Bot) -> None:
                 if not timeline.completed:
                     continue
 
+                if now.day == now.days_in_month:
+                    monthly = await _send_monthly_review(bot, user, tz, today)
+                    if not monthly.completed:
+                        continue
+
+                if not await _claim_memoir_state(user.telegram_id):
+                    continue
+
                 prompt = (
                     await _send_weekly_review(bot, user, tz, today)
                     if now.day_of_week == pendulum.SUNDAY
                     else await _send_prompt(bot, user, today)
                 )
                 if not prompt.completed:
+                    await _clear_memoir_state(user.telegram_id)
                     continue
-                if prompt.message_ids and prompt.message_ids[-1] is not None:
-                    await _persist_memoir_state(user.telegram_id, prompt.message_ids[-1])
-
-                if now.day == now.days_in_month:
-                    monthly = await _send_monthly_review(bot, user, tz, today)
-                    if not monthly.completed:
-                        continue
+                if not prompt.message_ids or prompt.message_ids[-1] is None:
+                    await _clear_memoir_state(user.telegram_id)
+                    continue
+                if not await _persist_memoir_state(
+                    user.telegram_id, prompt.message_ids[-1]
+                ):
+                    await _clear_memoir_state(user.telegram_id)
+                    continue
 
                 async with async_session() as session:
                     await claim_date_marker(
@@ -141,20 +152,33 @@ async def _send_prompt(bot: Bot, user, today) -> DeliveryResult:
     )
 
 
-async def _persist_memoir_state(user_id: int, message_id: int) -> None:
-    """Сохранить ожидание ответа так, чтобы оно пережило рестарт."""
+async def _claim_memoir_state(user_id: int) -> bool:
+    """Reserve the user's interaction slot before sending a memoir question."""
     try:
-        from bot.db.crud.interaction_states import set_state
-        async with async_session() as session:
-            await set_state(
-                session,
-                user_id,
-                "memoir",
-                payload={"message_id": message_id},
-                ttl_minutes=60,
-            )
+        state = await interaction_service.claim(user_id, "memoir", {}, 60)
+        return state is not None
     except Exception as e:
         logger.warning("Не удалось сохранить ожидание мемуарника: %s", e)
+        return False
+
+
+async def _persist_memoir_state(user_id: int, message_id: int) -> bool:
+    """Attach the sent Telegram message to the reserved memoir state."""
+    try:
+        state = await interaction_service.transition(
+            user_id, "memoir", "memoir", {"message_id": message_id}, 60
+        )
+        return state is not None
+    except Exception as e:
+        logger.warning("Не удалось обновить ожидание мемуарника: %s", e)
+        return False
+
+
+async def _clear_memoir_state(user_id: int) -> None:
+    try:
+        await interaction_service.clear(user_id, "memoir")
+    except Exception as e:
+        logger.warning("Не удалось освободить ожидание мемуарника: %s", e)
 
 
 async def _send_monthly_review(bot: Bot, user, tz: str, today=None) -> DeliveryResult:

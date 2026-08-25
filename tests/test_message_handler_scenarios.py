@@ -38,7 +38,7 @@ def reset_message_globals(monkeypatch):
     old_queue = messages.llm_queue
     messages.llm_client = FakeLLMClient()
     messages.llm_queue = FakeLLMQueue()
-    messages._pending_project_completion.clear()
+    pending_interactions = {}
     clear_all()
 
     async def no_claim(*args, **kwargs):
@@ -54,14 +54,13 @@ def reset_message_globals(monkeypatch):
         return None
 
     async def consume_memory(user_id):
-        return (
-            "complete_project"
-            if messages._pending_project_completion.pop(user_id, False)
-            else None
-        )
+        return pending_interactions.pop(user_id, None)
 
     async def set_memory(user_id, state_type):
-        messages._pending_project_completion[user_id] = state_type == "complete_project"
+        if user_id in pending_interactions:
+            return False
+        pending_interactions[user_id] = state_type
+        return True
 
     monkeypatch.setattr(messages, "_claim_request", no_claim)
     monkeypatch.setattr(messages, "_finish_request", no_finish)
@@ -74,7 +73,6 @@ def reset_message_globals(monkeypatch):
     yield
     messages.llm_client = old_client
     messages.llm_queue = old_queue
-    messages._pending_project_completion.clear()
     clear_all()
 
 

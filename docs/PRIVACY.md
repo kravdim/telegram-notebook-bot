@@ -39,8 +39,10 @@ removes access from the whitelist using an atomic YAML replacement, deletes the
 user, cascaded domain rows, LLM payloads and FSM state inside one database
 transaction, then re-counts every user-owned table before commit. Output
 contains only the ID, row counts, verification result and timestamp—not stored
-content. If verification fails, the database transaction rolls back while
-access stays closed for a safe retry.
+content. If deletion or verification fails, the database transaction rolls
+back and the original whitelist is atomically restored. If that compensating
+write also fails, the command exits with an explicit dual-failure error for
+operator recovery.
 Backups age out under the retention policy; do not selectively rewrite immutable
 archives. Emergency deletion from backups requires destroying the affected
 archives and immediately creating and drilling a fresh backup.

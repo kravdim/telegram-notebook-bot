@@ -12,7 +12,11 @@ from pathlib import Path
 from bot.config import BASE_DIR, settings
 from bot.db.engine import async_session, engine
 from bot.runtime.singleton import SingletonLease
-from bot.services.access_config import read_allowed_telegram_ids, remove_allowed_telegram_id
+from bot.services.access_config import (
+    read_allowed_telegram_ids,
+    remove_allowed_telegram_id,
+    write_allowed_telegram_ids,
+)
 from bot.services.user_deletion import (
     confirmation_phrase,
     delete_user_data,
@@ -58,10 +62,22 @@ async def run(args: argparse.Namespace) -> dict[str, object]:
     if not await lease.acquire():
         raise RuntimeError("stop the bot runtime before executing privacy deletion")
     try:
+        original_whitelist = read_allowed_telegram_ids(args.config)
         async with async_session() as session:
             whitelist_changed = remove_allowed_telegram_id(args.config, user_id)
-            counts = await delete_user_data(session, user_id)
-            await session.commit()
+            try:
+                counts = await delete_user_data(session, user_id)
+                await session.commit()
+            except Exception as database_error:
+                await session.rollback()
+                if whitelist_changed:
+                    try:
+                        write_allowed_telegram_ids(args.config, original_whitelist)
+                    except Exception as config_error:
+                        raise RuntimeError(
+                            "database deletion failed and whitelist rollback failed"
+                        ) from config_error
+                raise database_error
     finally:
         await lease.release()
 

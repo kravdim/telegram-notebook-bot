@@ -8,7 +8,7 @@ from tests.fakes import FakeCallback, FakeMessage
 @pytest.fixture(autouse=True)
 def clear_voice_state(monkeypatch):
     async def no_persist(*args, **kwargs):
-        return None
+        return True
 
     async def no_load(*args, **kwargs):
         return None

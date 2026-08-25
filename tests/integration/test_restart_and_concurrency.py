@@ -9,7 +9,12 @@ import pytest
 import pytest_asyncio
 from sqlalchemy import delete, select
 
-from bot.db.crud.interaction_states import get_state, set_state
+from bot.db.crud.interaction_states import (
+    claim_state,
+    clear_state_if_type,
+    get_state,
+    set_state,
+)
 from bot.db.crud.reminders import create_reminder, get_pending_reminders, mark_sent
 from bot.db.engine import async_session, engine
 from bot.db.models import (
@@ -341,6 +346,75 @@ async def test_delivery_outbox_lease_excludes_concurrent_sender():
     async with async_session() as cleanup:
         await cleanup.execute(delete(User).where(User.telegram_id == user_id))
         await cleanup.commit()
+
+
+@pytest.mark.asyncio
+async def test_interaction_state_claim_does_not_replace_active_workflow():
+    user_id = 8_550_000_000 + int(uuid.uuid4().hex[:6], 16)
+    async with async_session() as session:
+        session.add(User(telegram_id=user_id, username="interaction-cas-test"))
+        await session.commit()
+
+    workflow_types = ("voice_confirm", "memoir", "chronometry", "complete_project")
+    for owner in workflow_types:
+        async with async_session() as first:
+            claimed = await claim_state(first, user_id, owner, {"owner": owner})
+            assert claimed is not None
+
+        for contender in workflow_types:
+            if contender == owner:
+                continue
+            async with async_session() as second:
+                blocked = await claim_state(
+                    second, user_id, contender, {"contender": contender}
+                )
+                state = await get_state(second, user_id)
+                assert blocked is None
+                assert state.state_type == owner
+
+        async with async_session() as release:
+            assert await clear_state_if_type(release, user_id, owner) is True
+
+    async with async_session() as cleanup:
+        await cleanup.execute(delete(User).where(User.telegram_id == user_id))
+        await cleanup.commit()
+
+
+@pytest.mark.asyncio
+async def test_delivery_worker_cannot_commit_after_lease_expiry():
+    user_id = 8_575_000_000 + int(uuid.uuid4().hex[:6], 16)
+    delivery_key = f"integration:delivery-expired:{uuid.uuid4()}"
+
+    class Bot:
+        def __init__(self):
+            self.calls = 0
+
+        async def send_message(self, **kwargs):
+            self.calls += 1
+            return type("Sent", (), {"message_id": self.calls})()
+
+    async with async_session() as setup:
+        setup.add(User(telegram_id=user_id, username="delivery-expiry-test"))
+        await setup.commit()
+
+    bot = Bot()
+    kwargs = {
+        "delivery_key": delivery_key,
+        "user_id": user_id,
+        "kind": "integration",
+        "parts": [DeliveryPartSpec(user_id, "fenced")],
+    }
+    expired = await deliver_batch(bot, **kwargs, lease_seconds=0)
+    resumed = await deliver_batch(bot, **kwargs)
+
+    assert expired.completed is False
+    assert expired.busy is True
+    assert resumed.completed is True
+    assert bot.calls == 2
+
+    async with async_session() as cleanup_session:
+        await cleanup_session.execute(delete(User).where(User.telegram_id == user_id))
+        await cleanup_session.commit()
 
 
 @pytest.mark.asyncio
