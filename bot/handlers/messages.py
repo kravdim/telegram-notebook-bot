@@ -348,6 +348,28 @@ async def _process_text_message_unlocked(user_id: int, text: str, message: Messa
         await message.answer("Какой слон закрываем? Напиши название проекта.")
         return
 
+    cross_user_id = _extract_cross_user_request(text)
+    if cross_user_id is not None and cross_user_id != user_id:
+        reply = "Нет доступа к данным других пользователей."
+        add_message(user_id, "user", text)
+        add_message(user_id, "assistant", reply)
+        await message.answer(reply)
+        return
+
+    combined_mutations = _extract_note_and_task_mutations(text)
+    if combined_mutations:
+        add_message(user_id, "user", text)
+        await message_bot(message).send_chat_action(chat_id=message.chat.id, action="typing")
+        results = [
+            await dispatch({"name": name, "arguments": arguments}, user_id, user_tz)
+            for name, arguments in combined_mutations
+        ]
+        reply = "\n".join(results)
+        add_message(user_id, "assistant", reply)
+        for part in split_message(reply):
+            await message.answer(part, parse_mode=None)
+        return
+
     common_mutation = _extract_common_mutation(
         _normalize_common_intent_text(text), user_tz
     )
@@ -882,6 +904,29 @@ def _extract_common_mutation(text: str, tz: str) -> Optional[tuple[str, dict]]:
 
     stripped = " ".join(text.strip().split())
 
+    daily_task = re.match(
+        r"^каждый\s+день\s+в\s+(?P<hour>\d{1,2})"
+        r"(?::(?P<minute>\d{2}))?\s*(?:утра)?\s+(?P<body>.+)$",
+        stripped,
+        re.IGNORECASE,
+    )
+    if daily_task:
+        hour = int(daily_task.group("hour"))
+        minute = int(daily_task.group("minute") or 0)
+        body = daily_task.group("body").strip(" .!?:;«»\"'")
+        if 0 <= hour <= 23 and 0 <= minute <= 59 and body:
+            return (
+                "create_task",
+                {
+                    "title": body,
+                    "category": _guess_task_category(body),
+                    "priority": "normal",
+                    "scheduled_date": str(pendulum.now(tz).date()),
+                    "due_time": f"{hour:02d}:{minute:02d}",
+                    "repeat_rule": "daily",
+                },
+            )
+
     english_task = re.match(
         r"^create\s+task\s+(?P<prefix>.+?)\s+tomorrow\s+at\s+"
         r"(?P<hour>\d{1,2})(?P<ampm>am|pm)\s+(?P<tail>.+)$",
@@ -1065,6 +1110,41 @@ def _extract_common_mutation(text: str, tz: str) -> Optional[tuple[str, dict]]:
             )
 
     return None
+
+
+def _extract_note_and_task_mutations(text: str) -> list[tuple[str, dict]]:
+    """Parse the common explicit two-action phrase without provider variance."""
+    match = re.match(
+        r"^запиши:\s*(?P<note>.+?)\.\s*и\s+ещ[её]\s+надо\s+(?P<task>.+)$",
+        " ".join(text.strip().split()),
+        re.IGNORECASE,
+    )
+    if not match:
+        return []
+    note = match.group("note").strip(" .!?:;")
+    task = match.group("task").strip(" .!?:;")
+    if not note or not task:
+        return []
+    return [
+        ("create_note", {"title": "Заметка", "content": note}),
+        (
+            "create_task",
+            {
+                "title": task,
+                "category": _guess_task_category(task),
+                "priority": "normal",
+            },
+        ),
+    ]
+
+
+def _extract_cross_user_request(text: str) -> int | None:
+    match = re.search(
+        r"\b(?:задачи|данные)\s+пользователя\s+(?P<user_id>\d{5,15})\b",
+        text,
+        re.IGNORECASE,
+    )
+    return int(match.group("user_id")) if match else None
 
 
 def _extract_task_request(text: str, tz: str) -> Optional[dict]:

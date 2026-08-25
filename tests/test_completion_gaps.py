@@ -6,6 +6,8 @@ import pytest
 from bot.config import validate_runtime_config
 from bot.handlers.messages import (
     _extract_common_mutation,
+    _extract_cross_user_request,
+    _extract_note_and_task_mutations,
     _normalize_common_intent_text,
     _preserve_user_marker_in_call,
 )
@@ -118,6 +120,7 @@ async def test_stt_health_exposes_last_latency_and_slo(monkeypatch):
         ("самое противное на сегодня — заполнить налоги, это лягушка", "create_task"),
         ("слушай, это прям слон: ремонт балкона, нарежь пожалуйста", "create_project"),
         ("create task marker-english tomorrow at 3pm call John", "create_task"),
+        ("каждый день в 7 утра зарядка", "create_task"),
     ],
 )
 def test_messy_mutations_have_deterministic_safe_path(text, tool):
@@ -136,6 +139,20 @@ def test_live_run_marker_is_preserved_in_reminder_payload():
         {"name": "create_reminder", "arguments": {"message": "чай попить"}},
     )
     assert marker in call["arguments"]["message"]
+
+
+def test_explicit_note_and_task_phrase_produces_two_mutations():
+    calls = _extract_note_and_task_mutations(
+        "запиши: пароль wifi это sunflower. и ещё надо починить кран на кухне"
+    )
+    assert [name for name, _ in calls] == ["create_note", "create_task"]
+    assert calls[0][1]["content"] == "пароль wifi это sunflower"
+    assert calls[1][1]["title"] == "починить кран на кухне"
+
+
+def test_cross_user_numeric_request_is_detected_without_reading_data():
+    assert _extract_cross_user_request("покажи задачи пользователя 155270571") == 155270571
+    assert _extract_cross_user_request("покажи мои задачи") is None
 
 
 def test_opaque_task_marker_never_fuzzy_matches_another_artifact():

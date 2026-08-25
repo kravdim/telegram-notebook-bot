@@ -553,7 +553,7 @@ async def test_failed_mutation_is_closed_in_history_before_next_turn(monkeypatch
     monkeypatch.setattr("bot.db.crud.llm_logs.log_llm_request", fake_log)
     monkeypatch.setattr(chronometry_scheduler, "is_awaiting_response", lambda _: False)
 
-    first = FakeMessage("напмни через 15 минут воду", user_id=42)
+    first = FakeMessage("запомни что-нибудь важное", user_id=42)
     await messages.process_text_message(42, first.text, first)
     assert first.answers[-1][0] == "Когда напомнить и о чём?"
     assert [item["role"] for item in get_history(42)] == ["user", "assistant"]
@@ -563,7 +563,7 @@ async def test_failed_mutation_is_closed_in_history_before_next_turn(monkeypatch
 
     third_call_messages = calls[2][0]
     assert third_call_messages[-3:] == [
-        {"role": "user", "content": "напомни через 15 минут воду"},
+        {"role": "user", "content": "запомни что-нибудь важное"},
         {"role": "assistant", "content": "Когда напомнить и о чём?"},
         {"role": "user", "content": "как дела?"},
     ]
