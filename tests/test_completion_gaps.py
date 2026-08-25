@@ -1,4 +1,5 @@
 import zipfile
+from types import SimpleNamespace
 
 import pytest
 
@@ -8,6 +9,7 @@ from bot.handlers.messages import (
     _normalize_common_intent_text,
     _preserve_user_marker_in_call,
 )
+from bot.llm.dispatcher import _select_confident_task
 from bot.observability import MetricsRegistry
 from bot.scheduler import healthcheck
 from bot.services.export import ExportTooLargeError, write_export_archive
@@ -133,3 +135,19 @@ def test_live_run_marker_is_preserved_in_reminder_payload():
         {"name": "create_reminder", "arguments": {"message": "чай попить"}},
     )
     assert marker in call["arguments"]["message"]
+
+
+def test_opaque_task_marker_never_fuzzy_matches_another_artifact():
+    existing = SimpleNamespace(
+        title="Заполнить DP-20260825T091725-157b49-налоги"
+    )
+    assert (
+        _select_confident_task(
+            "DP-20260825T091725-157b49-неттакойвообще", [existing]
+        )
+        is None
+    )
+    assert (
+        _select_confident_task("DP-20260825T091725-157b49-налоги", [existing])
+        is existing
+    )

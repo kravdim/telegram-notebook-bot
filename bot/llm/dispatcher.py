@@ -71,6 +71,19 @@ def _select_confident_task(query: str, tasks: list) -> Any | None:
     )
     if exact:
         return exact
+    opaque_marker = re.search(
+        r"\b(?:DP-\d{8}T\d{6}-[a-f0-9]{6}-[\w-]+|[А-ЯЁA-Z]\d{1,4}-[\w-]+)",
+        query,
+        re.IGNORECASE,
+    )
+    if opaque_marker:
+        marker = opaque_marker.group(0).casefold()
+        marker_matches = [
+            task
+            for task in tasks
+            if marker in normalize_task_identity(task.title).casefold()
+        ]
+        return marker_matches[0] if len(marker_matches) == 1 else None
     if len(normalized_query) < 5:
         return None
     strong = [
