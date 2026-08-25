@@ -348,7 +348,9 @@ async def _process_text_message_unlocked(user_id: int, text: str, message: Messa
         await message.answer("Какой слон закрываем? Напиши название проекта.")
         return
 
-    common_mutation = _extract_common_mutation(text, user_tz)
+    common_mutation = _extract_common_mutation(
+        _normalize_common_intent_text(text), user_tz
+    )
     if common_mutation:
         tool_name, arguments = common_mutation
         add_message(user_id, "user", text)
@@ -880,6 +882,44 @@ def _extract_common_mutation(text: str, tz: str) -> Optional[tuple[str, dict]]:
 
     stripped = " ".join(text.strip().split())
 
+    frog_task = re.match(
+        r"^самое\s+противное\s+на\s+сегодня\s*[-—:]\s*"
+        r"(?P<body>.+?)(?:,?\s+это\s+лягушка)\s*[.!]*$",
+        stripped,
+        re.IGNORECASE,
+    )
+    if frog_task:
+        body = frog_task.group("body").strip(" .!?:;«»\"'")
+        if body:
+            return (
+                "create_task",
+                {
+                    "title": body,
+                    "category": _guess_task_category(body),
+                    "priority": "normal",
+                    "scheduled_date": str(pendulum.now(tz).date()),
+                    "is_frog": True,
+                },
+            )
+
+    elephant = re.match(
+        r"^(?:слушай,?\s*)?(?:это\s+)?(?:прям\s+)?слон\s*[:—-]\s*"
+        r"(?P<body>.+?)(?:,?\s+нарежь(?:\s+пожалуйста)?)\s*[.!]*$",
+        stripped,
+        re.IGNORECASE,
+    )
+    if elephant:
+        body = elephant.group("body").strip(" .!?:;«»\"'")
+        if body:
+            return (
+                "create_project",
+                {
+                    "title": body,
+                    "description": body,
+                    "category": _guess_task_category(body),
+                },
+            )
+
     explicit_task = re.match(
         r"^создай\s+задачу\s*[:\-—]?\s*(?P<body>.+)$",
         stripped,
@@ -1152,15 +1192,25 @@ def _preserve_user_marker_in_call(text: str, function_call: dict) -> dict:
     if name not in {
         "create_task", "create_note", "create_project",
         "complete_task", "update_task", "delete_task",
+        "create_reminder",
     }:
         return function_call
-    marker_match = re.search(r"\b[А-ЯЁA-Z]\d{1,4}-[\w-]+", text, re.IGNORECASE)
+    marker_match = re.search(
+        r"\b(?:DP-\d{8}T\d{6}-[a-f0-9]{6}-[\w-]+|[А-ЯЁA-Z]\d{1,4}-[\w-]+)",
+        text,
+        re.IGNORECASE,
+    )
     if not marker_match:
         return function_call
     marker = marker_match.group(0)
     args = _function_arguments(function_call)
     if not args:
         return function_call
+    if name == "create_reminder":
+        reminder_text = str(args.get("message") or "").strip()
+        if marker.casefold() not in reminder_text.casefold():
+            args["message"] = f"{marker} — {reminder_text}" if reminder_text else marker
+        return {**function_call, "arguments": args}
     if name in {"complete_task", "update_task", "delete_task"}:
         args["search_query"] = marker
         return {**function_call, "arguments": args}

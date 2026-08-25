@@ -3,6 +3,11 @@ import zipfile
 import pytest
 
 from bot.config import validate_runtime_config
+from bot.handlers.messages import (
+    _extract_common_mutation,
+    _normalize_common_intent_text,
+    _preserve_user_marker_in_call,
+)
 from bot.observability import MetricsRegistry
 from bot.scheduler import healthcheck
 from bot.services.export import ExportTooLargeError, write_export_archive
@@ -101,3 +106,30 @@ async def test_stt_health_exposes_last_latency_and_slo(monkeypatch):
     result = await healthcheck.check_stt_health()
     assert result["status"] == "degraded"
     assert result["last_transcription_ms"] == 35000
+
+
+@pytest.mark.parametrize(
+    ("text", "tool"),
+    [
+        ("напмни через 15 минут тест-вода", "create_reminder"),
+        ("забей в задачи разобрать завалы в гараже", "create_task"),
+        ("самое противное на сегодня — заполнить налоги, это лягушка", "create_task"),
+        ("слушай, это прям слон: ремонт балкона, нарежь пожалуйста", "create_project"),
+    ],
+)
+def test_messy_mutations_have_deterministic_safe_path(text, tool):
+    normalized = _normalize_common_intent_text(text)
+    name, arguments = _extract_common_mutation(normalized, "Europe/Moscow")
+    assert name == tool
+    assert arguments
+    if "лягушка" in text:
+        assert arguments["is_frog"] is True
+
+
+def test_live_run_marker_is_preserved_in_reminder_payload():
+    marker = "DP-20260825T052726-5668b0-чай"
+    call = _preserve_user_marker_in_call(
+        f"напомни через 2 минуты {marker} попить",
+        {"name": "create_reminder", "arguments": {"message": "чай попить"}},
+    )
+    assert marker in call["arguments"]["message"]

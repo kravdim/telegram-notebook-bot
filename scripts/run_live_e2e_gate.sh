@@ -4,7 +4,7 @@ set -euo pipefail
 PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 USERBOT_DIR="${DAILYPLANNER_USERBOT_DIR:-/Users/moltbot/Projects/userbot}"
 RUNNER="$USERBOT_DIR/tests_dailyplanner/run_messy_human.py"
-LOG_FILE="$(mktemp /tmp/dailyplanner-live-e2e.XXXXXX.log)"
+LOG_FILE="$(mktemp /tmp/dailyplanner-live-e2e.XXXXXX)"
 
 if [[ ! -f "$RUNNER" || ! -x "$USERBOT_DIR/.venv/bin/python" ]]; then
     echo "DailyPlanner live E2E runner or its virtualenv is missing" >&2
