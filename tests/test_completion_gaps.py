@@ -117,6 +117,7 @@ async def test_stt_health_exposes_last_latency_and_slo(monkeypatch):
         ("забей в задачи разобрать завалы в гараже", "create_task"),
         ("самое противное на сегодня — заполнить налоги, это лягушка", "create_task"),
         ("слушай, это прям слон: ремонт балкона, нарежь пожалуйста", "create_project"),
+        ("create task marker-english tomorrow at 3pm call John", "create_task"),
     ],
 )
 def test_messy_mutations_have_deterministic_safe_path(text, tool):

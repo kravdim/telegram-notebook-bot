@@ -882,6 +882,31 @@ def _extract_common_mutation(text: str, tz: str) -> Optional[tuple[str, dict]]:
 
     stripped = " ".join(text.strip().split())
 
+    english_task = re.match(
+        r"^create\s+task\s+(?P<prefix>.+?)\s+tomorrow\s+at\s+"
+        r"(?P<hour>\d{1,2})(?P<ampm>am|pm)\s+(?P<tail>.+)$",
+        stripped,
+        re.IGNORECASE,
+    )
+    if english_task:
+        hour = int(english_task.group("hour"))
+        ampm = english_task.group("ampm").casefold()
+        if 1 <= hour <= 12:
+            hour = (hour % 12) + (12 if ampm == "pm" else 0)
+            title = (
+                f"{english_task.group('prefix')} {english_task.group('tail')}"
+            ).strip(" .!?:;«»\"'")
+            return (
+                "create_task",
+                {
+                    "title": title,
+                    "category": _guess_task_category(title),
+                    "priority": "normal",
+                    "scheduled_date": str(pendulum.now(tz).date().add(days=1)),
+                    "due_time": f"{hour:02d}:00",
+                },
+            )
+
     frog_task = re.match(
         r"^самое\s+противное\s+на\s+сегодня\s*[-—:]\s*"
         r"(?P<body>.+?)(?:,?\s+это\s+лягушка)\s*[.!]*$",
