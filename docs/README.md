@@ -5,7 +5,7 @@
 - [`ARCHITECTURE.md`](ARCHITECTURE.md) — компоненты и контракты;
 - [`OPERATIONS.md`](OPERATIONS.md) — эксплуатация, release gate и recovery;
 - [`PRIVACY.md`](PRIVACY.md) — хранение, экспорт и удаление данных;
-- [`SESSION_CONTEXT_2026-08-24.md`](SESSION_CONTEXT_2026-08-24.md) — последний
+- [`SESSION_CONTEXT_2026-08-25.md`](SESSION_CONTEXT_2026-08-25.md) — последний
   завершённый release handoff; новый handoff создаётся при следующем релизе.
 
 `archive/` содержит исходные постановки этапов, beta-отчёты и планы исправлений.
