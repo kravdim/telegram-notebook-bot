@@ -48,15 +48,16 @@ commits `e590436`, `1c1a32c`, `a69192d`. У этого checkout нет remote, �
 
 ## Production и recovery evidence
 
-Перед этапом создан backup
-`/Users/moltbot/backups/notebook-bot/notebook_bot_2026-08-25_000611.sql.gz`.
-После финального install LaunchAgent `com.notebook-bot` работает с PID `69104`,
-singleton lease получен, Telegram polling активен, local Whisper medium прогрет,
-а migration находится на head `f4b8c2d6e1a0`.
+Перед финальным deploy создан и проверен backup
+`/Users/moltbot/backups/notebook-bot/notebook_bot_2026-08-25_172330.sql.gz`:
+gzip integrity и SHA-256 sidecar совпали. После install текущего checkout
+`55eef71` LaunchAgent `com.notebook-bot` работает с PID `92421`, singleton lease
+получен, Telegram polling активен, local Whisper medium прогрет, а migration
+находится на head `f4b8c2d6e1a0`.
 
-Live health после restart: PostgreSQL 8 ms, LLM 1839 ms, Ollama embedding 29 ms,
-STT 1275 ms; reminders lag 0, pending 0, backup age 12,9 часа — все статусы
-`ok`. Свежих записей в stderr после запуска нет.
+Live health после финального restart: PostgreSQL 10 ms, LLM 993 ms, Ollama
+embedding 45 ms, STT 1200 ms; reminders lag 0, pending 0, backup age 0 — все
+статусы `ok`. Свежих записей в stderr после запуска нет.
 
 Recovery LaunchAgent `com.notebook-bot-recovery-drill` установлен на воскресенье
 04:30. Финальный запуск через launchd завершился exit code 0 и восстановил
