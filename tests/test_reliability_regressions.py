@@ -109,6 +109,23 @@ async def test_weak_single_match_is_not_updated(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_unknown_opaque_task_is_not_offered_for_deletion(monkeypatch):
+    candidate = SimpleNamespace(id="1", title="Б22-молоко", status="open")
+
+    async def fake_search(session, user_id, query, status=None):
+        return [candidate]
+
+    monkeypatch.setattr(dispatcher, "async_session", lambda: FakeSessionContext())
+    monkeypatch.setattr(dispatcher, "search_tasks", fake_search)
+
+    result = await dispatcher._handle_delete_task(
+        42, {"search_query": "Б22-неттакойвообще"}
+    )
+    assert "не нашёл" in result.lower()
+    assert not result.startswith("CHOOSE_DELETE:")
+
+
+@pytest.mark.asyncio
 async def test_create_task_deduplicates_leading_action_word(monkeypatch):
     existing = SimpleNamespace(
         id="1",

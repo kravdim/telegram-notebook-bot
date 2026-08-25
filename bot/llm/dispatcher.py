@@ -870,6 +870,8 @@ async def _handle_delete_task(user_id: int, args: Dict[str, Any]) -> str:
 
         confident = _select_confident_task(query, tasks)
         if confident is None:
+            if _OPAQUE_TASK_MARKER_RE.search(query):
+                return f"Не нашёл задачу «{query}»."
             top3 = tasks[:3]
             choices = [
                 {"id": str(task.id), "title": task.title} for task in top3
