@@ -348,6 +348,41 @@ async def _process_text_message_unlocked(user_id: int, text: str, message: Messa
         await message.answer("Какой слон закрываем? Напиши название проекта.")
         return
 
+    delete_query = _extract_explicit_delete(text)
+    if delete_query:
+        await message_bot(message).send_chat_action(chat_id=message.chat.id, action="typing")
+        result = await dispatch(
+            {"name": "delete_task", "arguments": {"search_query": delete_query}},
+            user_id,
+            user_tz,
+        )
+        add_message(user_id, "user", text)
+        if result.startswith("CONFIRM_DELETE:"):
+            parts = result.split(":", 2)
+            from bot.handlers.callbacks import build_delete_confirm_keyboard
+
+            prompt = f"Нашёл задачу «{parts[2]}». Удалить?"
+            add_message(user_id, "assistant", prompt)
+            keyboard = build_delete_confirm_keyboard(parts[1])
+            await message.answer(
+                prompt, parse_mode=None, reply_markup=keyboard.as_markup()
+            )
+        elif result.startswith("CHOOSE_DELETE:"):
+            choices = json.loads(result.split(":", 1)[1])
+            from bot.handlers.callbacks import build_delete_choice_keyboard
+
+            prompt = "Нашёл несколько похожих задач. Какую удалить?"
+            add_message(user_id, "assistant", prompt)
+            keyboard = build_delete_choice_keyboard(choices)
+            await message.answer(
+                prompt, parse_mode=None, reply_markup=keyboard.as_markup()
+            )
+        else:
+            add_message(user_id, "assistant", result)
+            for part in split_message(result):
+                await message.answer(part, parse_mode=None)
+        return
+
     cross_user_id = _extract_cross_user_request(text)
     if cross_user_id is not None and cross_user_id != user_id:
         reply = "Нет доступа к данным других пользователей."
@@ -577,7 +612,6 @@ async def _process_text_message_unlocked(user_id: int, text: str, message: Messa
                 continue
 
             if result.startswith("CHOOSE_DELETE:"):
-                import json
                 choices = json.loads(result.split(":", 1)[1])
                 from bot.handlers.callbacks import build_delete_choice_keyboard
                 kb = build_delete_choice_keyboard(choices)
@@ -904,6 +938,17 @@ def _extract_common_mutation(text: str, tz: str) -> Optional[tuple[str, dict]]:
 
     stripped = " ".join(text.strip().split())
 
+    explicit_note = re.match(
+        r"^сделай\s+заметку\s+(?P<title>.+?)\s*:\s*(?P<content>.+)$",
+        stripped,
+        re.IGNORECASE,
+    )
+    if explicit_note:
+        title = explicit_note.group("title").strip(" .!?:;«»\"'")
+        content = explicit_note.group("content").strip(" .!?:;")
+        if title and content:
+            return "create_note", {"title": title, "content": content}
+
     daily_task = re.match(
         r"^каждый\s+день\s+в\s+(?P<hour>\d{1,2})"
         r"(?::(?P<minute>\d{2}))?\s*(?:утра)?\s+(?P<body>.+)$",
@@ -1145,6 +1190,18 @@ def _extract_cross_user_request(text: str) -> int | None:
         re.IGNORECASE,
     )
     return int(match.group("user_id")) if match else None
+
+
+def _extract_explicit_delete(text: str) -> str | None:
+    match = re.match(
+        r"^удали\s+задачу\s+(?P<query>.+?)\s*[.!]*$",
+        text.strip(),
+        re.IGNORECASE,
+    )
+    if not match:
+        return None
+    query = match.group("query").strip(" .!?:;«»\"'")
+    return query or None
 
 
 def _extract_task_request(text: str, tz: str) -> Optional[dict]:
