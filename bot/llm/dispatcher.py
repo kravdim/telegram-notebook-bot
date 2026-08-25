@@ -47,6 +47,11 @@ from bot.services.tasks import complete_task_workflow
 
 logger = logging.getLogger(__name__)
 
+_OPAQUE_TASK_MARKER_RE = re.compile(
+    r"\b(?:DP-\d{8}T\d{6}-[a-f0-9]{6}-[\w-]+|[А-ЯЁA-Z]\d{1,4}-[\w-]+)",
+    re.IGNORECASE,
+)
+
 
 class _DuplicateTask(TypedDict):
     id: UUID
@@ -71,11 +76,7 @@ def _select_confident_task(query: str, tasks: list) -> Any | None:
     )
     if exact:
         return exact
-    opaque_marker = re.search(
-        r"\b(?:DP-\d{8}T\d{6}-[a-f0-9]{6}-[\w-]+|[А-ЯЁA-Z]\d{1,4}-[\w-]+)",
-        query,
-        re.IGNORECASE,
-    )
+    opaque_marker = _OPAQUE_TASK_MARKER_RE.search(query)
     if opaque_marker:
         marker = opaque_marker.group(0).casefold()
         marker_matches = [
@@ -799,6 +800,8 @@ async def _handle_update_task(user_id: int, args: Dict[str, Any], tz: str = "Eur
 
         confident = _select_confident_task(query, tasks)
         if confident is None:
+            if _OPAQUE_TASK_MARKER_RE.search(query):
+                return f"Не нашёл задачу «{query}»."
             top3 = tasks[:3]
             lines = [f"Несколько задач похожи на «{query}». Уточни:"]
             for i, task in enumerate(top3, 1):

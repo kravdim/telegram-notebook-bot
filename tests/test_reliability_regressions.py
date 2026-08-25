@@ -104,8 +104,8 @@ async def test_weak_single_match_is_not_updated(monkeypatch):
         42,
         {"search_query": "Б22-кран", "updates": {"status": "cancelled"}},
     )
-    assert "уточни" in result.lower()
-    assert "Б22-молоко" in result
+    assert "не нашёл" in result.lower()
+    assert "Б22-кран" in result
 
 
 @pytest.mark.asyncio
