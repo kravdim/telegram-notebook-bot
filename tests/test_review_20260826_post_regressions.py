@@ -33,6 +33,35 @@ def test_failed_live_reminder_phrase_has_deterministic_mutation_path():
     assert arguments["remind_at"]
 
 
+def test_explicit_diary_phrase_has_deterministic_mutation_path():
+    tool, arguments = messages._extract_common_mutation(
+        "запиши в дневник: сегодня был странный день",
+        "Europe/Moscow",
+    )
+
+    assert tool == "create_diary_entry"
+    assert arguments == {"content": "сегодня был странный день"}
+
+
+@pytest.mark.parametrize(
+    ("text", "expected_fragment"),
+    [
+        ("поставь задачу на вчера: сдать отчёт", "прошлом"),
+        ("напомни через 0 минут проверить духовку", "0 минут"),
+        ("напомни вчера позвонить маме", "прошлом"),
+        ("запомни день рождения кота Барсика 32 января", "такой даты нет"),
+        ("у мамы день рождения был вчера", "точную дату"),
+    ],
+)
+def test_invalid_dates_have_deterministic_clarification(
+    text, expected_fragment
+):
+    tool, arguments = messages._extract_common_mutation(text, "Europe/Moscow")
+
+    assert tool == "respond_to_user"
+    assert expected_fragment in arguments["message"]
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "provider_claim",
@@ -97,7 +126,7 @@ async def test_mutation_without_typed_result_fails_closed(
     assert queue.calls == 2
     assert outcome == messages.MessageOutcome.RETRYABLE_ERROR
     assert finished == ["failed"]
-    assert "Изменение не выполнено" in message.answers[-1][0]
+    assert "Не удалось выполнить изменение" in message.answers[-1][0]
     assert provider_claim not in [answer[0] for answer in message.answers]
 
 

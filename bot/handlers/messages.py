@@ -681,8 +681,8 @@ async def _process_text_message_unlocked(
                 return MessageOutcome.REJECTED
             logger.error("Required tool retry returned no mutation: user=%s", user_id)
             reply = (
-                "Изменение не выполнено: AI-сервис не вернул "
-                "безопасную команду. Повтори запрос."
+                "Не удалось выполнить изменение: нужно уточнить дату или "
+                "формулировку. Повтори запрос."
             )
             add_message(user_id, "assistant", reply)
             await message.answer(reply)
@@ -1060,6 +1060,85 @@ def _extract_common_mutation(text: str, tz: str) -> Optional[tuple[str, dict]]:
 
     stripped = " ".join(text.strip().split())
 
+    explicit_diary = re.match(
+        r"^запиши\s+в\s+дневник\s*:\s*(?P<content>.+)$",
+        stripped,
+        re.IGNORECASE,
+    )
+    if explicit_diary:
+        content = explicit_diary.group("content").strip(" .!?:;")
+        if content:
+            return "create_diary_entry", {"content": content}
+
+    past_task = re.match(
+        r"^поставь\s+задачу\s+на\s+вчера\b",
+        stripped,
+        re.IGNORECASE,
+    )
+    if past_task:
+        return (
+            "respond_to_user",
+            {
+                "message": (
+                    "Не удалось поставить задачу: дата «вчера» уже в прошлом. "
+                    "Уточни будущую дату."
+                )
+            },
+        )
+
+    past_reminder = re.match(r"^напомни\s+вчера\b", stripped, re.IGNORECASE)
+    if past_reminder:
+        return (
+            "respond_to_user",
+            {
+                "message": (
+                    "Не удалось создать напоминание на вчера: это время уже "
+                    "в прошлом. Уточни будущую дату."
+                )
+            },
+        )
+
+    relative_birthday = re.match(
+        r"^у\s+(?P<name>.+?)\s+день\s+рождения\s+был\s+вчера\b",
+        stripped,
+        re.IGNORECASE,
+    )
+    if relative_birthday:
+        return (
+            "respond_to_user",
+            {
+                "message": (
+                    f"Уточни точную дату рождения для «{relative_birthday.group('name')}»: "
+                    "нужны день и месяц."
+                )
+            },
+        )
+
+    explicit_birthday = re.match(
+        r"^запомни\s+день\s+рождения\s+(?P<name>.+?)\s+"
+        r"(?P<day>\d{1,2})\s+(?P<month>[а-яё]+)$",
+        stripped,
+        re.IGNORECASE,
+    )
+    if explicit_birthday:
+        day = int(explicit_birthday.group("day"))
+        month_word = explicit_birthday.group("month").casefold()
+        month = _RU_MONTHS.get(month_word)
+        try:
+            if month is None:
+                raise ValueError("unknown month")
+            pendulum.date(2000, month, day)
+        except ValueError:
+            return (
+                "respond_to_user",
+                {
+                    "message": (
+                        "Не удалось сохранить день рождения: такой даты нет. "
+                        "Уточни день и месяц."
+                    )
+                },
+            )
+
     explicit_note = re.match(
         r"^сделай\s+заметку\s+(?P<title>.+?)\s*:\s*(?P<content>.+)$",
         stripped,
@@ -1208,7 +1287,17 @@ def _extract_common_mutation(text: str, tz: str) -> Optional[tuple[str, dict]]:
             r",?\s+а\s+то\s+забуду[.!]*$", "", reminder.group("body"),
             flags=re.IGNORECASE,
         ).strip(" .!?:;")
-        if minutes > 0 and body:
+        if minutes <= 0:
+            return (
+                "respond_to_user",
+                {
+                    "message": (
+                        "Напоминание на 0 минут не создано. Уточни будущий "
+                        "интервал."
+                    )
+                },
+            )
+        if body:
             remind_at = pendulum.now(tz).add(minutes=minutes).replace(second=0, microsecond=0)
             return (
                 "create_reminder",
