@@ -1,95 +1,79 @@
-# Контекст релиза DailyPlanner — 26.08.2026
+# Контекст reliability-релиза DailyPlanner — 26.08.2026
 
 ## Итог
 
-Повторный аудит `REVIEW_2026-08-25.md` применён, reliability-пакет и следующий
-application architecture этап завершены. Product commit `6b1acad` отправлен в
-`origin/main`, GitHub Actions run `32876119870` завершён успешно, production
-развёрнут штатным macOS LaunchAgent.
+Аудит `REVIEW_2026-08-26.md` применён. Product commit `43f9de6`
+отправлен в `origin/main`, GitHub Actions run `32962136475` завершён
+успешно, production развёрнут штатным macOS LaunchAgent. Аудит
+сохранён в `docs/archive/reviews/`, а принятые изменения описаны в
+`docs/REVIEW_REMEDIATION_2026-08-26.md`.
 
-## Что реализовано
+## Что доведено до контракта
 
-- Закрыты подтверждённые пункты повторного аудита: ORM/CI schema drift,
-  recurrence reminder policy, interaction-state CAS, Groq runtime validation,
-  privacy rollback, delivery lease fencing, backup SLO/catch-up, truthful
-  callbacks и p95 nearest-rank.
-- Добавлен provider-independent application layer: строгие typed intents,
-  `IntentNormalizer`, `InteractionService`, `CommandBus` и typed
-  `CommandResult`. Детерминированные и LLM-команды проходят один контракт и
-  реестр исполнителей.
-- Voice, memoir, chronometry, project-completion и memoir callback переведены
-  на единый PostgreSQL interaction service. Consume workflow выполняется
-  атомарно под row lock.
-- Архитектура, operations/privacy и remediation evidence обновлены; review
-  сохранён в `docs/archive/reviews/`.
+- LLM critical path получил общий deadline, отключённые вложенные
+  SDK retries и детерминированное bounded history без отдельного
+  provider-вызова для compression.
+- Voice и memoir callbacks привязаны к session token и Telegram message ID;
+  устаревшие кнопки fail closed. Voice processing восстанавливается
+  после restart.
+- Memoir/chronometry writes и consume interaction state атомарны;
+  project state не теряется до успешного side effect.
+- Typed `CommandResult` доходит до Telegram adapter; delivery error path
+  fenced тем же lease token.
+- Privacy deletion получил crash-resumable journal. Backup marker сверяет
+  имя, размер, digest и sidecar metadata; полный SHA остаётся за
+  recovery drill.
+- Версия проекта поднята до `0.2.0`, coverage floor — до 45%.
 
 ## Quality evidence
 
-- Полный локальный suite с PostgreSQL: `202 passed`;
-- Ruff и mypy (`98 source files`): успешно;
-- Bandit medium/high, secret scan и `git diff --check`: успешно;
-- LLM contracts: 6/6 parser cases, 16/16 saved utterance cases;
-- Alembic upgrade/check: head `f4b8c2d6e1a0`, новых операций нет;
-- GitHub Actions: run `32876119870`, commit `6b1acad`, conclusion `success`.
+- Локально: `195 passed, 15 skipped`; все 15 PostgreSQL integration tests
+  отдельно прошли на одноразовом pgvector PostgreSQL.
+- Coverage 45,57% при floor 45%; Ruff, mypy (98 files), Bandit,
+  dependency audit, compileall, secret scan, LLM contracts и `git diff --check`
+  прошли.
+- Production Alembic: `f4b8c2d6e1a0 (head)`, schema drift нет.
+- GitHub Actions run `32962136475`: quality, secrets и container E2E зелёные.
 
-## Backup, recovery и production
+## Backup и recovery
 
 Перед deploy создан backup
-`/Users/moltbot/backups/notebook-bot/notebook_bot_2026-08-25_200832.sql.gz`
-(1 166 083 bytes, SHA-256
-`ed885fcf36d5b53e8cde6ead4675ceff1e8a7d67cd1395348d0f9e5bd9340a3d`).
-Gzip integrity и sidecar checksum подтверждены.
+`/Users/moltbot/backups/notebook-bot/notebook_bot_2026-08-26_141634.sql.gz`:
+1 176 284 байта, gzip integrity прошла, SHA-256
+`6fb7230527338f9e94d43b225c6eec86d11e31995129bbfd4bc2dd26889f7d3a`
+совпал с sidecar.
 
-Recovery drill запущен через установленный LaunchAgent, потому что прямой
-Codex tool context не получает пользовательский Keychain access. Drill завершён
-exit code 0: 20 public tables, migration `f4b8c2d6e1a0`, 1 user, 115 tasks,
-3 delivery batches, RTO 0,29 секунды; disposable database удалена.
+Recovery drill запущен через `com.notebook-bot-recovery-drill`, чтобы
+Keychain читался в реальном Aqua user context. Exit code 0: 20 public
+tables, 2 users, 115 tasks, 7 delivery batches, migration head, RTO 0,60 с.
+Disposable restore database удалена.
 
-Production установлен `platform/macos/install.sh`. После финальной очистки
-native STT workers LaunchAgent `com.notebook-bot` работает одним экземпляром с
-PID `1826`, singleton lease получен, Telegram polling активен, preflight и
-Whisper warm-up прошли.
+## Production acceptance
 
-## Live E2E и найденная host-проблема
+`platform/macos/install.sh` перезагрузил только `com.notebook-bot`.
+Старый PID `1826` корректно освободил singleton lease; новый PID
+`7044` пережил весь live gate без restart. Активен один
+`python -m bot.main`; tmux-дубля DailyPlanner нет. Singleton, Telegram
+polling, PostgreSQL preflight, Ollama embedding и Whisper medium warm-up
+подтверждены.
 
-Dedicated E2E user `8514454144` оказался удалён до релиза. Его allowlisted
-prerequisite восстановлена только для тестового аккаунта; проверка onboarding
-дала 3/3 PASS. После этого полный live run прошёл все 78 non-voice сценариев,
-но voice-сценарии попали под тяжёлую внешнюю CPU-нагрузку. Отчёт:
-`/Users/moltbot/Projects/userbot/tests_dailyplanner/results/`
-`report_20260825_221438.md`.
+Полный live runner завершил `82/82 PASS` за 846 с, включая `/status`,
+reminders, callbacks, export, prompt injection и 4 voice/STT сценария.
+Pre-cleanup и mandatory teardown успешны. Отчёт:
+`/Users/moltbot/Projects/userbot/tests_dailyplanner/results/report_20260826_164524.md`.
 
-Диагностика Mac mini обнаружила пять orphan процессов
-`payload ... generate:types` из `/Users/moltbot/Projects/studio`, каждый
-потреблял около одного CPU core. Load достигал 32,8 при 0% idle; memory pressure
-оставался нормальным и swap не использовался. Две точные группы были завершены
-через TERM, CPU временно восстановился до 72–80% idle. На здоровом CPU
-изолированный voice gate прошёл 4/4 за 51 секунду:
-`report_20260826_084357.md`. Таким образом, все 82 product-контракта получили
-PASS evidence в последовательных 78/78 + 4/4 прогонах, teardown обоих запусков
-успешен.
+Post-load SLO snapshot: reminders lag 0 с, pending 0, target 120 с; backup age
+2,5 ч, artifact `metadata-ok`, target 30 ч. Все status `ok`.
 
-Источник Studio generators остаётся внешним инфраструктурным follow-up: после
-двух остановок процессы появились снова с PPID 1. Kill-loop прекращён согласно
-operations policy; требуется найти automation/session, которая повторно
-запускает `payload generate:types`. Это не дефект DailyPlanner, но при высокой
-нагрузке локальный Whisper может превысить 90-секундный timeout.
-На финальной контрольной сверке `pgrep` уже не находил generators без третьего
-TERM, однако источник повторного запуска не установлен, поэтому риск рецидива
-остаётся открытым.
-
-## Связанный userbot runner
-
-Voice Q1 теперь ждёт confirm-кнопки, а не считает промежуточное
-«Распознаю…» завершением кейса; это исключает параллельный запуск Q1/Q3.
-Изменение зафиксировано локальным commit `0521822` в
-`/Users/moltbot/Projects/userbot`. У checkout нет remote; посторонние untracked
-`REVIEW_2026-08-19.md` и `tests_kuzya/*` не изменялись.
+В stderr во время voice проб остаётся известное macOS/PyAV
+Objective-C duplicate-class warning. Оно не вызвало crash, restart или
+деградацию: все 4 voice сценария прошли. Внешний host-risk
+с recurring Studio `payload generate:types` остаётся отдельной
+инфраструктурной задачей и не является дефектом DailyPlanner.
 
 ## Состояние для следующей сессии
 
-Product release завершён и работает. Следующую сессию начать с read-only
-проверки источника recurring Studio `generate:types`, затем повторить единый
-82/82 live gate при устойчивом CPU idle. Не продолжать безадресный kill-loop и
-не перезапускать DailyPlanner: текущий PID здоров, а причина STT degradation
-находится вне приложения.
+Релиз `0.2.0` завершён и принят. При восстановлении контекста
+начать с `43f9de6`, CI `32962136475`, PID `7044` и этого handoff.
+Новых применимых пунктов review не осталось; следующую продуктовую
+работу начинать как новый этап, а не как продолжение remediation.
