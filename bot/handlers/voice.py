@@ -284,19 +284,26 @@ async def cb_voice_confirm(callback: CallbackQuery) -> None:
     )
 
     # Обрабатываем распознанный текст через LLM
-    from bot.handlers.messages import process_text_message
+    from bot.handlers.messages import MessageOutcome, process_text_message
     try:
-        await process_text_message(user_id, text, message)
+        outcome = await process_text_message(user_id, text, message)
     except Exception:
+        logger.exception("Voice command failed; confirmation remains retryable")
+        outcome = MessageOutcome.RETRYABLE_ERROR
+    if outcome != MessageOutcome.COMPLETED:
         retry_payload = {**state.payload, "phase": "failed"}
-        await _persist_voice_state(
+        restored = await _persist_voice_state(
             user_id,
             "voice_confirm",
             retry_payload,
             expected_type="voice_processing",
             expected_token=session_token,
         )
-        logger.exception("Voice command failed; confirmation remains retryable")
+        if not restored:
+            await message.edit_text(
+                "Сессия истекла. Отправь голосовое ещё раз.", reply_markup=None
+            )
+            return
         await message.edit_text(
             f"🎤 {text}\n\nНе удалось выполнить команду. Можно повторить.",
             parse_mode=None,

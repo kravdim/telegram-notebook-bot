@@ -29,6 +29,7 @@ async def test_voice_confirm_processes_transcript(monkeypatch):
 
     async def fake_process_text_message(user_id, text, message):
         processed.append((user_id, text, message))
+        return messages.MessageOutcome.COMPLETED
 
     monkeypatch.setattr(messages, "process_text_message", fake_process_text_message)
     async def load_state(user_id, state_type):
@@ -51,6 +52,52 @@ async def test_voice_confirm_processes_transcript(monkeypatch):
     assert "Выполняю" in callback.message.edits[0][0]
     assert processed == [(42, "Купить кофе завтра", callback.message)]
     assert 42 not in voice._pending_transcripts
+
+
+@pytest.mark.asyncio
+async def test_voice_confirm_keeps_retry_after_handled_pipeline_error(monkeypatch):
+    from types import SimpleNamespace
+
+    transitions = []
+
+    async def load_state(user_id, state_type):
+        return SimpleNamespace(
+            state_type="voice_confirm",
+            payload={
+                "session_token": "session-b",
+                "message_id": 999,
+                "transcript": "напомни про кофе",
+            },
+        )
+
+    async def persist(
+        user_id,
+        state_type,
+        payload,
+        *,
+        expected_type=None,
+        expected_token=None,
+    ):
+        transitions.append((state_type, expected_type, payload["phase"]))
+        return True
+
+    async def handled_failure(user_id, text, message):
+        await message.answer("Изменение не выполнено")
+        return messages.MessageOutcome.RETRYABLE_ERROR
+
+    monkeypatch.setattr(voice, "_load_voice_state", load_state)
+    monkeypatch.setattr(voice, "_persist_voice_state", persist)
+    monkeypatch.setattr(messages, "process_text_message", handled_failure)
+
+    callback = FakeCallback(user_id=42, data="voice_confirm:session-b")
+    await voice.cb_voice_confirm(callback)
+
+    assert transitions == [
+        ("voice_processing", "voice_confirm", "processing"),
+        ("voice_confirm", "voice_processing", "failed"),
+    ]
+    assert "Можно повторить" in callback.message.edits[-1][0]
+    assert callback.message.edits[-1][1]["reply_markup"] is not None
 
 
 @pytest.mark.asyncio

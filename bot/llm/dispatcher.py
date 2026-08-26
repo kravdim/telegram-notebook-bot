@@ -210,6 +210,10 @@ async def _exec_respond(user_id: int, args: Dict[str, Any], tz: str) -> str:
     return str(args["message"])
 
 
+async def _exec_clarify(user_id: int, args: Dict[str, Any], tz: str) -> str:
+    return str(args["question"])
+
+
 async def _exec_search(user_id: int, args: Dict[str, Any], tz: str) -> str:
     return await _handle_search(user_id, args)
 
@@ -242,6 +246,7 @@ _COMMAND_EXECUTORS: Dict[ToolName, _CommandExecutor] = {
     "add_birthday": _exec_add_birthday,
     "get_advice": _exec_get_advice,
     "respond_to_user": _exec_respond,
+    "clarify_request": _exec_clarify,
     "search": _exec_search,
     "update_task": _exec_update_task,
     "delete_task": _exec_delete_task,

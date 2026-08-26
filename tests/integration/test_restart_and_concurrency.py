@@ -3,12 +3,16 @@
 import asyncio
 import os
 import uuid
+from types import SimpleNamespace
 
 import pendulum
 import pytest
 import pytest_asyncio
+import yaml
 from sqlalchemy import delete, select
 
+import bot.handlers.messages as message_handler
+import scripts.delete_user_data as deletion_script
 from bot.db.crud.interaction_states import (
     claim_state,
     clear_state_if_type,
@@ -25,13 +29,16 @@ from bot.db.models import (
     FsmState,
     LlmLog,
     Note,
+    OperationalState,
     ProcessedRequest,
     Project,
     Reminder,
     Task,
     User,
 )
+from bot.llm.dispatcher import dispatch_result
 from bot.runtime.singleton import SingletonLease
+from bot.scheduler.reminders import send_pending_reminders
 from bot.services.delivery import DeliveryPartSpec, deliver_batch
 from bot.services.tasks import complete_task_workflow
 from bot.services.user_deletion import delete_user_data, user_data_counts
@@ -125,6 +132,64 @@ async def test_verified_user_deletion_removes_cascades_logs_and_fsm():
 
 
 @pytest.mark.asyncio
+async def test_privacy_deletion_runs_again_after_same_id_reonboards(
+    tmp_path, monkeypatch
+):
+    user_id = 8_075_000_000 + int(uuid.uuid4().hex[:6], 16)
+    config_path = tmp_path / "config.yaml"
+
+    def write_access() -> None:
+        config_path.write_text(
+            yaml.safe_dump({"bot": {"allowed_telegram_ids": [user_id]}}),
+            encoding="utf-8",
+        )
+
+    write_access()
+    monkeypatch.setattr(deletion_script.settings, "admin_telegram_ids", [])
+    monkeypatch.setattr(deletion_script.settings, "allow_all_users", False)
+    monkeypatch.setattr(deletion_script.settings, "allowed_telegram_ids", [user_id])
+    args = SimpleNamespace(
+        telegram_id=user_id,
+        execute=True,
+        confirm=f"DELETE-{user_id}",
+        config=config_path,
+    )
+
+    async with async_session() as first_generation:
+        first_generation.add(User(telegram_id=user_id, username="privacy-generation-1"))
+        await first_generation.commit()
+        first_generation.add(Task(user_id=user_id, title="first private task"))
+        await first_generation.commit()
+
+    first = await deletion_script.run(args)
+    assert first["mode"] == "executed"
+    async with async_session() as first_journal_session:
+        first_journal = await first_journal_session.get(
+            OperationalState, f"privacy.deletion.{user_id}"
+        )
+        first_operation_id = first_journal.value["operation_id"]
+
+    write_access()
+    async with async_session() as second_generation:
+        second_generation.add(User(telegram_id=user_id, username="privacy-generation-2"))
+        await second_generation.commit()
+        second_generation.add(Task(user_id=user_id, title="second private task"))
+        await second_generation.commit()
+
+    second = await deletion_script.run(args)
+    assert second["mode"] == "executed"
+    assert not any(second["verification_counts"].values())
+    async with async_session() as verification:
+        assert not any((await user_data_counts(verification, user_id)).values())
+        journal = await verification.get(
+            OperationalState, f"privacy.deletion.{user_id}"
+        )
+        assert journal.value["operation_id"] != first_operation_id
+        await verification.delete(journal)
+        await verification.commit()
+
+
+@pytest.mark.asyncio
 async def test_skip_locked_and_repeated_delivery_do_not_duplicate_occurrence():
     user_id = 8_100_000_000 + int(uuid.uuid4().hex[:6], 16)
     now = pendulum.now("UTC").subtract(minutes=5)
@@ -150,6 +215,61 @@ async def test_skip_locked_and_repeated_delivery_do_not_duplicate_occurrence():
         assert len(occurrences) == 2
         await restarted.execute(delete(User).where(User.telegram_id == user_id))
         await restarted.commit()
+
+
+@pytest.mark.asyncio
+async def test_live_reminder_phrase_creates_row_and_delivers_push():
+    user_id = 8_125_000_000 + int(uuid.uuid4().hex[:6], 16)
+    marker = f"DP-{uuid.uuid4().hex[:8]}-чай"
+    text = f"слушай напомни через 2 минуты {marker} попить, а то забуду"
+    async with async_session() as setup:
+        setup.add(User(telegram_id=user_id, username="live-reminder-regression"))
+        await setup.commit()
+
+    tool, arguments = message_handler._extract_common_mutation(
+        text, "Europe/Moscow"
+    )
+    assert tool == "create_reminder"
+    result = await dispatch_result(
+        {"name": tool, "arguments": arguments}, user_id, "Europe/Moscow"
+    )
+    assert result.kind == "message"
+
+    async with async_session() as make_due:
+        reminder = (
+            await make_due.execute(
+                select(Reminder).where(
+                    Reminder.user_id == user_id,
+                    Reminder.message.contains(marker),
+                )
+            )
+        ).scalar_one()
+        reminder.remind_at = pendulum.now("UTC").subtract(seconds=1)
+        await make_due.commit()
+
+    class Bot:
+        def __init__(self):
+            self.sent = []
+
+        async def send_message(self, **kwargs):
+            self.sent.append(kwargs)
+            return SimpleNamespace(message_id=1)
+
+    bot = Bot()
+    await send_pending_reminders(bot)
+
+    assert len(bot.sent) == 1
+    assert bot.sent[0]["chat_id"] == user_id
+    assert marker in bot.sent[0]["text"]
+    async with async_session() as verification:
+        reminder = (
+            await verification.execute(
+                select(Reminder).where(Reminder.user_id == user_id)
+            )
+        ).scalar_one()
+        assert reminder.is_sent is True
+        await verification.execute(delete(User).where(User.telegram_id == user_id))
+        await verification.commit()
 
 
 @pytest.mark.asyncio

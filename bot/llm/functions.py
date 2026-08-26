@@ -201,4 +201,17 @@ FUNCTIONS = [
             "required": ["message"],
         },
     },
+    {
+        "name": "clarify_request",
+        "description": (
+            "Задать уточняющий вопрос, если для изменения не хватает "
+            "объекта, даты или другого обязательного параметра. "
+            "Никогда не используй для подтверждения успеха."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {"question": {"type": "string"}},
+            "required": ["question"],
+        },
+    },
 ]

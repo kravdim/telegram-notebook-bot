@@ -10,6 +10,7 @@ from bot.application.command_bus import (
 )
 from bot.application.intents import (
     AddBirthdayIntent,
+    ClarifyIntent,
     CreateTaskIntent,
     intent_from_parts,
 )
@@ -40,6 +41,14 @@ def test_unknown_command_argument_fails_closed():
         intent_from_parts("complete_task", {"search_query": "отчёт", "user_id": 1})
 
 
+def test_clarification_is_a_dedicated_non_mutating_intent():
+    intent = intent_from_parts(
+        "clarify_request", {"question": "Когда напомнить?"}
+    )
+    assert isinstance(intent, ClarifyIntent)
+    assert intent.arguments() == {"question": "Когда напомнить?"}
+
+
 @pytest.mark.asyncio
 async def test_command_bus_routes_typed_intent_without_provider_payload():
     bus = CommandBus()
@@ -68,4 +77,3 @@ def test_normalizer_preserves_raw_text_and_opaque_marker():
     assert normalized.text == "напомни через 30 минут про Б22-договор"
     assert normalized.opaque_marker == "Б22-договор"
     assert normalized.raw_text.startswith("напмни")
-

@@ -7,6 +7,7 @@ import logging
 import re
 import secrets
 import time
+from enum import StrEnum
 from typing import Optional
 
 from aiogram import F, Router
@@ -29,6 +30,15 @@ from bot.observability import metrics
 logger = logging.getLogger(__name__)
 
 router = Router()
+
+
+class MessageOutcome(StrEnum):
+    """Typed result of one complete inbound-message workflow."""
+
+    COMPLETED = "completed"
+    RETRYABLE_ERROR = "retryable_error"
+    REJECTED = "rejected"
+    DUPLICATE = "duplicate"
 
 _DONE_PATTERNS = [
     re.compile(r"^\s*(?P<title>.+?)\s*[-—–]\s*(?:сделал|сделала|сделано|готово|выполнено|выполнил|выполнила|закрыл|закрыто|решено|решил|решила)\s*[.!)]*\s*$", re.IGNORECASE),
@@ -184,7 +194,9 @@ async def _transition_persisted_interaction(
         return False
 
 
-async def process_text_message(user_id: int, text: str, message: Message) -> None:
+async def process_text_message(
+    user_id: int, text: str, message: Message
+) -> MessageOutcome:
     """Сериализовать полный pipeline сообщений одного пользователя."""
     request_started = time.monotonic()
     lock = _user_locks.setdefault(user_id, asyncio.Lock())
@@ -196,17 +208,24 @@ async def process_text_message(user_id: int, text: str, message: Message) -> Non
         claimed = await _claim_request(request_key, user_id)
         if claimed is False:
             await message.answer("Это сообщение уже обработано.")
-            return
+            return MessageOutcome.DUPLICATE
         try:
             pending_voice_edit = await _get_persisted_interaction(user_id, "voice_edit")
-            await _process_text_message_unlocked(user_id, text, message)
-            if pending_voice_edit:
+            outcome = await _process_text_message_unlocked(user_id, text, message)
+            outcome = outcome or MessageOutcome.COMPLETED
+            if pending_voice_edit and outcome == MessageOutcome.COMPLETED:
                 await _clear_persisted_interaction(
                     user_id,
                     "voice_edit",
                     pending_voice_edit.payload.get("session_token"),
                 )
-            await _finish_request(request_key, "completed")
+            await _finish_request(
+                request_key,
+                "failed"
+                if outcome == MessageOutcome.RETRYABLE_ERROR
+                else "completed",
+            )
+            return outcome
         except Exception:
             await _finish_request(request_key, "failed")
             raise
@@ -277,7 +296,9 @@ async def _finish_request(request_key: str, status: str) -> None:
         logger.debug("Не удалось завершить request_id: %s", e)
 
 
-async def _process_text_message_unlocked(user_id: int, text: str, message: Message) -> None:
+async def _process_text_message_unlocked(
+    user_id: int, text: str, message: Message
+) -> MessageOutcome | None:
     """Обработка текста: LLM → function call / ответ.
 
     Вызывается из handle_text и из voice confirm callback.
@@ -287,7 +308,7 @@ async def _process_text_message_unlocked(user_id: int, text: str, message: Messa
         await message.answer(
             "LLM-клиент не инициализирован. Обратитесь к администратору."
         )
-        return
+        return MessageOutcome.RETRYABLE_ERROR
 
     _close_dangling_history(user_id)
 
@@ -301,7 +322,7 @@ async def _process_text_message_unlocked(user_id: int, text: str, message: Messa
         add_message(user_id, "user", text)
         add_message(user_id, "assistant", reply)
         await message.answer(reply, parse_mode=None)
-        return
+        return MessageOutcome.REJECTED
 
     done_query = _extract_done_query(text)
     if done_query:
@@ -315,7 +336,7 @@ async def _process_text_message_unlocked(user_id: int, text: str, message: Messa
         add_message(user_id, "assistant", result)
         for part in split_message(result):
             await message.answer(part, parse_mode=None)
-        return
+        return MessageOutcome.COMPLETED
 
     reschedule_args = _extract_reschedule_request(text, user_tz)
     if reschedule_args:
@@ -329,7 +350,7 @@ async def _process_text_message_unlocked(user_id: int, text: str, message: Messa
         add_message(user_id, "assistant", result)
         for part in split_message(result):
             await message.answer(part, parse_mode=None)
-        return
+        return MessageOutcome.COMPLETED
 
     cancel_args = _extract_cancel_request(text)
     if cancel_args:
@@ -343,7 +364,7 @@ async def _process_text_message_unlocked(user_id: int, text: str, message: Messa
         add_message(user_id, "assistant", result)
         for part in split_message(result):
             await message.answer(part, parse_mode=None)
-        return
+        return MessageOutcome.COMPLETED
 
     pending_state = await _get_persisted_interaction(user_id, "complete_project")
     if pending_state:
@@ -366,7 +387,7 @@ async def _process_text_message_unlocked(user_id: int, text: str, message: Messa
         )
         if not claimed:
             await message.answer("Этот диалог уже обрабатывается или устарел.")
-            return
+            return MessageOutcome.DUPLICATE
         await message_bot(message).send_chat_action(chat_id=message.chat.id, action="typing")
         command_result = await dispatch_result(
             {
@@ -415,7 +436,11 @@ async def _process_text_message_unlocked(user_id: int, text: str, message: Messa
                 },
                 session_token,
             )
-        return
+        return (
+            MessageOutcome.RETRYABLE_ERROR
+            if command_result.kind == "error"
+            else MessageOutcome.COMPLETED
+        )
 
     if _PROJECT_DONE_RE.match(text):
         claimed = await _set_pending_interaction(user_id, "complete_project")
@@ -425,7 +450,7 @@ async def _process_text_message_unlocked(user_id: int, text: str, message: Messa
             await message.answer(
                 "Сначала заверши текущий диалог с ботом, затем закрой слона."
             )
-        return
+        return MessageOutcome.COMPLETED
 
     delete_query = _extract_explicit_delete(text)
     if delete_query:
@@ -461,7 +486,7 @@ async def _process_text_message_unlocked(user_id: int, text: str, message: Messa
             add_message(user_id, "assistant", result)
             for part in split_message(result):
                 await message.answer(part, parse_mode=None)
-        return
+        return MessageOutcome.COMPLETED
 
     cross_user_id = _extract_cross_user_request(text)
     if cross_user_id is not None and cross_user_id != user_id:
@@ -469,7 +494,7 @@ async def _process_text_message_unlocked(user_id: int, text: str, message: Messa
         add_message(user_id, "user", text)
         add_message(user_id, "assistant", reply)
         await message.answer(reply)
-        return
+        return MessageOutcome.COMPLETED
 
     combined_mutations = _extract_note_and_task_mutations(text)
     if combined_mutations:
@@ -483,7 +508,7 @@ async def _process_text_message_unlocked(user_id: int, text: str, message: Messa
         add_message(user_id, "assistant", reply)
         for part in split_message(reply):
             await message.answer(part, parse_mode=None)
-        return
+        return MessageOutcome.COMPLETED
 
     common_mutation = _extract_common_mutation(
         _normalize_common_intent_text(text), user_tz
@@ -503,7 +528,7 @@ async def _process_text_message_unlocked(user_id: int, text: str, message: Messa
         add_message(user_id, "assistant", result)
         for part in split_message(result):
             await message.answer(part, parse_mode=None)
-        return
+        return MessageOutcome.COMPLETED
 
     task_args = _extract_task_request(text, user_tz)
     if task_args:
@@ -517,7 +542,7 @@ async def _process_text_message_unlocked(user_id: int, text: str, message: Messa
         add_message(user_id, "assistant", result)
         for part in split_message(result):
             await message.answer(part, parse_mode=None)
-        return
+        return MessageOutcome.COMPLETED
 
     # Мемуарник имеет один источник истины — PostgreSQL state с TTL. Обычное
     # сообщение без явного reply никогда не считается ответом на вопрос.
@@ -539,7 +564,7 @@ async def _process_text_message_unlocked(user_id: int, text: str, message: Messa
             else:
                 await _save_memoir_answer(user_id, text, user_tz)
             await message.answer("📔 Записано в мемуарник! ✅")
-            return
+            return MessageOutcome.COMPLETED
 
     # Проверяем, ожидается ли ответ на хронометраж
     from bot.scheduler.chronometry import (
@@ -578,7 +603,7 @@ async def _process_text_message_unlocked(user_id: int, text: str, message: Messa
                 result = await process_chronometry_response(user_id, text, user_tz)
             clear_awaiting(user_id)
             await message.answer(result)
-            return
+            return MessageOutcome.COMPLETED
 
     # Typing indicator
     await message_bot(message).send_chat_action(chat_id=message.chat.id, action="typing")
@@ -617,13 +642,13 @@ async def _process_text_message_unlocked(user_id: int, text: str, message: Messa
         )
         add_message(user_id, "assistant", reply)
         await message.answer(reply)
-        return
+        return MessageOutcome.RETRYABLE_ERROR
     except Exception as e:
         logger.error("Ошибка LLM: %s", e, exc_info=True)
         reply = "Произошла ошибка при обработке. Попробуй ещё раз."
         add_message(user_id, "assistant", reply)
         await message.answer(reply)
-        return
+        return MessageOutcome.RETRYABLE_ERROR
 
     # Модели иногда имитируют успешную мутацию свободным текстом. Для явного
     # изменяющего запроса делаем один retry с обязательным вызовом tool.
@@ -646,18 +671,22 @@ async def _process_text_message_unlocked(user_id: int, text: str, message: Messa
             reply = "Не смог выполнить изменение. Уточни, что именно нужно сохранить."
             add_message(user_id, "assistant", reply)
             await message.answer(reply)
-            return
+            return MessageOutcome.RETRYABLE_ERROR
         if not _has_mutating_tool_call(response.function_calls):
-            clarification = _clarification_from_response(response)
+            clarification = _typed_clarification(response.function_calls)
             if clarification:
-                add_message(user_id, "assistant", clarification)
-                await message.answer(clarification, parse_mode=None)
-                return
+                reply = f"Нужно уточнение перед изменением: {clarification}"
+                add_message(user_id, "assistant", reply)
+                await message.answer(reply, parse_mode=None)
+                return MessageOutcome.REJECTED
             logger.error("Required tool retry returned no mutation: user=%s", user_id)
-            reply = "Не понял, что именно нужно сохранить. Уточни действие и объект."
+            reply = (
+                "Изменение не выполнено: AI-сервис не вернул "
+                "безопасную команду. Повтори запрос."
+            )
             add_message(user_id, "assistant", reply)
             await message.answer(reply)
-            return
+            return MessageOutcome.RETRYABLE_ERROR
 
     # Логирование в БД
     try:
@@ -681,12 +710,17 @@ async def _process_text_message_unlocked(user_id: int, text: str, message: Messa
     # Обработка ответа
     if response.function_calls:
         all_results = []
+        retryable_error = False
 
         for fc in response.function_calls:
             fc = _preserve_user_marker_in_call(text, fc)
             fc = _guard_relative_birthday(text, fc)
             command_result = await dispatch_result(fc, user_id, user_tz)
             result = command_result.text
+            if command_result.kind == "error":
+                retryable_error = True
+                all_results.append(result)
+                continue
 
             # Специальный случай: confirm удаления
             if command_result.kind == "confirm_delete":
@@ -799,6 +833,8 @@ async def _process_text_message_unlocked(user_id: int, text: str, message: Messa
             add_message(user_id, "assistant", combined)
             for part in split_message(combined):
                 await message.answer(part, parse_mode=None)
+        if retryable_error:
+            return MessageOutcome.RETRYABLE_ERROR
 
     elif response.content:
         # Ограничиваем длину свободного ответа (защита от prompt injection)
@@ -815,7 +851,7 @@ async def _process_text_message_unlocked(user_id: int, text: str, message: Messa
             )
             add_message(user_id, "assistant", reply)
             await message.answer(reply)
-            return
+            return MessageOutcome.RETRYABLE_ERROR
         if len(content) > 1000:
             content = content[:1000] + "..."
         add_message(user_id, "assistant", content)
@@ -824,12 +860,14 @@ async def _process_text_message_unlocked(user_id: int, text: str, message: Messa
         reply = "Не удалось обработать сообщение. Попробуй переформулировать."
         add_message(user_id, "assistant", reply)
         await message.answer(reply)
+        return MessageOutcome.RETRYABLE_ERROR
 
     # Provider-independent housekeeping must stay bounded and non-blocking.
     if needs_trimming(user_id):
         trim_started = time.monotonic()
         trim_history(user_id)
         metrics.observe("messages.context_trim_seconds", time.monotonic() - trim_started)
+    return MessageOutcome.COMPLETED
 
 
 @router.message(F.text.startswith("/"))
@@ -1159,14 +1197,17 @@ def _extract_common_mutation(text: str, tz: str) -> Optional[tuple[str, dict]]:
             )
 
     reminder = re.match(
-        r"^напомни\s+через\s+(?:(?P<half>пол\s*часа)|"
+        r"^(?:слушай,?\s*)?напомни\s+через\s+(?:(?P<half>пол\s*часа)|"
         r"(?P<minutes>\d+)\s*минут(?:у|ы)?)\s+(?P<body>.+)$",
         stripped,
         re.IGNORECASE,
     )
     if reminder:
         minutes = 30 if reminder.group("half") else int(reminder.group("minutes"))
-        body = reminder.group("body").strip(" .!?:;")
+        body = re.sub(
+            r",?\s+а\s+то\s+забуду[.!]*$", "", reminder.group("body"),
+            flags=re.IGNORECASE,
+        ).strip(" .!?:;")
         if minutes > 0 and body:
             remind_at = pendulum.now(tz).add(minutes=minutes).replace(second=0, microsecond=0)
             return (
@@ -1394,16 +1435,13 @@ def _looks_like_mutation_request(text: str) -> bool:
     return bool(_MUTATION_REQUEST_RE.search(stripped))
 
 
-def _clarification_from_response(response) -> str | None:
-    """Достать безопасное уточнение из forced-tool ответа модели."""
-    for call in response.function_calls:
-        if call.get("name") == "respond_to_user":
-            message = str(_function_arguments(call).get("message", "")).strip()
-            if message:
-                return message[:1000]
-    content = (response.content or "").strip()
-    if content and not _looks_like_fake_mutation(content):
-        return content[:1000]
+def _typed_clarification(function_calls: list[dict]) -> str | None:
+    """Accept only the dedicated non-mutating clarification tool."""
+    for call in function_calls:
+        if call.get("name") == "clarify_request":
+            question = str(_function_arguments(call).get("question", "")).strip()
+            if question:
+                return question[:1000]
     return None
 
 

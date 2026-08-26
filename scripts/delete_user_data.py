@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import uuid
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -68,16 +69,25 @@ async def run(args: argparse.Namespace) -> dict[str, object]:
             existing = await get_operational_state(session, operation_key)
             operation = existing.value if existing else None
             if operation and operation.get("phase") == "completed":
-                return {
-                    "mode": "already-completed",
-                    "telegram_id": user_id,
-                    "deleted_counts": operation.get("deleted_counts", {}),
-                    "verification": "all-user-data-zero",
-                    "whitelist_changed": operation.get("whitelist_changed", False),
-                }
+                current_counts = await user_data_counts(session, user_id)
+                await session.rollback()
+                current_whitelist = read_allowed_telegram_ids(args.config)
+                if not any(current_counts.values()) and user_id not in current_whitelist:
+                    return {
+                        "mode": "already-completed",
+                        "telegram_id": user_id,
+                        "deleted_counts": {},
+                        "verification": "all-user-data-zero",
+                        "verification_counts": current_counts,
+                        "whitelist_changed": False,
+                    }
+                # The same Telegram ID can legally onboard again. A completed
+                # journal describes one operation, not every future generation.
+                operation = None
             if not operation or operation.get("phase") == "rolled_back":
                 original_whitelist = read_allowed_telegram_ids(args.config)
                 operation = {
+                    "operation_id": str(uuid.uuid4()),
                     "phase": "prepared",
                     "telegram_id": user_id,
                     "original_whitelist": original_whitelist,
@@ -115,6 +125,7 @@ async def run(args: argparse.Namespace) -> dict[str, object]:
                     session,
                     operation_key,
                     {
+                        "operation_id": operation.get("operation_id"),
                         "phase": "completed",
                         "telegram_id": user_id,
                         "deleted_counts": counts,
@@ -139,12 +150,24 @@ async def run(args: argparse.Namespace) -> dict[str, object]:
                         journal_session,
                         operation_key,
                         {
+                            "operation_id": operation.get("operation_id"),
                             "phase": "rolled_back",
                             "telegram_id": user_id,
                             "whitelist_changed": operation_whitelist_changed,
                         },
                     )
                 raise database_error
+
+        async with async_session() as verification_session:
+            verification_counts = await user_data_counts(
+                verification_session, user_id
+            )
+            await verification_session.rollback()
+        remaining = {
+            name: count for name, count in verification_counts.items() if count
+        }
+        if remaining:
+            raise RuntimeError(f"post-delete verification failed: {remaining}")
     finally:
         await lease.release()
 
@@ -153,6 +176,7 @@ async def run(args: argparse.Namespace) -> dict[str, object]:
         "telegram_id": user_id,
         "deleted_counts": counts,
         "verification": "all-user-data-zero",
+        "verification_counts": verification_counts,
         "whitelist_changed": operation_whitelist_changed,
     }
 

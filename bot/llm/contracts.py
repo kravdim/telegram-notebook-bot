@@ -7,7 +7,7 @@ from pydantic import BaseModel, ConfigDict, Field
 ToolName = Literal[
     "create_task", "complete_task", "create_note", "create_diary_entry",
     "create_reminder", "list_tasks", "add_birthday", "get_advice",
-    "respond_to_user", "search", "update_task", "delete_task",
+    "respond_to_user", "clarify_request", "search", "update_task", "delete_task",
     "create_project", "complete_project",
 ]
 

@@ -47,6 +47,10 @@ operator recovery. A process crash or power loss between YAML and PostgreSQL is
 reconciled by repeating the exact same confirmed command: phases `prepared`,
 `access_revoked` and `completed` are idempotent, and an already completed
 operation returns its recorded content-free result.
+Completion is scoped to one operation generation. A later legal re-onboarding
+of the same Telegram ID is detected from fresh row counts and the current
+access list, and starts a new UUID-bound deletion operation. The command
+returns `already-completed` only after a new zero/access check.
 Backups age out under the retention policy; do not selectively rewrite immutable
 archives. Emergency deletion from backups requires destroying the affected
 archives and immediately creating and drilling a fresh backup.

@@ -31,6 +31,11 @@ handlers ──► IntentNormalizer / typed intents ◄── LLM adapter
    contains compatibility executors for existing use cases; moving them into
    smaller application services remains an explicit modularity follow-up, not
    a completed dependency inversion.
+   The inbound boundary additionally returns a typed `MessageOutcome`. Only
+   `completed` proves that a voice-confirmed workflow may discard its
+   transcript. Mutation requests fail closed unless a mutating `CommandResult`
+   was executed; `clarify_request` can request missing input but cannot claim a
+   side effect.
 3. `db/crud/` — repository boundary для операций одной сущности. Multi-row
    workflows живут в `services/`; task writes используют optimistic `version`
    guard и row locks там, где нужна межканальная идемпотентность.

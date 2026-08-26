@@ -513,7 +513,7 @@ async def test_free_text_fake_task_creation_is_blocked(monkeypatch):
     msg = FakeMessage("какая-то сложная формулировка", user_id=42)
     await messages.process_text_message(42, msg.text, msg)
 
-    assert "Не понял" in msg.answers[-1][0]
+    assert "Изменение не выполнено" in msg.answers[-1][0]
     assert get_history(42)[-1]["role"] == "assistant"
 
 
@@ -530,8 +530,8 @@ async def test_failed_mutation_is_closed_in_history_before_next_turn(monkeypatch
                 return FakeResponse(
                     function_calls=[
                         {
-                            "name": "respond_to_user",
-                            "arguments": {"message": "Когда напомнить и о чём?"},
+                            "name": "clarify_request",
+                            "arguments": {"question": "Когда напомнить и о чём?"},
                         }
                     ]
                 )
@@ -571,7 +571,9 @@ async def test_failed_mutation_is_closed_in_history_before_next_turn(monkeypatch
 
     first = FakeMessage("запомни что-нибудь важное", user_id=42)
     await messages.process_text_message(42, first.text, first)
-    assert first.answers[-1][0] == "Когда напомнить и о чём?"
+    assert first.answers[-1][0] == (
+        "Нужно уточнение перед изменением: Когда напомнить и о чём?"
+    )
     assert [item["role"] for item in get_history(42)] == ["user", "assistant"]
 
     second = FakeMessage("как дела?", user_id=42)
@@ -580,7 +582,13 @@ async def test_failed_mutation_is_closed_in_history_before_next_turn(monkeypatch
     third_call_messages = calls[2][0]
     assert third_call_messages[-3:] == [
         {"role": "user", "content": "запомни что-нибудь важное"},
-        {"role": "assistant", "content": "Когда напомнить и о чём?"},
+        {
+            "role": "assistant",
+            "content": (
+                "Нужно уточнение перед изменением: "
+                "Когда напомнить и о чём?"
+            ),
+        },
         {"role": "user", "content": "как дела?"},
     ]
     assert second.answers[-1][0] == "Я на связи."

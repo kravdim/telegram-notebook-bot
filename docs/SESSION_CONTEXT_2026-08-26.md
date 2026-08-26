@@ -1,5 +1,11 @@
 # Контекст reliability-релиза DailyPlanner — 26.08.2026
 
+> Post-remediation update: после этого handoff независимый live gate
+> `report_20260826_200026.md` дал 79/82 и отменил release acceptance.
+> P1/P2 исправлены в текущем локальном tree, но ещё не
+> зафиксированы/не развёрнуты. Актуальный план —
+> `REVIEW_REMEDIATION_2026-08-26_POST.md`; tag `v0.2.0` не создавался.
+
 ## Итог
 
 Аудит `REVIEW_2026-08-26.md` применён. Product commit `43f9de6`
@@ -73,7 +79,8 @@ Objective-C duplicate-class warning. Оно не вызвало crash, restart �
 
 ## Состояние для следующей сессии
 
-Релиз `0.2.0` завершён и принят. При восстановлении контекста
-начать с `43f9de6`, CI `32962136475`, PID `7044` и этого handoff.
-Новых применимых пунктов review не осталось; следующую продуктовую
-работу начинать как новый этап, а не как продолжение remediation.
+Production пока остаётся на `43f9de6`/PID `7044`; это healthy
+внутреннее состояние, но не release-accepted `0.2.0`. Следующий шаг:
+зафиксировать текущий remediation tree, дождаться CI, создать
+backup/recovery evidence, развернуть один LaunchAgent и повторить один
+чистый 82/82 gate. До этого tag запрещён.

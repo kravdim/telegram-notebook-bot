@@ -84,6 +84,12 @@
     "raw": {"name": "respond_to_user", "arguments": "{\"message\":\"Я не могу выполнять системные или опасные команды.\"}"}
   },
   {
+    "utterance": "Напомни мне",
+    "name": "clarify_request",
+    "expected_arguments": {"question": "О чём и когда напомнить?"},
+    "raw": {"name": "clarify_request", "arguments": "{\"question\":\"О чём и когда напомнить?\"}"}
+  },
+  {
     "utterance": "Каждый понедельник в девять планёрка",
     "name": "create_task",
     "expected_arguments": {"title": "Планёрка", "repeat_rule": "weekly:1"},

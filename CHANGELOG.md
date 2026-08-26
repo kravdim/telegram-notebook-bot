@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+- Made mutation responses fail closed unless a typed mutating command actually
+  completed; added a dedicated typed clarification intent and deterministic
+  routing for the failed live reminder phrase.
+- Added typed message outcomes so handled provider failures preserve voice
+  confirmation state and make the inbound request retryable.
+- Reopened completed privacy-deletion journals after legal re-onboarding using
+  operation generations and fresh verification counts.
+- Kept memoir skip state and its retry button when persistent cleanup fails.
+
 ## 0.2.0 — 2026-08-26
 
 - Removed provider-based context compression from the per-user critical path;

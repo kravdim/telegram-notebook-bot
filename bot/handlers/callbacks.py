@@ -45,16 +45,21 @@ async def cb_memoir_skip(callback: CallbackQuery) -> None:
             "Этот вопрос уже не активен.", reply_markup=None
         )
         return
-    await callback.answer("Пропущено")
     try:
         cleared = await interaction_service.clear(user_id, "memoir", session_token)
         if not cleared:
+            await callback.answer("Эта сессия уже устарела")
             await callback_message(callback).edit_text(
                 "Этот вопрос уже не активен.", reply_markup=None
             )
             return
     except Exception as exc:
         logger.warning("Не удалось очистить persistent memoir state: %s", exc)
+        await callback.answer(
+            "Не удалось пропустить. Попробуй ещё раз.", show_alert=True
+        )
+        return
+    await callback.answer("Пропущено")
     await callback_message(callback).edit_text(
         "📔 Сегодня без записи. Завтра спрошу снова.",
         reply_markup=None,

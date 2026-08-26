@@ -111,6 +111,9 @@ async def test_privacy_deletion_resumes_prepared_journal_after_yaml_change(
     async def delete_data(session, user_id):
         return {"users": 1, "tasks": 2}
 
+    async def zero_counts(session, user_id):
+        return {"users": 0, "tasks": 0}
+
     monkeypatch.setattr(
         deletion_script, "async_session", lambda: FakeSessionContext(FakeSession())
     )
@@ -118,6 +121,7 @@ async def test_privacy_deletion_resumes_prepared_journal_after_yaml_change(
     monkeypatch.setattr(deletion_script, "get_operational_state", get_operation)
     monkeypatch.setattr(deletion_script, "set_operational_state", set_operation)
     monkeypatch.setattr(deletion_script, "delete_user_data", delete_data)
+    monkeypatch.setattr(deletion_script, "user_data_counts", zero_counts)
     monkeypatch.setattr(deletion_script.settings, "admin_telegram_ids", [])
     monkeypatch.setattr(deletion_script.settings, "allow_all_users", False)
     monkeypatch.setattr(deletion_script.settings, "allowed_telegram_ids", [77])

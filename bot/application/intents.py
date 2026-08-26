@@ -124,6 +124,11 @@ class RespondIntent(_Intent):
     message: str = Field(min_length=1, max_length=4000)
 
 
+class ClarifyIntent(_Intent):
+    name: Literal["clarify_request"] = "clarify_request"
+    question: str = Field(min_length=1, max_length=1000)
+
+
 ApplicationIntent: TypeAlias = (
     CreateTaskIntent
     | UpdateTaskIntent
@@ -139,6 +144,7 @@ ApplicationIntent: TypeAlias = (
     | AddBirthdayIntent
     | GetAdviceIntent
     | RespondIntent
+    | ClarifyIntent
 )
 
 
@@ -157,6 +163,7 @@ _INTENT_MODELS: dict[ToolName, type[_Intent]] = {
     "add_birthday": AddBirthdayIntent,
     "get_advice": GetAdviceIntent,
     "respond_to_user": RespondIntent,
+    "clarify_request": ClarifyIntent,
 }
 
 
