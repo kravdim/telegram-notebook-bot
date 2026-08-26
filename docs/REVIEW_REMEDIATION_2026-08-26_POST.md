@@ -29,7 +29,7 @@
 - Memoir skip подтверждается только после успешного clear;
   при ошибке state и кнопка остаются активными.
 
-## Проверка до CI/deploy
+## Проверка
 
 - Unit/scenario: `203 passed, 17 skipped`.
 - Disposable PostgreSQL: `17 passed`, migrations from zero to
@@ -39,12 +39,17 @@
 - Ruff, mypy (98 files), Bandit medium/high, dependency audit, compileall,
   secret scan и `git diff --check`: PASS.
 - LLM fixtures: 6/6 parser cases, 17/17 utterance contracts.
+- Product commits: `7dd73f6` и live follow-up `5fa100c`; GitHub Actions
+  `32999761929` и `33004194325` зелёные.
+- Follow-up добавил детерминированные явный diary write и отклонение прошлых,
+  нулевых и некорректных дат; полный локальный pytest: `209 passed, 17 skipped`.
+- Production backup `notebook_bot_2026-08-26_212903.sql.gz` проверен по gzip и
+  SHA-256; recovery drill: 20 tables, migration head, RTO 0,47 с, exit 0.
+- Финальный unified live gate: `82/82 PASS` за 792 с, teardown успешен; отчёт
+  `report_20260826_223045.md`. Production PID `91533`, reminder/backup SLO `ok`.
 
-## Осталось до release acceptance
+## Перед annotated tag
 
-1. Product commit и зелёный CI на этом SHA.
-2. Production backup/recovery drill и deploy одного LaunchAgent.
-3. Один чистый live gate 82/82 с teardown и отдельный voice
-   handled-error fault check.
-4. Только после этого обновить release handoff и решать вопрос
-   об annotated `v0.2.0` tag.
+Остаётся отдельный документированный voice provider-error fault check. Unit
+fault-injection покрывает handled и thrown failure, но production provider
+намеренно не ломался в этом deploy-цикле. До этого `v0.2.0` не создавать.
