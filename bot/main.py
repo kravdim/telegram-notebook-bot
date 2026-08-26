@@ -143,6 +143,15 @@ async def main() -> None:
         await engine.dispose()
         return
 
+    from bot.application.interactions import interaction_service
+
+    recovered_interactions = await interaction_service.recover_interrupted()
+    if recovered_interactions:
+        logger.warning(
+            "Recovered interrupted interaction states: %d",
+            recovered_interactions,
+        )
+
     readiness_file = os.environ.get("READINESS_FILE")
     readiness = RuntimeReadiness(readiness_file) if readiness_file else None
 

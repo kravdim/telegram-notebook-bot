@@ -7,6 +7,7 @@ import bot.handlers.chronometry as chronometry_handler
 import bot.handlers.messages as messages
 import bot.handlers.voice as voice
 import bot.scheduler.chronometry as chronometry_scheduler
+from bot.application.command_bus import CommandResult
 from bot.llm.client import LLMUnavailableError
 from bot.llm.context import clear_all, get_history
 from tests.fakes import FakeMessage, FakeSessionContext
@@ -47,11 +48,23 @@ def reset_message_globals(monkeypatch):
     async def no_finish(*args, **kwargs):
         return None
 
-    async def no_state(*args, **kwargs):
-        return None
+    async def no_state(user_id, state_type):
+        current = pending_interactions.get(user_id)
+        if current != state_type:
+            return None
+        return SimpleNamespace(
+            state_type=state_type,
+            payload={"session_token": f"test-{user_id}"},
+        )
 
-    async def no_clear(*args, **kwargs):
-        return None
+    async def no_clear(user_id, state_type, session_token=None):
+        if pending_interactions.get(user_id) == state_type:
+            pending_interactions.pop(user_id, None)
+            return True
+        return False
+
+    async def transition_memory(user_id, state_type, payload, session_token):
+        return pending_interactions.get(user_id) == state_type
 
     async def consume_memory(user_id):
         return pending_interactions.pop(user_id, None)
@@ -66,6 +79,9 @@ def reset_message_globals(monkeypatch):
     monkeypatch.setattr(messages, "_finish_request", no_finish)
     monkeypatch.setattr(messages, "_get_persisted_interaction", no_state)
     monkeypatch.setattr(messages, "_clear_persisted_interaction", no_clear)
+    monkeypatch.setattr(
+        messages, "_transition_persisted_interaction", transition_memory
+    )
     monkeypatch.setattr(messages, "_consume_pending_interaction", consume_memory)
     monkeypatch.setattr(messages, "_set_pending_interaction", set_memory)
     monkeypatch.setattr(voice, "_load_voice_state", no_state)
@@ -341,7 +357,9 @@ async def test_explicit_reply_to_persisted_memoir_is_saved(monkeypatch):
     await messages.process_text_message(42, msg.text, msg)
 
     assert saved == [(42, "Сегодня помог родителям", "Europe/Moscow")]
-    assert cleared == [(42, "memoir")]
+    # State deletion is part of the same transaction as memoir + diary writes;
+    # the handler no longer clears it before the durable side effect.
+    assert cleared == []
     assert "Записано в мемуарник" in msg.answers[-1][0]
 
 
@@ -441,13 +459,13 @@ async def test_project_completion_waits_for_title_and_dispatches(monkeypatch):
     async def fake_get_user(session, user_id):
         return SimpleNamespace(timezone="Europe/Moscow")
 
-    async def fake_dispatch(function_call, user_id, user_tz):
+    async def fake_dispatch_result(function_call, user_id, user_tz):
         calls.append(function_call)
-        return "Слон «Настройка Телеграм бота DailyPlanner» закрыт ✅"
+        return CommandResult("Слон «Настройка Телеграм бота DailyPlanner» закрыт ✅")
 
     monkeypatch.setattr(messages, "async_session", lambda: FakeSessionContext())
     monkeypatch.setattr(messages, "get_user", fake_get_user)
-    monkeypatch.setattr(messages, "dispatch", fake_dispatch)
+    monkeypatch.setattr(messages, "dispatch_result", fake_dispatch_result)
     monkeypatch.setattr(chronometry_scheduler, "is_awaiting_response", lambda user_id: False)
 
     first = FakeMessage("Слона тоже закрыли", user_id=42)
@@ -594,14 +612,14 @@ async def test_llm_multiple_function_calls_are_dispatched(monkeypatch):
 
     dispatched = []
 
-    async def fake_dispatch(fc, user_id, tz):
+    async def fake_dispatch_result(fc, user_id, tz):
         dispatched.append(fc["name"])
-        return f"done:{fc['name']}"
+        return CommandResult(f"done:{fc['name']}")
 
     monkeypatch.setattr(messages, "async_session", lambda: FakeSessionContext())
     monkeypatch.setattr(messages, "get_user", fake_get_user)
     monkeypatch.setattr(messages, "get_prompt", fake_get_prompt)
-    monkeypatch.setattr(messages, "dispatch", fake_dispatch)
+    monkeypatch.setattr(messages, "dispatch_result", fake_dispatch_result)
     monkeypatch.setattr(messages, "llm_queue", Queue())
     monkeypatch.setattr("bot.db.crud.llm_logs.log_llm_request", fake_log)
     monkeypatch.setattr(chronometry_scheduler, "is_awaiting_response", lambda user_id: False)
@@ -632,8 +650,12 @@ async def test_confirm_delete_result_builds_keyboard(monkeypatch):
     async def fake_log(*args, **kwargs):
         return None
 
-    async def fake_dispatch(fc, user_id, tz):
-        return "CONFIRM_DELETE:abc123:Старая задача"
+    async def fake_dispatch_result(fc, user_id, tz):
+        return CommandResult(
+            "CONFIRM_DELETE:abc123:Старая задача",
+            "confirm_delete",
+            {"task_id": "abc123", "title": "Старая задача"},
+        )
 
     class FakeKeyboard:
         def as_markup(self):
@@ -642,7 +664,7 @@ async def test_confirm_delete_result_builds_keyboard(monkeypatch):
     monkeypatch.setattr(messages, "async_session", lambda: FakeSessionContext())
     monkeypatch.setattr(messages, "get_user", fake_get_user)
     monkeypatch.setattr(messages, "get_prompt", fake_get_prompt)
-    monkeypatch.setattr(messages, "dispatch", fake_dispatch)
+    monkeypatch.setattr(messages, "dispatch_result", fake_dispatch_result)
     monkeypatch.setattr(messages, "llm_queue", Queue())
     monkeypatch.setattr(callbacks, "build_delete_confirm_keyboard", lambda task_id: FakeKeyboard())
     monkeypatch.setattr("bot.db.crud.llm_logs.log_llm_request", fake_log)

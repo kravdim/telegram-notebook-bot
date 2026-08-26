@@ -155,7 +155,7 @@ bot/
 │   ├── dispatcher.py           # Исполнение function calls + валидация
 │   ├── decompose.py            # LLM-декомпозиция проектов на бифштексы
 │   ├── prompts.py              # Промпты из БД + 5-мин кэш
-│   └── context.py              # История диалога + компрессия
+│   └── context.py              # Детерминированное bounded recent-window
 ├── db/
 │   ├── engine.py               # Async engine + session factory
 │   ├── models.py               # SQLAlchemy модели (19 таблиц)
@@ -302,6 +302,7 @@ Telegram-сообщения дедуплицируются в PostgreSQL.
 
 ```yaml
 llm:
+  total_timeout_sec: 50         # общий deadline main/retry/fallback
   main:
     provider: minimax
     model: MiniMax-M2.7

@@ -1,4 +1,6 @@
 llm:
+  # One deadline for the complete main/retry/fallback chain.
+  total_timeout_sec: 50
   main:
     provider: minimax
     model: MiniMax-M2.7

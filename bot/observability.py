@@ -139,9 +139,16 @@ def backup_artifact_status(value: dict) -> tuple[bool, str]:
     """Verify that the persisted backup marker still points to its archive."""
     filename = value.get("file")
     expected_bytes = value.get("bytes")
+    expected_digest = value.get("sha256")
     if not isinstance(filename, str) or Path(filename).name != filename:
         return False, "invalid-marker"
-    if not isinstance(expected_bytes, int) or expected_bytes <= 0:
+    if (
+        not isinstance(expected_bytes, int)
+        or expected_bytes <= 0
+        or not isinstance(expected_digest, str)
+        or len(expected_digest) != 64
+        or any(character not in "0123456789abcdef" for character in expected_digest)
+    ):
         return False, "invalid-marker"
     backup_dir = Path(
         os.environ.get("BACKUP_DIR", str(Path.home() / "backups" / "notebook-bot"))
@@ -167,7 +174,9 @@ def backup_artifact_status(value: dict) -> tuple[bool, str]:
         or any(character not in "0123456789abcdefABCDEF" for character in digest)
     ):
         return False, "checksum-marker-invalid"
-    return True, "ok"
+    if digest.lower() != expected_digest:
+        return False, "checksum-marker-mismatch"
+    return True, "metadata-ok"
 
 
 @asynccontextmanager

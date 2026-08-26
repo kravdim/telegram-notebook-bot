@@ -26,9 +26,11 @@ handlers ──► IntentNormalizer / typed intents ◄── LLM adapter
    обязаны жить в application service (например, task completion workflow).
 2. `application/intents.py` is the provider-independent command contract.
    Deterministic rules and `llm/contracts.py` both enter the same typed command
-   bus; unknown tools and fields fail closed. `llm/dispatcher.py` is now an
-   adapter from provider calls to stable business handlers, not an intent
-   router.
+   bus; unknown tools and fields fail closed. Typed `CommandResult` reaches the
+   Telegram adapter without sentinel-string parsing. `llm/dispatcher.py` still
+   contains compatibility executors for existing use cases; moving them into
+   smaller application services remains an explicit modularity follow-up, not
+   a completed dependency inversion.
 3. `db/crud/` — repository boundary для операций одной сущности. Multi-row
    workflows живут в `services/`; task writes используют optimistic `version`
    guard и row locks там, где нужна межканальная идемпотентность.
@@ -42,9 +44,11 @@ handlers ──► IntentNormalizer / typed intents ◄── LLM adapter
    handlers never hold the complete ZIP payload in process memory.
 7. Multi-step interaction workflows have one PostgreSQL slot per user and are
    accessed through `application/interactions.py`. Claims, transitions and
-   clears are compare-and-set operations; schedulers must not replace voice,
-   chronometry, memoir or project-completion state owned by another workflow.
-   Process-local flags are not a source of truth.
+   clears are compare-and-set operations by type and session token. Voice and
+   memoir callbacks additionally verify the originating Telegram message ID;
+   stale buttons cannot mutate a newer session. Memoir and chronometry finish
+   their domain write and state deletion in one transaction. Process-local
+   flags are caches only, never a source of truth.
 8. `application/normalizer.py` performs only conservative, meaning-preserving
    normalization and retains opaque user markers. Language-provider heuristics
    do not belong in domain services.

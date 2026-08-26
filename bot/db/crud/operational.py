@@ -19,7 +19,7 @@ async def get_operational_state(
 
 
 async def set_operational_state(
-    session: AsyncSession, key: str, value: dict
+    session: AsyncSession, key: str, value: dict, *, commit: bool = True
 ) -> OperationalState:
     row = await get_operational_state(session, key)
     if row:
@@ -28,6 +28,9 @@ async def set_operational_state(
     else:
         row = OperationalState(key=key, value=value)
         session.add(row)
-    await session.commit()
+    if commit:
+        await session.commit()
+    else:
+        await session.flush()
     await session.refresh(row)
     return row

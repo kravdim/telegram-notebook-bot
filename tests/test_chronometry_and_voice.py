@@ -28,10 +28,10 @@ def test_chronometry_reaction_sanitizes_unknown_results():
 
 def test_voice_edit_state_is_consumed_once():
     user_id = 777
-    _awaiting_edit.add(user_id)
-    _pending_transcripts[user_id] = "старый текст"
+    _awaiting_edit[user_id] = "test-session"
+    _pending_transcripts[(user_id, "test-session")] = "старый текст"
 
     assert consume_voice_edit(user_id) is True
     assert user_id not in _awaiting_edit
-    assert user_id not in _pending_transcripts
+    assert (user_id, "test-session") not in _pending_transcripts
     assert consume_voice_edit(user_id) is False

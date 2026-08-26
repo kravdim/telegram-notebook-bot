@@ -31,7 +31,10 @@ def init(client: LLMClient, queue: LLMQueue) -> None:
 
 
 async def process_chronometry_response(
-    user_id: int, text: str, user_tz: str,
+    user_id: int,
+    text: str,
+    user_tz: str,
+    session_token: str | None = None,
 ) -> str:
     """Обработать ответ на вопрос хронометража через LLM."""
     if not _llm_client or not _llm_queue:
@@ -97,6 +100,8 @@ async def process_chronometry_response(
             score = None
 
         async with async_session() as session:
+            from bot.db.crud.interaction_states import clear_state_if_type
+
             user = await get_user(session, user_id)
             interval = user.chronometry_interval_min if user else 15
             duration_minutes = max(1, interval)
@@ -119,6 +124,7 @@ async def process_chronometry_response(
                 matched_task_id=matched_task_id,
                 bot_reaction=data.get("reaction_text", ""),
                 duration_minutes=max(1, duration_minutes),
+                commit=False,
             )
             pause_minutes = _chrono_pause_minutes(text, category)
             last_asked = now
@@ -127,8 +133,20 @@ async def process_chronometry_response(
             await update_user_settings(
                 session,
                 user_id,
+                commit=False,
                 chronometry_last_asked=last_asked,
             )
+            if session_token is not None:
+                cleared = await clear_state_if_type(
+                    session,
+                    user_id,
+                    "chronometry",
+                    session_token,
+                    commit=False,
+                )
+                if not cleared:
+                    raise RuntimeError("chronometry interaction ownership was lost")
+            await session.commit()
 
         reaction = _sanitize_reaction(text, data.get("reaction_text", "Записал!"))
         if _is_plain_reaction(reaction):
@@ -139,6 +157,8 @@ async def process_chronometry_response(
         logger.error("Ошибка обработки хронометража: %s", e)
         # Даже при ошибке LLM — записываем
         async with async_session() as session:
+            from bot.db.crud.interaction_states import clear_state_if_type
+
             user = await get_user(session, user_id)
             duration_minutes = user.chronometry_interval_min if user else 15
             await create_time_entry(
@@ -147,7 +167,20 @@ async def process_chronometry_response(
                 activity_text=text,
                 category="unknown",
                 duration_minutes=duration_minutes,
+                commit=False,
             )
+            if session_token is not None:
+                cleared = await clear_state_if_type(
+                    session,
+                    user_id,
+                    "chronometry",
+                    session_token,
+                    commit=False,
+                )
+                if not cleared:
+                    await session.rollback()
+                    return "Этот вопрос хронометража уже не активен."
+            await session.commit()
         return "Записал ✅"
 
 

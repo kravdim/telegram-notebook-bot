@@ -1,3 +1,4 @@
+import hashlib
 from types import SimpleNamespace
 
 import pendulum
@@ -76,13 +77,18 @@ def test_backup_artifact_requires_archive_size_and_sidecar(tmp_path, monkeypatch
     monkeypatch.setenv("BACKUP_DIR", str(tmp_path))
     archive = tmp_path / "notebook_bot_2026-08-25_030000.sql.gz"
     archive.write_bytes(b"backup")
-    marker = {"file": archive.name, "bytes": len(b"backup")}
+    digest = hashlib.sha256(b"backup").hexdigest()
+    marker = {"file": archive.name, "bytes": len(b"backup"), "sha256": digest}
 
     assert backup_artifact_status(marker) == (False, "checksum-missing")
     archive.with_suffix(".gz.sha256").write_text(
-        f"{'0' * 64}  {archive.name}\n", encoding="ascii"
+        f"{digest}  {archive.name}\n", encoding="ascii"
     )
-    assert backup_artifact_status(marker) == (True, "ok")
+    assert backup_artifact_status(marker) == (True, "metadata-ok")
+    assert backup_artifact_status({**marker, "sha256": "0" * 64}) == (
+        False,
+        "checksum-marker-mismatch",
+    )
     assert backup_artifact_status({**marker, "bytes": 999}) == (
         False,
         "size-mismatch",
@@ -127,11 +133,23 @@ async def test_privacy_deletion_restores_whitelist_when_database_fails(
     async def fail_delete(session, user_id):
         raise RuntimeError("database failed")
 
+    journal = {}
+
+    async def fake_get_operation(session, key):
+        value = journal.get(key)
+        return SimpleNamespace(value=value) if value else None
+
+    async def fake_set_operation(session, key, value, *, commit=True):
+        journal[key] = value
+        return SimpleNamespace(value=value)
+
     monkeypatch.setattr(
         deletion_script, "async_session", lambda: FakeSessionContext(Session())
     )
     monkeypatch.setattr(deletion_script, "SingletonLease", Lease)
     monkeypatch.setattr(deletion_script, "delete_user_data", fail_delete)
+    monkeypatch.setattr(deletion_script, "get_operational_state", fake_get_operation)
+    monkeypatch.setattr(deletion_script, "set_operational_state", fake_set_operation)
     monkeypatch.setattr(deletion_script.settings, "admin_telegram_ids", [])
     monkeypatch.setattr(deletion_script.settings, "allow_all_users", False)
     monkeypatch.setattr(deletion_script.settings, "allowed_telegram_ids", [42, 77])
@@ -147,3 +165,4 @@ async def test_privacy_deletion_restores_whitelist_when_database_fails(
 
     assert rolled_back == [True]
     assert read_allowed_telegram_ids(config_path) == [42, 77]
+    assert journal["privacy.deletion.42"]["phase"] == "rolled_back"

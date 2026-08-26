@@ -1,5 +1,6 @@
 """Планировщик мемуарника: вопрос ГСД + недельный/месячный ревью."""
 
+import hashlib
 import logging
 
 import pendulum
@@ -19,10 +20,10 @@ from bot.services.delivery import DeliveryPartSpec, DeliveryResult, deliver_batc
 logger = logging.getLogger(__name__)
 
 
-def build_memoir_keyboard():
+def build_memoir_keyboard(session_token: str):
     """Кнопка позволяет явно закрыть ожидание ответа."""
     kb = InlineKeyboardBuilder()
-    kb.button(text="Пропустить", callback_data="memoir_skip")
+    kb.button(text="Пропустить", callback_data=f"memoir_skip:{session_token}")
     return kb.as_markup()
 
 
@@ -54,24 +55,25 @@ async def send_memoir_prompts(bot: Bot) -> None:
                     if not monthly.completed:
                         continue
 
-                if not await _claim_memoir_state(user.telegram_id):
+                session_token = _memoir_session_token(user.telegram_id, today)
+                if not await _claim_memoir_state(user.telegram_id, session_token):
                     continue
 
                 prompt = (
-                    await _send_weekly_review(bot, user, tz, today)
+                    await _send_weekly_review(bot, user, tz, today, session_token)
                     if now.day_of_week == pendulum.SUNDAY
-                    else await _send_prompt(bot, user, today)
+                    else await _send_prompt(bot, user, today, session_token)
                 )
                 if not prompt.completed:
-                    await _clear_memoir_state(user.telegram_id)
+                    await _clear_memoir_state(user.telegram_id, session_token)
                     continue
                 if not prompt.message_ids or prompt.message_ids[-1] is None:
-                    await _clear_memoir_state(user.telegram_id)
+                    await _clear_memoir_state(user.telegram_id, session_token)
                     continue
                 if not await _persist_memoir_state(
-                    user.telegram_id, prompt.message_ids[-1]
+                    user.telegram_id, prompt.message_ids[-1], session_token
                 ):
-                    await _clear_memoir_state(user.telegram_id)
+                    await _clear_memoir_state(user.telegram_id, session_token)
                     continue
 
                 async with async_session() as session:
@@ -107,7 +109,9 @@ async def _send_day_timeline(bot: Bot, user, tz: str, today=None) -> DeliveryRes
     )
 
 
-async def _send_weekly_review(bot: Bot, user, tz: str, today=None) -> DeliveryResult:
+async def _send_weekly_review(
+    bot: Bot, user, tz: str, today=None, session_token: str = "legacy"
+) -> DeliveryResult:
     """Отправить недельный ревью мемуарника."""
     async with async_session() as session:
         entries = await get_memoir_entries(session, user.telegram_id, limit=7)
@@ -122,7 +126,7 @@ async def _send_weekly_review(bot: Bot, user, tz: str, today=None) -> DeliveryRe
             user.telegram_id,
             format_memoir_question(),
             parse_mode="HTML",
-            reply_markup=build_memoir_keyboard(),
+            reply_markup=build_memoir_keyboard(session_token),
         )
     )
     today = today or pendulum.now(tz).date()
@@ -135,7 +139,7 @@ async def _send_weekly_review(bot: Bot, user, tz: str, today=None) -> DeliveryRe
     )
 
 
-async def _send_prompt(bot: Bot, user, today) -> DeliveryResult:
+async def _send_prompt(bot: Bot, user, today, session_token: str) -> DeliveryResult:
     return await deliver_batch(
         bot,
         delivery_key=f"memoir:prompt:{user.telegram_id}:{today.isoformat()}",
@@ -146,27 +150,48 @@ async def _send_prompt(bot: Bot, user, today) -> DeliveryResult:
                 user.telegram_id,
                 format_memoir_question(),
                 parse_mode="HTML",
-                reply_markup=build_memoir_keyboard(),
+                reply_markup=build_memoir_keyboard(session_token),
             )
         ],
     )
 
 
-async def _claim_memoir_state(user_id: int) -> bool:
+def _memoir_session_token(user_id: int, day) -> str:
+    raw = f"memoir:{user_id}:{day.isoformat()}".encode()
+    return hashlib.sha256(raw).hexdigest()[:16]
+
+
+async def _claim_memoir_state(user_id: int, session_token: str) -> bool:
     """Reserve the user's interaction slot before sending a memoir question."""
     try:
-        state = await interaction_service.claim(user_id, "memoir", {}, 60)
+        state = await interaction_service.claim(
+            user_id,
+            "memoir",
+            {"session_token": session_token, "phase": "reserved"},
+            60,
+        )
         return state is not None
     except Exception as e:
         logger.warning("Не удалось сохранить ожидание мемуарника: %s", e)
         return False
 
 
-async def _persist_memoir_state(user_id: int, message_id: int) -> bool:
+async def _persist_memoir_state(
+    user_id: int, message_id: int, session_token: str
+) -> bool:
     """Attach the sent Telegram message to the reserved memoir state."""
     try:
         state = await interaction_service.transition(
-            user_id, "memoir", "memoir", {"message_id": message_id}, 60
+            user_id,
+            "memoir",
+            "memoir",
+            {
+                "message_id": message_id,
+                "session_token": session_token,
+                "phase": "pending",
+            },
+            60,
+            session_token,
         )
         return state is not None
     except Exception as e:
@@ -174,9 +199,11 @@ async def _persist_memoir_state(user_id: int, message_id: int) -> bool:
         return False
 
 
-async def _clear_memoir_state(user_id: int) -> None:
+async def _clear_memoir_state(
+    user_id: int, session_token: str | None = None
+) -> None:
     try:
-        await interaction_service.clear(user_id, "memoir")
+        await interaction_service.clear(user_id, "memoir", session_token)
     except Exception as e:
         logger.warning("Не удалось освободить ожидание мемуарника: %s", e)
 

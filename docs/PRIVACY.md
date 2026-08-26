@@ -35,14 +35,18 @@ when an environment whitelist differs from the persisted YAML whitelist. It
 also refuses to continue
 if the runtime still holds its PostgreSQL singleton lease. The deletion process
 holds that same lease to prevent a restart during the operation. It first
-removes access from the whitelist using an atomic YAML replacement, deletes the
+persists a PostgreSQL operation journal, removes access from the whitelist
+using an atomic YAML replacement, deletes the
 user, cascaded domain rows, LLM payloads and FSM state inside one database
 transaction, then re-counts every user-owned table before commit. Output
 contains only the ID, row counts, verification result and timestamp—not stored
 content. If deletion or verification fails, the database transaction rolls
 back and the original whitelist is atomically restored. If that compensating
 write also fails, the command exits with an explicit dual-failure error for
-operator recovery.
+operator recovery. A process crash or power loss between YAML and PostgreSQL is
+reconciled by repeating the exact same confirmed command: phases `prepared`,
+`access_revoked` and `completed` are idempotent, and an already completed
+operation returns its recorded content-free result.
 Backups age out under the retention policy; do not selectively rewrite immutable
 archives. Emergency deletion from backups requires destroying the affected
 archives and immediately creating and drilling a fresh backup.

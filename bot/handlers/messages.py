@@ -5,6 +5,8 @@ import hashlib
 import json
 import logging
 import re
+import secrets
+import time
 from typing import Optional
 
 from aiogram import F, Router
@@ -17,11 +19,12 @@ from bot.db.engine import async_session
 from bot.formatters import split_message
 from bot.handlers.telegram import message_bot
 from bot.llm.client import LLMClient, LLMUnavailableError
-from bot.llm.context import add_message, compress_history, get_history, needs_compression
-from bot.llm.dispatcher import dispatch
+from bot.llm.context import add_message, get_history, needs_trimming, trim_history
+from bot.llm.dispatcher import dispatch, dispatch_result
 from bot.llm.functions import FUNCTIONS
 from bot.llm.prompts import get_prompt
 from bot.llm.queue import PRIORITY_INTENT, LLMQueue
+from bot.observability import metrics
 
 logger = logging.getLogger(__name__)
 
@@ -127,20 +130,14 @@ def init(client: LLMClient, queue: LLMQueue) -> None:
 async def _set_pending_interaction(user_id: int, state_type: WorkflowType) -> bool:
     """Persist pending state without replacing another active workflow."""
     try:
-        return await interaction_service.claim(user_id, state_type) is not None
+        return await interaction_service.claim(
+            user_id,
+            state_type,
+            {"session_token": secrets.token_urlsafe(8), "phase": "pending"},
+        ) is not None
     except Exception as e:
         logger.warning("Не удалось сохранить interaction state: %s", e)
         return False
-
-
-async def _consume_pending_interaction(user_id: int) -> Optional[str]:
-    """Consume a persisted project-completion interaction state."""
-    try:
-        state = await interaction_service.consume(user_id, "complete_project")
-        return state.state_type if state else None
-    except Exception as e:
-        logger.warning("Не удалось прочитать interaction state: %s", e)
-        return None
 
 
 async def _get_persisted_interaction(user_id: int, state_type: WorkflowType):
@@ -152,28 +149,72 @@ async def _get_persisted_interaction(user_id: int, state_type: WorkflowType):
     return None
 
 
-async def _clear_persisted_interaction(user_id: int, state_type: WorkflowType) -> None:
+async def _consume_pending_interaction(user_id: int) -> Optional[str]:
+    """Compatibility probe; project state is intentionally no longer consumed."""
+    state = await _get_persisted_interaction(user_id, "complete_project")
+    return state.state_type if state else None
+
+
+async def _clear_persisted_interaction(
+    user_id: int, state_type: WorkflowType, session_token: str | None = None
+) -> bool:
     try:
-        await interaction_service.clear(user_id, state_type)
+        return await interaction_service.clear(user_id, state_type, session_token)
     except Exception as e:
         logger.debug("Не удалось очистить persisted state %s: %s", state_type, e)
+        return False
+
+
+async def _transition_persisted_interaction(
+    user_id: int,
+    state_type: WorkflowType,
+    payload: dict,
+    session_token: str | None,
+) -> bool:
+    try:
+        return await interaction_service.transition(
+            user_id,
+            state_type,
+            state_type,
+            payload,
+            expected_token=session_token,
+        ) is not None
+    except Exception as e:
+        logger.debug("Не удалось перевести persisted state %s: %s", state_type, e)
+        return False
 
 
 async def process_text_message(user_id: int, text: str, message: Message) -> None:
     """Сериализовать полный pipeline сообщений одного пользователя."""
+    request_started = time.monotonic()
     lock = _user_locks.setdefault(user_id, asyncio.Lock())
-    async with lock:
+    lock_started = time.monotonic()
+    await lock.acquire()
+    metrics.observe("messages.user_lock_wait_seconds", time.monotonic() - lock_started)
+    try:
         request_key = _request_key(user_id, text, message)
         claimed = await _claim_request(request_key, user_id)
         if claimed is False:
             await message.answer("Это сообщение уже обработано.")
             return
         try:
+            pending_voice_edit = await _get_persisted_interaction(user_id, "voice_edit")
             await _process_text_message_unlocked(user_id, text, message)
+            if pending_voice_edit:
+                await _clear_persisted_interaction(
+                    user_id,
+                    "voice_edit",
+                    pending_voice_edit.payload.get("session_token"),
+                )
             await _finish_request(request_key, "completed")
         except Exception:
             await _finish_request(request_key, "failed")
             raise
+    finally:
+        lock.release()
+        metrics.observe(
+            "messages.request_end_to_end_seconds", time.monotonic() - request_started
+        )
 
 
 def _request_key(user_id: int, text: str, message: Message) -> str:
@@ -262,13 +303,6 @@ async def _process_text_message_unlocked(user_id: int, text: str, message: Messa
         await message.answer(reply, parse_mode=None)
         return
 
-    from bot.handlers.voice import _clear_voice_state, _load_voice_state, consume_voice_edit
-    voice_edit = consume_voice_edit(user_id)
-    if not voice_edit:
-        voice_edit = bool(await _load_voice_state(user_id, "voice_edit"))
-    if voice_edit:
-        await _clear_voice_state(user_id)
-
     done_query = _extract_done_query(text)
     if done_query:
         await message_bot(message).send_chat_action(chat_id=message.chat.id, action="typing")
@@ -311,18 +345,76 @@ async def _process_text_message_unlocked(user_id: int, text: str, message: Messa
             await message.answer(part, parse_mode=None)
         return
 
-    pending_state = await _consume_pending_interaction(user_id)
-    if pending_state == "complete_project":
+    pending_state = await _get_persisted_interaction(user_id, "complete_project")
+    if pending_state:
+        session_token = pending_state.payload.get("session_token")
+        project_input = (
+            str(pending_state.payload.get("input"))
+            if pending_state.payload.get("phase") in {"processing", "failed"}
+            and pending_state.payload.get("input")
+            else text
+        )
+        claimed = await _transition_persisted_interaction(
+            user_id,
+            "complete_project",
+            {
+                **pending_state.payload,
+                "phase": "processing",
+                "input": project_input,
+            },
+            session_token,
+        )
+        if not claimed:
+            await message.answer("Этот диалог уже обрабатывается или устарел.")
+            return
         await message_bot(message).send_chat_action(chat_id=message.chat.id, action="typing")
-        result = await dispatch(
-            {"name": "complete_project", "arguments": {"search_query": text}},
+        command_result = await dispatch_result(
+            {
+                "name": "complete_project",
+                "arguments": {"search_query": project_input},
+            },
             user_id,
             user_tz,
         )
+        result = command_result.text
         add_message(user_id, "user", text)
-        add_message(user_id, "assistant", result)
-        for part in split_message(result):
-            await message.answer(part, parse_mode=None)
+        if command_result.kind == "confirm_project_complete":
+            payload = command_result.dict_payload()
+            from bot.handlers.callbacks import build_project_complete_keyboard
+
+            prompt = (
+                f"У слона «{payload['title']}» осталось открытых задач: "
+                f"{payload['open_count']}. Закрыть слона и отменить эти задачи?"
+            )
+            add_message(user_id, "assistant", prompt)
+            await message.answer(
+                prompt,
+                parse_mode=None,
+                reply_markup=build_project_complete_keyboard(
+                    str(payload["project_id"])
+                ).as_markup(),
+            )
+        else:
+            add_message(user_id, "assistant", result)
+            for part in split_message(result):
+                await message.answer(part, parse_mode=None)
+        if command_result.kind != "error":
+            await _clear_persisted_interaction(
+                user_id,
+                "complete_project",
+                session_token,
+            )
+        else:
+            await _transition_persisted_interaction(
+                user_id,
+                "complete_project",
+                {
+                    **pending_state.payload,
+                    "phase": "failed",
+                    "input": project_input,
+                },
+                session_token,
+            )
         return
 
     if _PROJECT_DONE_RE.match(text):
@@ -338,24 +430,25 @@ async def _process_text_message_unlocked(user_id: int, text: str, message: Messa
     delete_query = _extract_explicit_delete(text)
     if delete_query:
         await message_bot(message).send_chat_action(chat_id=message.chat.id, action="typing")
-        result = await dispatch(
+        command_result = await dispatch_result(
             {"name": "delete_task", "arguments": {"search_query": delete_query}},
             user_id,
             user_tz,
         )
+        result = command_result.text
         add_message(user_id, "user", text)
-        if result.startswith("CONFIRM_DELETE:"):
-            parts = result.split(":", 2)
+        if command_result.kind == "confirm_delete":
+            payload = command_result.dict_payload()
             from bot.handlers.callbacks import build_delete_confirm_keyboard
 
-            prompt = f"Нашёл задачу «{parts[2]}». Удалить?"
+            prompt = f"Нашёл задачу «{payload['title']}». Удалить?"
             add_message(user_id, "assistant", prompt)
-            keyboard = build_delete_confirm_keyboard(parts[1])
+            keyboard = build_delete_confirm_keyboard(str(payload["task_id"]))
             await message.answer(
                 prompt, parse_mode=None, reply_markup=keyboard.as_markup()
             )
-        elif result.startswith("CHOOSE_DELETE:"):
-            choices = json.loads(result.split(":", 1)[1])
+        elif command_result.kind == "choose_delete":
+            choices = command_result.list_payload()
             from bot.handlers.callbacks import build_delete_choice_keyboard
 
             prompt = "Нашёл несколько похожих задач. Какую удалить?"
@@ -436,10 +529,15 @@ async def _process_text_message_unlocked(user_id: int, text: str, message: Messa
             reply_to and memoir_msg_id and reply_to.message_id == memoir_msg_id
         )
         if is_memoir_reply:
-            await _clear_persisted_interaction(user_id, "memoir")
             await message_bot(message).send_chat_action(chat_id=message.chat.id, action="typing")
 
-            await _save_memoir_answer(user_id, text, user_tz)
+            session_token = persisted_memoir.payload.get("session_token")
+            if session_token:
+                await _save_memoir_answer(
+                    user_id, text, user_tz, session_token
+                )
+            else:
+                await _save_memoir_answer(user_id, text, user_tz)
             await message.answer("📔 Записано в мемуарник! ✅")
             return
 
@@ -466,12 +564,19 @@ async def _process_text_message_unlocked(user_id: int, text: str, message: Messa
             is_chrono_reply = False
 
         if is_chrono_reply and _looks_like_chronometry_answer(text):
-            clear_awaiting(user_id)
-            await _clear_persisted_interaction(user_id, "chronometry")
             await message_bot(message).send_chat_action(chat_id=message.chat.id, action="typing")
 
             from bot.handlers.chronometry import process_chronometry_response
-            result = await process_chronometry_response(user_id, text, user_tz)
+            if persisted_chrono:
+                result = await process_chronometry_response(
+                    user_id,
+                    text,
+                    user_tz,
+                    persisted_chrono.payload.get("session_token"),
+                )
+            else:
+                result = await process_chronometry_response(user_id, text, user_tz)
+            clear_awaiting(user_id)
             await message.answer(result)
             return
 
@@ -580,13 +685,14 @@ async def _process_text_message_unlocked(user_id: int, text: str, message: Messa
         for fc in response.function_calls:
             fc = _preserve_user_marker_in_call(text, fc)
             fc = _guard_relative_birthday(text, fc)
-            result = await dispatch(fc, user_id, user_tz)
+            command_result = await dispatch_result(fc, user_id, user_tz)
+            result = command_result.text
 
             # Специальный случай: confirm удаления
-            if result.startswith("CONFIRM_DELETE:"):
-                parts = result.split(":", 2)
-                task_id = parts[1]
-                task_title = parts[2]
+            if command_result.kind == "confirm_delete":
+                payload = command_result.dict_payload()
+                task_id = str(payload["task_id"])
+                task_title = str(payload["title"])
                 from bot.handlers.callbacks import build_delete_confirm_keyboard
                 kb = build_delete_confirm_keyboard(task_id)
                 prompt = f"Нашёл задачу «{task_title}». Удалить?"
@@ -598,8 +704,8 @@ async def _process_text_message_unlocked(user_id: int, text: str, message: Messa
                 )
                 continue
 
-            if result.startswith("CHOOSE_DELETE:"):
-                choices = json.loads(result.split(":", 1)[1])
+            if command_result.kind == "choose_delete":
+                choices = command_result.list_payload()
                 from bot.handlers.callbacks import build_delete_choice_keyboard
                 kb = build_delete_choice_keyboard(choices)
                 prompt = "Нашёл несколько похожих задач. Какую удалить?"
@@ -611,9 +717,11 @@ async def _process_text_message_unlocked(user_id: int, text: str, message: Messa
                 )
                 continue
 
-            if result.startswith("CONFIRM_PROJECT_COMPLETE:"):
-                parts = result.split(":", 3)
-                project_id, project_title, open_count = parts[1:]
+            if command_result.kind == "confirm_project_complete":
+                payload = command_result.dict_payload()
+                project_id = str(payload["project_id"])
+                project_title = str(payload["title"])
+                open_count = payload["open_count"]
                 from bot.handlers.callbacks import build_project_complete_keyboard
                 kb = build_project_complete_keyboard(project_id)
                 prompt = (
@@ -629,10 +737,10 @@ async def _process_text_message_unlocked(user_id: int, text: str, message: Messa
                 continue
 
             # Специальный случай: проект создан → декомпозиция
-            if result.startswith("PROJECT_CREATED:"):
-                parts = result.split(":", 2)
-                project_id = parts[1]
-                project_title = parts[2]
+            if command_result.kind == "project_created":
+                payload = command_result.dict_payload()
+                project_id = str(payload["project_id"])
+                project_title = str(payload["title"])
                 project_prompt = (
                     f"🐘 Слон «{project_title}» создан!\n"
                     "Сейчас нарезаю на бифштексы..."
@@ -717,9 +825,11 @@ async def _process_text_message_unlocked(user_id: int, text: str, message: Messa
         add_message(user_id, "assistant", reply)
         await message.answer(reply)
 
-    # Компрессия при необходимости
-    if needs_compression(user_id):
-        await _compress(user_id)
+    # Provider-independent housekeeping must stay bounded and non-blocking.
+    if needs_trimming(user_id):
+        trim_started = time.monotonic()
+        trim_history(user_id)
+        metrics.observe("messages.context_trim_seconds", time.monotonic() - trim_started)
 
 
 @router.message(F.text.startswith("/"))
@@ -737,11 +847,17 @@ async def handle_text(message: Message) -> None:
     await process_text_message(message.from_user.id, message.text.strip(), message)
 
 
-async def _save_memoir_answer(user_id: int, text: str, tz: str) -> None:
+async def _save_memoir_answer(
+    user_id: int,
+    text: str,
+    tz: str,
+    session_token: str | None = None,
+) -> None:
     """Сохранить ответ на мемуарник как memoir_entry + diary_entry."""
     import pendulum
 
     from bot.db.crud.diary import create_diary_entry
+    from bot.db.crud.interaction_states import clear_state_if_type
     from bot.db.crud.memoir import create_memoir_entry
     from bot.llm.dispatcher import _extract_value_tag
 
@@ -758,37 +874,18 @@ async def _save_memoir_answer(user_id: int, text: str, tz: str) -> None:
         await create_diary_entry(
             session, user_id, content=text, entry_date=today, tz=tz, commit=False
         )
+        cleared = await clear_state_if_type(
+            session,
+            user_id,
+            "memoir",
+            session_token,
+            commit=False,
+        )
+        if not cleared:
+            raise RuntimeError("memoir interaction ownership was lost")
         await session.commit()
 
     logger.info("Мемуарник сохранён: user=%s, date=%s, value=%s", user_id, today, value_tag)
-
-
-async def _compress(user_id: int) -> None:
-    """Компрессия истории через LLM."""
-    if not llm_client:
-        return
-
-    history = get_history(user_id)
-    history_text = "\n".join(f"{m['role']}: {m['content']}" for m in history)
-
-    async with async_session() as session:
-        prompt = await get_prompt(session, "context_compression")
-
-    if not prompt:
-        prompt = "Сжато перескажи этот диалог, сохранив ключевые факты и задачи:"
-
-    try:
-        response = await llm_client.chat(
-            messages=[
-                {"role": "system", "content": prompt},
-                {"role": "user", "content": history_text},
-            ],
-            timeout=20,
-        )
-        if response.content:
-            compress_history(user_id, response.content)
-    except Exception as e:
-        logger.warning("Не удалось сжать контекст: %s", e)
 
 
 def _default_intent_prompt() -> str:

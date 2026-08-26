@@ -22,6 +22,7 @@ async def create_time_entry(
     productivity_score: Optional[int] = None,
     bot_reaction: Optional[str] = None,
     duration_minutes: int = 15,
+    commit: bool = True,
 ) -> TimeTrackingEntry:
     """Создать запись хронометража."""
     if timestamp is None:
@@ -38,7 +39,10 @@ async def create_time_entry(
         duration_minutes=duration_minutes,
     )
     session.add(entry)
-    await session.commit()
+    if commit:
+        await session.commit()
+    else:
+        await session.flush()
     await session.refresh(entry)
     return entry
 

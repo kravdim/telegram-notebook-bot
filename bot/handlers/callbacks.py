@@ -26,13 +26,33 @@ router = Router()
 MAX_SNOOZE = 5
 
 
-@router.callback_query(F.data == "memoir_skip")
+@router.callback_query(F.data.startswith("memoir_skip"))
 async def cb_memoir_skip(callback: CallbackQuery) -> None:
     """Закрыть ожидание мемуарника без создания записи."""
     user_id = callback.from_user.id
+    data = callback_data(callback)
+    session_token = data.partition(":")[2]
+    state = await interaction_service.get(user_id, "memoir")
+    message_id = getattr(callback_message(callback), "message_id", None)
+    if (
+        not session_token
+        or not state
+        or state.payload.get("session_token") != session_token
+        or state.payload.get("message_id") != message_id
+    ):
+        await callback.answer("Эта сессия уже устарела")
+        await callback_message(callback).edit_text(
+            "Этот вопрос уже не активен.", reply_markup=None
+        )
+        return
     await callback.answer("Пропущено")
     try:
-        await interaction_service.clear(user_id, "memoir")
+        cleared = await interaction_service.clear(user_id, "memoir", session_token)
+        if not cleared:
+            await callback_message(callback).edit_text(
+                "Этот вопрос уже не активен.", reply_markup=None
+            )
+            return
     except Exception as exc:
         logger.warning("Не удалось очистить persistent memoir state: %s", exc)
     await callback_message(callback).edit_text(

@@ -1,4 +1,4 @@
-"""Управление контекстом диалога: хранение истории + компрессия."""
+"""Bounded in-process conversation history without provider housekeeping."""
 
 import logging
 from typing import Dict, List
@@ -43,14 +43,19 @@ def add_message(user_id: int, role: str, content: str) -> None:
     _histories[user_id].append({"role": role, "content": content})
 
 
-def needs_compression(user_id: int) -> bool:
-    """Проверить, нужна ли компрессия контекста."""
+def needs_trimming(user_id: int) -> bool:
+    """Return whether history is over the configured deterministic budget."""
     history = _histories.get(user_id, [])
     return _count_tokens(history) > _MAX_TOKENS
 
 
-def compress_history(user_id: int, summary: str) -> None:
-    """Заменить старые сообщения на саммари, сохранив последние пары."""
+def trim_history(user_id: int) -> None:
+    """Drop old turns while preserving the most recent complete pairs.
+
+    Context maintenance is deliberately local and deterministic: an optional
+    provider call must never keep the per-user request lock after a reply was
+    delivered.
+    """
     history = _histories.get(user_id, [])
     if not history:
         return
@@ -59,10 +64,7 @@ def compress_history(user_id: int, summary: str) -> None:
     keep_count = _KEEP_RECENT_PAIRS * 2
     recent = history[-keep_count:] if len(history) > keep_count else history
 
-    _histories[user_id] = [
-        {"role": "system", "content": f"Краткое содержание предыдущего диалога:\n{summary}"},
-        *recent,
-    ]
+    _histories[user_id] = list(recent)
 
 
 def clear_history(user_id: int) -> None:

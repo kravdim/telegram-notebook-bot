@@ -247,7 +247,16 @@ async def deliver_batch(
         async with async_session() as session:
             await session.execute(
                 update(DeliveryPart)
-                .where(DeliveryPart.id == part.id)
+                .where(
+                    DeliveryPart.id == part.id,
+                    DeliveryPart.status == "pending",
+                    DeliveryPart.batch_id.in_(
+                        select(DeliveryBatch.id).where(
+                            DeliveryBatch.id == batch_id,
+                            DeliveryBatch.lease_token == lease_token,
+                        )
+                    ),
+                )
                 .values(
                     attempts=DeliveryPart.attempts + 1,
                     last_error=str(exc)[:1000],

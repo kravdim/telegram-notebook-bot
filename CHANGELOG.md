@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.2.0 — 2026-08-26
+
+- Removed provider-based context compression from the per-user critical path;
+  conversation history now uses deterministic bounded trimming.
+- Added one total LLM provider-chain deadline, disabled nested SDK retries and
+  exposed end-to-end, user-lock and provider-attempt metrics.
+- Bound voice and memoir callbacks to durable session tokens and Telegram
+  message IDs; stale buttons fail closed.
+- Made memoir and chronometry interaction completion transactional and retained
+  retryable state around project/voice side effects.
+- Fenced delivery error bookkeeping, added crash-resumable privacy deletion
+  journaling and clarified backup checksum metadata semantics.
+- Preserved typed `CommandResult` through the Telegram adapter and raised the
+  measured coverage floor from 42% to 45%.
+
 ## 2026-08-25
 
 - Made `/export` disk-backed, size-bounded and cleanup-safe.

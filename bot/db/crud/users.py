@@ -45,6 +45,7 @@ async def get_or_create_user(
 async def update_user_settings(
     session: AsyncSession,
     telegram_id: int,
+    commit: bool = True,
     **kwargs,
 ) -> User | None:
     """Обновить настройки пользователя."""
@@ -56,7 +57,10 @@ async def update_user_settings(
         if hasattr(user, key):
             setattr(user, key, value)
 
-    await session.commit()
+    if commit:
+        await session.commit()
+    else:
+        await session.flush()
     await session.refresh(user)
     return user
 

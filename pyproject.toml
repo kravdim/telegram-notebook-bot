@@ -1,6 +1,6 @@
 [project]
 name = "dailyplanner"
-version = "0.1.0"
+version = "0.2.0"
 description = "Telegram daily planner with reminders and LLM-assisted intent handling"
 requires-python = ">=3.12"
 dependencies = [
@@ -58,6 +58,6 @@ source = ["bot", "scripts"]
 omit = ["bot/db/migrations/*"]
 
 [tool.coverage.report]
-fail_under = 42
+fail_under = 45
 show_missing = true
 skip_covered = true

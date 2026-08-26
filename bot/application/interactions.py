@@ -7,17 +7,27 @@ from bot.db.crud.interaction_states import (
     clear_state_if_type,
     consume_state,
     get_state,
+    recover_interrupted_states,
     transition_state,
 )
 from bot.db.engine import async_session
 from bot.db.models import InteractionState
 
 WorkflowType = Literal[
-    "complete_project", "memoir", "chronometry", "voice_confirm", "voice_edit"
+    "complete_project",
+    "memoir",
+    "chronometry",
+    "voice_confirm",
+    "voice_processing",
+    "voice_edit",
 ]
 
 
 class InteractionService:
+    async def recover_interrupted(self) -> int:
+        async with async_session() as session:
+            return await recover_interrupted_states(session)
+
     async def get(
         self, user_id: int, expected_type: WorkflowType | None = None
     ) -> InteractionState | None:
@@ -46,6 +56,7 @@ class InteractionService:
         state_type: WorkflowType,
         payload: dict | None = None,
         ttl_minutes: int = 30,
+        expected_token: str | None = None,
     ) -> InteractionState | None:
         async with async_session() as session:
             return await transition_state(
@@ -55,17 +66,30 @@ class InteractionService:
                 state_type,
                 payload,
                 ttl_minutes,
+                expected_token,
             )
 
-    async def clear(self, user_id: int, expected_type: WorkflowType) -> bool:
+    async def clear(
+        self,
+        user_id: int,
+        expected_type: WorkflowType,
+        expected_token: str | None = None,
+    ) -> bool:
         async with async_session() as session:
-            return await clear_state_if_type(session, user_id, expected_type)
+            return await clear_state_if_type(
+                session, user_id, expected_type, expected_token
+            )
 
     async def consume(
-        self, user_id: int, expected_type: WorkflowType
+        self,
+        user_id: int,
+        expected_type: WorkflowType,
+        expected_token: str | None = None,
     ) -> InteractionState | None:
         async with async_session() as session:
-            return await consume_state(session, user_id, expected_type)
+            return await consume_state(
+                session, user_id, expected_type, expected_token
+            )
 
 
 interaction_service = InteractionService()

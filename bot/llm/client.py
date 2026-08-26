@@ -1,5 +1,6 @@
 """LLM-клиент: MiniMax M2.7 с опциональным fallback."""
 
+import asyncio
 import logging
 import re
 import time
@@ -54,10 +55,15 @@ class LLMClient:
             "openai": settings.openai_api_key,
         }
 
+        self.main_timeout = float(main_cfg.get("timeout_sec", 15))
+        self.total_timeout = float(
+            llm_cfg.get("total_timeout_sec", max(30, self.main_timeout * 2))
+        )
         self.main_client = AsyncOpenAI(
             base_url=main_cfg.get("base_url", "https://api.minimax.io/v1"),
             api_key=api_keys.get(main_cfg.get("provider", "minimax"), ""),
-            timeout=main_cfg.get("timeout_sec", 15),
+            timeout=self.main_timeout,
+            max_retries=0,
         )
         self.main_model = main_cfg.get("model", "MiniMax-M2.7")
         self.main_max_retries = main_cfg.get("max_retries", 2)
@@ -70,6 +76,7 @@ class LLMClient:
                 base_url=fallback_cfg.get("base_url", "https://api.minimax.io/v1"),
                 api_key=api_keys.get(fallback_cfg.get("provider", "minimax"), ""),
                 timeout=fallback_cfg.get("timeout_sec", 15),
+                max_retries=0,
             )
             self.fallback_model = fallback_cfg.get("model", "MiniMax-M2.7")
             self.fallback_max_retries = fallback_cfg.get("max_retries", 1)
@@ -85,13 +92,26 @@ class LLMClient:
         tool_choice: Optional[str] = None,
     ) -> LLMResponse:
         """Отправить запрос. При ошибке main — retry на fallback, если он настроен."""
+        total_timeout = float(timeout if timeout is not None else self.total_timeout)
+        async with asyncio.timeout(total_timeout):
+            return await self._chat_with_fallback(
+                messages, functions, tool_choice
+            )
+
+    async def _chat_with_fallback(
+        self,
+        messages: List[Dict[str, str]],
+        functions: Optional[List[Dict]],
+        tool_choice: Optional[str],
+    ) -> LLMResponse:
+        """Run the whole provider/retry chain under ``chat``'s total deadline."""
         # Попытка main. Если fallback не настроен, пробуем main на каждом запросе,
         # даже после предыдущей временной ошибки.
         if self._main_healthy or not self.fallback_client:
             try:
                 return await self._call(
                     self.main_client, self.main_model, messages, functions,
-                    timeout, self.main_max_retries, tool_choice,
+                    None, self.main_max_retries, tool_choice,
                 )
             except (APIConnectionError, APIError, APITimeoutError, RateLimitError) as e:
                 logger.warning("Main LLM (%s) failed: %s.", self.main_model, e)
@@ -105,7 +125,7 @@ class LLMClient:
             metrics.increment("llm.fallback")
             return await self._call(
                 self.fallback_client, self.fallback_model, messages, functions,
-                timeout, self.fallback_max_retries, tool_choice,
+                None, self.fallback_max_retries, tool_choice,
             )
         except Exception as e:
             logger.error("Fallback LLM (%s) also failed: %s", self.fallback_model, e)
@@ -138,6 +158,7 @@ class LLMClient:
         last_error: Exception = RuntimeError("unexpected: no attempts made")
 
         for attempt in range(max_retries + 1):
+            metrics.increment("llm.provider_attempt")
             try:
                 response = await client.chat.completions.create(**kwargs)
                 elapsed_ms = int((time.monotonic() - start) * 1000)

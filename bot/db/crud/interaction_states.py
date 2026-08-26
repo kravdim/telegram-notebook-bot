@@ -92,6 +92,7 @@ async def transition_state(
     state_type: str,
     payload: Optional[dict] = None,
     ttl_minutes: int = 30,
+    expected_token: str | None = None,
 ) -> Optional[InteractionState]:
     """Compare-and-set an active workflow without replacing another type."""
     result = await session.execute(
@@ -104,6 +105,10 @@ async def transition_state(
     if (
         not state
         or state.state_type != expected_type
+        or (
+            expected_token is not None
+            and state.payload.get("session_token") != expected_token
+        )
         or (state.expires_at and pendulum.instance(state.expires_at) < now)
     ):
         return None
@@ -123,24 +128,39 @@ async def clear_state(session: AsyncSession, user_id: int) -> None:
 
 
 async def clear_state_if_type(
-    session: AsyncSession, user_id: int, expected_type: str
+    session: AsyncSession,
+    user_id: int,
+    expected_type: str,
+    expected_token: str | None = None,
+    *,
+    commit: bool = True,
 ) -> bool:
     """Clear a workflow only if the caller still owns its state type."""
-    result = await session.execute(
-        delete(InteractionState)
-        .where(
-            InteractionState.user_id == user_id,
-            InteractionState.state_type == expected_type,
+    statement = delete(InteractionState).where(
+        InteractionState.user_id == user_id,
+        InteractionState.state_type == expected_type,
+    )
+    if expected_token is not None:
+        statement = statement.where(
+            InteractionState.payload["session_token"].as_string() == expected_token
         )
+    result = await session.execute(
+        statement
         .returning(InteractionState.user_id)
     )
     cleared = result.scalar_one_or_none() is not None
-    await session.commit()
+    if commit:
+        await session.commit()
+    else:
+        await session.flush()
     return cleared
 
 
 async def consume_state(
-    session: AsyncSession, user_id: int, expected_type: str
+    session: AsyncSession,
+    user_id: int,
+    expected_type: str,
+    expected_token: str | None = None,
 ) -> Optional[InteractionState]:
     """Atomically return and clear the workflow only while its type still matches."""
     result = await session.execute(
@@ -150,7 +170,14 @@ async def consume_state(
     )
     state = result.scalar_one_or_none()
     now = pendulum.now("UTC")
-    if not state or state.state_type != expected_type:
+    if (
+        not state
+        or state.state_type != expected_type
+        or (
+            expected_token is not None
+            and state.payload.get("session_token") != expected_token
+        )
+    ):
         return None
     if state.expires_at and pendulum.instance(state.expires_at) < now:
         await session.delete(state)
@@ -159,3 +186,20 @@ async def consume_state(
     await session.delete(state)
     await session.commit()
     return state
+
+
+async def recover_interrupted_states(session: AsyncSession) -> int:
+    """Make provider workflows retryable after the single runtime restarts."""
+    result = await session.execute(
+        select(InteractionState)
+        .where(InteractionState.state_type == "voice_processing")
+        .with_for_update()
+    )
+    states = list(result.scalars().all())
+    now = pendulum.now("UTC")
+    for state in states:
+        state.state_type = "voice_confirm"
+        state.payload = {**state.payload, "phase": "recovered"}
+        state.updated_at = now
+    await session.commit()
+    return len(states)

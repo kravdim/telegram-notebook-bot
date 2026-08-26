@@ -13,6 +13,7 @@ import bot.handlers.voice as voice
 import bot.main as main_module
 import bot.scheduler.chronometry as chronometry_scheduler
 import bot.scheduler.memoir as memoir_scheduler
+from bot.application.command_bus import CommandResult
 from bot.llm.client import LLMResponse
 from bot.llm.context import add_message, clear_history, get_history
 from bot.llm.dispatcher import _extract_value_tag
@@ -136,9 +137,9 @@ async def test_mutation_without_tool_retries_with_required_tool(monkeypatch):
     async def fake_get_prompt(session, prompt_key):
         return "prompt {now} {timezone}"
 
-    async def fake_dispatch(fc, user_id, tz):
+    async def fake_dispatch_result(fc, user_id, tz):
         dispatched.append(fc["name"])
-        return "День рождения сохранён ✅"
+        return CommandResult("День рождения сохранён ✅")
 
     async def fake_log(*args, **kwargs):
         return None
@@ -149,7 +150,7 @@ async def test_mutation_without_tool_retries_with_required_tool(monkeypatch):
     monkeypatch.setattr(messages, "async_session", lambda: FakeSessionContext())
     monkeypatch.setattr(messages, "get_user", fake_get_user)
     monkeypatch.setattr(messages, "get_prompt", fake_get_prompt)
-    monkeypatch.setattr(messages, "dispatch", fake_dispatch)
+    monkeypatch.setattr(messages, "dispatch_result", fake_dispatch_result)
     monkeypatch.setattr(messages, "llm_client", Client())
     monkeypatch.setattr(messages, "llm_queue", Queue())
     monkeypatch.setattr(messages, "_get_persisted_interaction", no_state)
@@ -194,8 +195,15 @@ async def test_project_decomposition_has_no_duplicate_confirmation(monkeypatch):
     async def fake_get_prompt(session, prompt_key):
         return "prompt {now} {timezone}"
 
-    async def fake_dispatch(fc, user_id, tz):
-        return "PROJECT_CREATED:00000000-0000-0000-0000-000000000001:Годовой отчёт"
+    async def fake_dispatch_result(fc, user_id, tz):
+        return CommandResult(
+            "PROJECT_CREATED:00000000-0000-0000-0000-000000000001:Годовой отчёт",
+            "project_created",
+            {
+                "project_id": "00000000-0000-0000-0000-000000000001",
+                "title": "Годовой отчёт",
+            },
+        )
 
     async def fake_project(session, project_id):
         return SimpleNamespace(description="", category="work")
@@ -215,7 +223,7 @@ async def test_project_decomposition_has_no_duplicate_confirmation(monkeypatch):
     monkeypatch.setattr(messages, "async_session", lambda: FakeSessionContext())
     monkeypatch.setattr(messages, "get_user", fake_get_user)
     monkeypatch.setattr(messages, "get_prompt", fake_get_prompt)
-    monkeypatch.setattr(messages, "dispatch", fake_dispatch)
+    monkeypatch.setattr(messages, "dispatch_result", fake_dispatch_result)
     monkeypatch.setattr(messages, "llm_client", Client())
     monkeypatch.setattr(messages, "llm_queue", Queue())
     monkeypatch.setattr(messages, "_get_persisted_interaction", no_state)
@@ -241,7 +249,7 @@ async def test_memoir_state_ttl_is_one_hour(monkeypatch):
     captured = {}
 
     async def fake_transition_state(
-        user_id, expected_type, state_type, payload, ttl_minutes
+        user_id, expected_type, state_type, payload, ttl_minutes, expected_token
     ):
         captured.update(
             user_id=user_id,
@@ -256,10 +264,14 @@ async def test_memoir_state_ttl_is_one_hour(monkeypatch):
         memoir_scheduler.interaction_service, "transition", fake_transition_state
     )
 
-    assert await memoir_scheduler._persist_memoir_state(42, 100) is True
+    assert await memoir_scheduler._persist_memoir_state(42, 100, "token-b") is True
     assert captured["ttl_minutes"] == 60
     assert captured["expected_type"] == "memoir"
-    assert captured["payload"] == {"message_id": 100}
+    assert captured["payload"] == {
+        "message_id": 100,
+        "session_token": "token-b",
+        "phase": "pending",
+    }
 
 
 def test_memoir_command_detection_does_not_consume_task_text():

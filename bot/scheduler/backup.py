@@ -127,7 +127,12 @@ async def run_backup() -> Path | None:
                     await set_operational_state(
                         session,
                         "backup.last_success",
-                        {"file": filepath.name, "bytes": filepath.stat().st_size},
+                        {
+                            "file": filepath.name,
+                            "bytes": filepath.stat().st_size,
+                            "sha256": digest.hexdigest(),
+                            "checksum_verified_at": pendulum.now("UTC").to_iso8601_string(),
+                        },
                     )
             except Exception as state_error:
                 # The archive is still valid. Do not delete it merely because the

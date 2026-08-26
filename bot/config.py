@@ -38,6 +38,8 @@ def validate_runtime_config(
     if not isinstance(llm, dict):
         errors.append("llm config must be a mapping")
         llm = {}
+    if not _is_positive(llm.get("total_timeout_sec", 45)):
+        errors.append("LLM total_timeout_sec must be positive")
     for role in ("main", "fallback"):
         provider_cfg = llm.get(role)
         if role == "fallback" and not provider_cfg:

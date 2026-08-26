@@ -11,7 +11,9 @@
 `/status` shows PostgreSQL/LLM/embedding/STT health, the latest observed STT
 transcription latency, plus reminder and backup SLOs.
 Backup status is `ok` only when the persistent marker is fresh and its named
-archive, recorded byte size and checksum sidecar still agree. The hourly
+archive, recorded byte size, recorded digest and checksum sidecar metadata
+agree. This frequent check is structural; the recovery drill performs the full
+archive SHA-256 verification. The five-minute
 maintenance loop uses that marker as a daily slot and performs catch-up after a
 restart that missed the configured backup hour.
 Violations are logged and sent to configured Telegram admins, throttled to one
@@ -103,8 +105,10 @@ counts. If the target and scope are correct, stop the main bot LaunchAgent and
 repeat with `--execute --confirm DELETE-TELEGRAM_ID`. The command refuses
 administrator accounts and `ALLOW_ALL_USERS`, and acquires the bot's PostgreSQL
 singleton lease so the runtime cannot be active or restart mid-operation. It
-atomically removes ordinary-user access, executes deletion in one transaction
-and exits non-zero unless every associated table verifies zero. Restart the bot
+journals the cross-system operation, atomically replaces the YAML access list,
+executes database deletion in one transaction and exits non-zero unless every
+associated table verifies zero. If the host stops between phases, repeat the
+same confirmed command to reconcile and resume it idempotently. Restart the bot
 only after the zero-verification result.
 Never test this command against a production user; the PostgreSQL integration
 suite creates and deletes a disposable account in a disposable database.

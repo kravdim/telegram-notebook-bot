@@ -125,27 +125,43 @@ async def dispatch(
     user_timezone: str = "Europe/Moscow",
 ) -> str:
     """Исполнить function call и вернуть текст ответа для пользователя."""
+    return (await dispatch_result(function_call, user_id, user_timezone)).text
+
+
+async def dispatch_result(
+    function_call: Dict[str, Any],
+    user_id: int,
+    user_timezone: str = "Europe/Moscow",
+) -> CommandResult:
+    """Execute a call while preserving typed application result metadata."""
     try:
         name, args = parse_function_call(function_call)
         intent = intent_from_parts(name, args)
         result = await _get_command_bus().execute(
             intent, CommandContext(user_id=user_id, timezone=user_timezone)
         )
-        return result.text
+        return result
     except ConcurrentTaskUpdateError:
         logger.warning("Конкурентное изменение задачи: %s", function_call.get("name", "?"))
-        return "Задача уже изменилась в другом запросе. Проверь актуальное состояние и повтори команду."
+        return CommandResult(
+            "Задача уже изменилась в другом запросе. Проверь актуальное состояние и повтори команду.",
+            "error",
+        )
     except ValidationError as e:
         metrics.increment("llm.invalid_tool")
         logger.warning("LLM tool contract rejected: %s", e)
-        return "Ошибка распознавания команды. Переформулируй её, пожалуйста."
+        return CommandResult(
+            "Ошибка распознавания команды. Переформулируй её, пожалуйста.", "error"
+        )
     except Exception as e:
         metrics.increment("llm.tool_error")
         logger.error(
             "Ошибка при выполнении tool call %s: %s",
             function_call.get("name", "?"), e, exc_info=True,
         )
-        return "Произошла ошибка при обработке. Попробуй ещё раз."
+        return CommandResult(
+            "Произошла ошибка при обработке. Попробуй ещё раз.", "error"
+        )
 
 
 async def _execute_registered_intent(

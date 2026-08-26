@@ -24,8 +24,15 @@ class CommandResult:
         "choose_delete",
         "confirm_project_complete",
         "project_created",
+        "error",
     ] = "message"
     payload: dict[str, Any] | list[dict[str, Any]] | None = None
+
+    def dict_payload(self) -> dict[str, Any]:
+        return self.payload if isinstance(self.payload, dict) else {}
+
+    def list_payload(self) -> list[dict[str, Any]]:
+        return self.payload if isinstance(self.payload, list) else []
 
     @classmethod
     def from_legacy_text(cls, text: str) -> "CommandResult":

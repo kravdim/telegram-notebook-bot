@@ -3,6 +3,7 @@
 import asyncio
 import logging
 import random
+import secrets
 
 import pendulum
 from aiogram import Bot
@@ -76,10 +77,11 @@ async def _send_prompt(bot: Bot, user, now: pendulum.DateTime) -> str:
         if state:
             return "pending" if state.state_type == "chronometry" else "busy"
 
+        session_token = secrets.token_urlsafe(8)
         claimed = await interaction_service.claim(
             user_id,
             "chronometry",
-            {},
+            {"session_token": session_token, "phase": "reserved"},
             max(user.chronometry_interval_min * 2, 60),
         )
         if not claimed:
@@ -96,7 +98,7 @@ async def _send_prompt(bot: Bot, user, now: pendulum.DateTime) -> str:
                 text=_CHRONOMETRY_QUESTIONS[idx],
             )
         except Exception:
-            await interaction_service.clear(user_id, "chronometry")
+            await interaction_service.clear(user_id, "chronometry", session_token)
             raise
         _awaiting_response[user_id] = sent.message_id
         _awaiting_since[user_id] = now
@@ -105,8 +107,13 @@ async def _send_prompt(bot: Bot, user, now: pendulum.DateTime) -> str:
             user_id,
             "chronometry",
             "chronometry",
-            {"message_id": sent.message_id},
+            {
+                "message_id": sent.message_id,
+                "session_token": session_token,
+                "phase": "pending",
+            },
             max(user.chronometry_interval_min * 2, 60),
+            session_token,
         )
         if not updated:
             _awaiting_response.pop(user_id, None)

@@ -13,7 +13,9 @@ from bot.db.crud.interaction_states import (
     claim_state,
     clear_state_if_type,
     get_state,
+    recover_interrupted_states,
     set_state,
+    transition_state,
 )
 from bot.db.crud.reminders import create_reminder, get_pending_reminders, mark_sent
 from bot.db.engine import async_session, engine
@@ -381,6 +383,78 @@ async def test_interaction_state_claim_does_not_replace_active_workflow():
 
 
 @pytest.mark.asyncio
+async def test_interaction_token_rejects_stale_clear_and_transition():
+    user_id = 8_560_000_000 + int(uuid.uuid4().hex[:6], 16)
+    async with async_session() as session:
+        session.add(User(telegram_id=user_id, username="interaction-token-test"))
+        await session.commit()
+        claimed = await claim_state(
+            session,
+            user_id,
+            "voice_confirm",
+            {"session_token": "session-b"},
+        )
+        assert claimed is not None
+
+    async with async_session() as stale:
+        assert await clear_state_if_type(
+            stale, user_id, "voice_confirm", "session-a"
+        ) is False
+        assert await transition_state(
+            stale,
+            user_id,
+            "voice_confirm",
+            "voice_edit",
+            {"session_token": "session-a"},
+            expected_token="session-a",
+        ) is None
+
+    async with async_session() as current:
+        state = await get_state(current, user_id)
+        assert state is not None
+        assert state.state_type == "voice_confirm"
+        assert state.payload["session_token"] == "session-b"
+        assert await clear_state_if_type(
+            current, user_id, "voice_confirm", "session-b"
+        ) is True
+
+    async with async_session() as cleanup:
+        await cleanup.execute(delete(User).where(User.telegram_id == user_id))
+        await cleanup.commit()
+
+
+@pytest.mark.asyncio
+async def test_restart_recovers_voice_processing_as_retryable_confirmation():
+    user_id = 8_565_000_000 + int(uuid.uuid4().hex[:6], 16)
+    async with async_session() as session:
+        session.add(User(telegram_id=user_id, username="voice-recovery-test"))
+        await session.commit()
+        await claim_state(
+            session,
+            user_id,
+            "voice_processing",
+            {
+                "session_token": "recover-me",
+                "message_id": 999,
+                "transcript": "сохранённая команда",
+                "phase": "processing",
+            },
+        )
+
+    async with async_session() as recovery:
+        assert await recover_interrupted_states(recovery) == 1
+
+    async with async_session() as verification:
+        state = await get_state(verification, user_id)
+        assert state is not None
+        assert state.state_type == "voice_confirm"
+        assert state.payload["session_token"] == "recover-me"
+        assert state.payload["phase"] == "recovered"
+        await verification.execute(delete(User).where(User.telegram_id == user_id))
+        await verification.commit()
+
+
+@pytest.mark.asyncio
 async def test_delivery_worker_cannot_commit_after_lease_expiry():
     user_id = 8_575_000_000 + int(uuid.uuid4().hex[:6], 16)
     delivery_key = f"integration:delivery-expired:{uuid.uuid4()}"
@@ -411,6 +485,59 @@ async def test_delivery_worker_cannot_commit_after_lease_expiry():
     assert expired.busy is True
     assert resumed.completed is True
     assert bot.calls == 2
+
+    async with async_session() as cleanup_session:
+        await cleanup_session.execute(delete(User).where(User.telegram_id == user_id))
+        await cleanup_session.commit()
+
+
+@pytest.mark.asyncio
+async def test_stale_delivery_failure_cannot_overwrite_new_owner_progress():
+    user_id = 8_580_000_000 + int(uuid.uuid4().hex[:6], 16)
+    delivery_key = f"integration:delivery-stale-error:{uuid.uuid4()}"
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    class StaleBot:
+        async def send_message(self, **kwargs):
+            started.set()
+            await release.wait()
+            raise RuntimeError("stale worker failed late")
+
+    class CurrentBot:
+        async def send_message(self, **kwargs):
+            return type("Sent", (), {"message_id": 4242})()
+
+    async with async_session() as setup:
+        setup.add(User(telegram_id=user_id, username="delivery-fence-error-test"))
+        await setup.commit()
+
+    kwargs = {
+        "delivery_key": delivery_key,
+        "user_id": user_id,
+        "kind": "integration",
+        "parts": [DeliveryPartSpec(user_id, "fenced failure")],
+    }
+    stale = asyncio.create_task(deliver_batch(StaleBot(), **kwargs, lease_seconds=0))
+    await started.wait()
+    current = await deliver_batch(CurrentBot(), **kwargs)
+    assert current.completed is True
+    release.set()
+    with pytest.raises(RuntimeError, match="stale worker failed late"):
+        await stale
+
+    async with async_session() as verification:
+        batch = await verification.scalar(
+            select(DeliveryBatch).where(DeliveryBatch.delivery_key == delivery_key)
+        )
+        part = await verification.scalar(
+            select(DeliveryPart).where(DeliveryPart.batch_id == batch.id)
+        )
+        assert batch.status == "delivered"
+        assert part.status == "delivered"
+        assert part.telegram_message_id == 4242
+        assert part.attempts == 1
+        assert part.last_error is None
 
     async with async_session() as cleanup_session:
         await cleanup_session.execute(delete(User).where(User.telegram_id == user_id))
