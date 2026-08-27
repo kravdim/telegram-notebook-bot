@@ -9,6 +9,7 @@ from typing import Any, Dict, List, Optional
 from openai import APIConnectionError, APIError, APITimeoutError, AsyncOpenAI, RateLimitError
 
 from bot.config import settings
+from bot.logging_safety import error_type
 from bot.observability import metrics
 
 logger = logging.getLogger(__name__)
@@ -114,7 +115,11 @@ class LLMClient:
                     None, self.main_max_retries, tool_choice,
                 )
             except (APIConnectionError, APIError, APITimeoutError, RateLimitError) as e:
-                logger.warning("Main LLM (%s) failed: %s.", self.main_model, e)
+                logger.warning(
+                    "Main LLM failed: model=%s error_type=%s",
+                    self.main_model,
+                    error_type(e),
+                )
                 self._main_healthy = False
 
         if not self.fallback_client:
@@ -128,8 +133,12 @@ class LLMClient:
                 None, self.fallback_max_retries, tool_choice,
             )
         except Exception as e:
-            logger.error("Fallback LLM (%s) also failed: %s", self.fallback_model, e)
-            raise LLMUnavailableError(f"All LLM providers unavailable: {e}") from e
+            logger.error(
+                "Fallback LLM failed: model=%s error_type=%s",
+                self.fallback_model,
+                error_type(e),
+            )
+            raise LLMUnavailableError("All LLM providers unavailable") from e
 
     async def _call(
         self,
@@ -191,7 +200,13 @@ class LLMClient:
                 metrics.increment("llm.error")
                 last_error = e
                 if attempt < max_retries:
-                    logger.info("Retry %d/%d for %s: %s", attempt + 1, max_retries, model, e)
+                    logger.info(
+                        "LLM retry %d/%d: model=%s error_type=%s",
+                        attempt + 1,
+                        max_retries,
+                        model,
+                        error_type(e),
+                    )
                     continue
                 raise
             except APIError as e:

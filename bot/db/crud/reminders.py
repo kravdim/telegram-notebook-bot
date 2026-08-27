@@ -10,6 +10,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from bot.db.models import Reminder
+from bot.logging_safety import error_type
 
 logger = logging.getLogger(__name__)
 
@@ -287,7 +288,10 @@ def _calc_next_occurrence(current: datetime, rule: str) -> Optional[datetime]:
                 return dt.add(months=num)
 
     except Exception as e:
-        logger.warning("Не удалось вычислить следующее время для rule=%s: %s", rule, e)
+        logger.warning(
+            "Не удалось вычислить следующее время: error_type=%s",
+            error_type(e),
+        )
 
     return None
 

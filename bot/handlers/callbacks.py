@@ -17,6 +17,7 @@ from bot.db.crud.tasks import delete_task, get_task_by_id
 from bot.db.crud.users import get_user
 from bot.db.engine import async_session
 from bot.handlers.telegram import callback_data, callback_message
+from bot.logging_safety import error_type
 from bot.services.tasks import closed_task_status, complete_task_workflow
 
 logger = logging.getLogger(__name__)
@@ -54,7 +55,10 @@ async def cb_memoir_skip(callback: CallbackQuery) -> None:
             )
             return
     except Exception as exc:
-        logger.warning("Не удалось очистить persistent memoir state: %s", exc)
+        logger.warning(
+            "Не удалось очистить persistent memoir state: error_type=%s",
+            error_type(exc),
+        )
         await callback.answer(
             "Не удалось пропустить. Попробуй ещё раз.", show_alert=True
         )
@@ -139,7 +143,7 @@ async def cb_snooze_done(callback: CallbackQuery) -> None:
                 else:
                     await resolve_reminder(session, reminder.id, callback.from_user.id)
     except Exception as e:
-        logger.error("Ошибка при обработке snooze_done: %s", e)
+        logger.error("Ошибка при обработке snooze_done: error_type=%s", error_type(e))
         result_text = "✅ Готово!"
 
     try:

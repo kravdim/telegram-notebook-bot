@@ -89,7 +89,7 @@ async def test_mutation_without_typed_result_fails_closed(
     finished = []
 
     async def get_user(session, user_id):
-        return SimpleNamespace(timezone="Europe/Moscow")
+        return SimpleNamespace(timezone="Europe/Moscow", privacy_notice_version=1, cloud_processing_enabled=True)
 
     async def get_prompt(session, prompt_key):
         return "prompt {now} {timezone}"

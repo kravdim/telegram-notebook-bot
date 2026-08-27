@@ -1,8 +1,10 @@
 """PostgreSQL scenarios. Enabled explicitly in CI with RUN_DB_TESTS=1."""
 
 import asyncio
+import json
 import os
 import uuid
+from datetime import date, datetime, timezone
 from types import SimpleNamespace
 
 import pendulum
@@ -10,6 +12,7 @@ import pytest
 import pytest_asyncio
 import yaml
 from sqlalchemy import delete, select
+from sqlalchemy.exc import IntegrityError
 
 import bot.handlers.messages as message_handler
 import scripts.delete_user_data as deletion_script
@@ -24,16 +27,22 @@ from bot.db.crud.interaction_states import (
 from bot.db.crud.reminders import create_reminder, get_pending_reminders, mark_sent
 from bot.db.engine import async_session, engine
 from bot.db.models import (
+    Birthday,
     DeliveryBatch,
     DeliveryPart,
+    DiaryEntry,
     FsmState,
+    InteractionState,
     LlmLog,
+    MemoirEntry,
     Note,
     OperationalState,
     ProcessedRequest,
     Project,
     Reminder,
     Task,
+    TimeTrackingEntry,
+    Trip,
     User,
 )
 from bot.llm.dispatcher import dispatch_result
@@ -42,6 +51,7 @@ from bot.scheduler.reminders import send_pending_reminders
 from bot.services.delivery import DeliveryPartSpec, deliver_batch
 from bot.services.tasks import complete_task_workflow
 from bot.services.user_deletion import delete_user_data, user_data_counts
+from bot.services.user_export import build_user_export_sections
 from scripts.cleanup_e2e_namespace import cleanup
 
 pytestmark = pytest.mark.skipif(
@@ -129,6 +139,201 @@ async def test_verified_user_deletion_removes_cascades_logs_and_fsm():
 
     async with async_session() as verification:
         assert not any((await user_data_counts(verification, user_id)).values())
+
+
+@pytest.mark.asyncio
+async def test_full_export_matches_deletion_inventory_and_excludes_other_users(tmp_path):
+    user_id = 8_060_000_000 + int(uuid.uuid4().hex[:6], 16)
+    other_id = user_id + 1
+    now = datetime.now(timezone.utc)
+    project_id = uuid.uuid4()
+    trip_id = uuid.uuid4()
+    task_id = uuid.uuid4()
+    batch_id = uuid.uuid4()
+    async with async_session() as session:
+        session.add_all(
+            [
+                User(
+                    telegram_id=user_id,
+                    username="export-owner",
+                    privacy_notice_version=1,
+                    cloud_processing_enabled=True,
+                ),
+                User(telegram_id=other_id, username="other-owner"),
+            ]
+        )
+        await session.flush()
+        session.add_all(
+            [
+                Project(id=project_id, user_id=user_id, title="project-marker"),
+                Trip(
+                    id=trip_id,
+                    user_id=user_id,
+                    title="trip-marker",
+                    start_date=date(2026, 8, 27),
+                    end_date=date(2026, 8, 28),
+                ),
+            ]
+        )
+        await session.flush()
+        session.add_all(
+            [
+                Task(
+                    id=task_id,
+                    user_id=user_id,
+                    project_id=project_id,
+                    trip_id=trip_id,
+                    title="task-marker",
+                ),
+                Note(user_id=user_id, title="note", content="note-marker"),
+                Note(user_id=other_id, title="other", content="OTHER-USER-CANARY"),
+                DiaryEntry(
+                    user_id=user_id,
+                    content="diary-marker",
+                    entry_date=date(2026, 8, 27),
+                ),
+                MemoirEntry(
+                    user_id=user_id,
+                    event_date=date(2026, 8, 27),
+                    content="memoir-marker",
+                ),
+                TimeTrackingEntry(
+                    user_id=user_id,
+                    timestamp=now,
+                    activity_text="tracking-marker",
+                    category="work",
+                    duration_minutes=15,
+                ),
+                Birthday(
+                    user_id=user_id,
+                    name="birthday-marker",
+                    birth_date=date(1900, 5, 7),
+                    year_known=False,
+                ),
+                ProcessedRequest(
+                    request_key=f"export:{uuid.uuid4()}",
+                    user_id=user_id,
+                    status="completed",
+                ),
+                InteractionState(
+                    user_id=user_id,
+                    state_type="voice_confirm",
+                    payload={"marker": "interaction-marker"},
+                ),
+                LlmLog(
+                    user_id=user_id,
+                    model="test",
+                    input_messages={"metadata": True},
+                ),
+                DeliveryBatch(
+                    id=batch_id,
+                    delivery_key=f"export:{uuid.uuid4()}",
+                    user_id=user_id,
+                    kind="test",
+                ),
+                FsmState(
+                    storage_key=f"bot:{user_id}:{user_id}:0::default",
+                    state="export-state",
+                    data={"marker": "fsm-marker"},
+                ),
+            ]
+        )
+        await session.flush()
+        session.add_all(
+            [
+                Reminder(
+                    user_id=user_id,
+                    task_id=task_id,
+                    message="reminder-marker",
+                    remind_at=now,
+                    occurrence_at=now,
+                ),
+                DeliveryPart(
+                    batch_id=batch_id,
+                    position=0,
+                    chat_id=user_id,
+                    text="delivery-marker",
+                ),
+            ]
+        )
+        await session.commit()
+
+    async with async_session() as session:
+        expected = await user_data_counts(session, user_id)
+        sections = await build_user_export_sections(
+            session,
+            user_id,
+            tmp_path / "staging",
+            max_bytes=10 * 1024 * 1024,
+        )
+        payloads = {name: "".join(lines) for name, lines in sections}
+
+    manifest = json.loads(payloads["manifest.json"])
+    assert manifest["schema"] == "dailyplanner-user-export"
+    assert manifest["schema_version"] == 1
+    assert manifest["datasets"] == expected
+    assert set(payloads) == {"manifest.json"} | {
+        f"data/{name}.jsonl" for name in expected
+    }
+    birthday = json.loads(payloads["data/birthdays.jsonl"])
+    assert birthday["birth_date"] == "--05-07"
+    assert birthday["year_known"] is False
+    assert "OTHER-USER-CANARY" not in "".join(payloads.values())
+
+    async with async_session() as cleanup_session:
+        await cleanup_session.execute(
+            delete(User).where(User.telegram_id.in_([user_id, other_id]))
+        )
+        await cleanup_session.commit()
+
+
+@pytest.mark.asyncio
+async def test_database_rejects_critical_domain_invariant_violations():
+    user_id = 8_070_000_000 + int(uuid.uuid4().hex[:6], 16)
+    async with async_session() as session:
+        session.add(User(telegram_id=user_id, username="constraint-owner"))
+        await session.commit()
+
+        with pytest.raises(IntegrityError):
+            async with session.begin_nested():
+                session.add(
+                    Trip(
+                        user_id=user_id,
+                        title="invalid dates",
+                        start_date=date(2026, 8, 28),
+                        end_date=date(2026, 8, 27),
+                    )
+                )
+                await session.flush()
+
+        with pytest.raises(IntegrityError):
+            async with session.begin_nested():
+                session.add(
+                    TimeTrackingEntry(
+                        user_id=user_id,
+                        timestamp=datetime.now(timezone.utc),
+                        activity_text="invalid duration",
+                        category="work",
+                        duration_minutes=0,
+                    )
+                )
+                await session.flush()
+
+        with pytest.raises(IntegrityError):
+            async with session.begin_nested():
+                session.add(
+                    Reminder(
+                        user_id=user_id,
+                        message="invalid attempts",
+                        remind_at=datetime.now(timezone.utc),
+                        occurrence_at=datetime.now(timezone.utc),
+                        delivery_attempts=-1,
+                    )
+                )
+                await session.flush()
+
+        await session.execute(delete(User).where(User.telegram_id == user_id))
+        await session.commit()
 
 
 @pytest.mark.asyncio
@@ -364,7 +569,7 @@ async def test_delivery_outbox_resumes_after_partial_failure_without_repeating_p
             self.calls.append(kwargs["text"])
             if kwargs["text"] == "two" and self.fail_second_once:
                 self.fail_second_once = False
-                raise RuntimeError("temporary Telegram failure")
+                raise RuntimeError("temporary Telegram failure DELIVERY_SECRET_CANARY")
             return type("Sent", (), {"message_id": len(self.calls)})()
 
     async with async_session() as setup:
@@ -385,6 +590,21 @@ async def test_delivery_outbox_resumes_after_partial_failure_without_repeating_p
             kind="integration",
             parts=specs,
         )
+
+    async with async_session() as failed_check:
+        failed_batch = await failed_check.scalar(
+            select(DeliveryBatch).where(DeliveryBatch.delivery_key == delivery_key)
+        )
+        failed_part = await failed_check.scalar(
+            select(DeliveryPart).where(
+                DeliveryPart.batch_id == failed_batch.id,
+                DeliveryPart.position == 1,
+            )
+        )
+        assert failed_batch.last_error == "RuntimeError"
+        assert failed_part.last_error == "RuntimeError"
+        assert "DELIVERY_SECRET_CANARY" not in failed_batch.last_error
+        assert "DELIVERY_SECRET_CANARY" not in failed_part.last_error
 
     resumed = await deliver_batch(
         bot,

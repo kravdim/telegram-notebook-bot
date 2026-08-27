@@ -13,6 +13,7 @@ from bot.db.crud.users import claim_date_marker, get_all_users
 from bot.db.engine import async_session
 from bot.formatters import split_html_message
 from bot.formatters.digest import format_evening_digest, format_morning_digest
+from bot.logging_safety import error_type
 from bot.services.delivery import DeliveryPartSpec, DeliveryResult, deliver_batch
 
 logger = logging.getLogger(__name__)
@@ -89,10 +90,7 @@ async def send_digests(bot: Bot) -> None:
                         )
 
         except Exception as e:
-            logger.error(
-                "Ошибка дайджеста для %s: %s",
-                user.telegram_id, e, exc_info=True,
-            )
+            logger.error("Ошибка дайджеста: error_type=%s", error_type(e))
 
 
 async def _send_morning(bot: Bot, user, today, tz: str) -> DeliveryResult:
@@ -133,7 +131,7 @@ async def _send_morning(bot: Bot, user, today, tz: str) -> DeliveryResult:
         ],
     )
     if result.completed:
-        logger.info("Утренний дайджест отправлен: %s", user.telegram_id)
+        logger.info("Утренний дайджест отправлен")
     return result
 
 
@@ -201,5 +199,5 @@ async def _send_evening(bot: Bot, user, today, tz: str) -> DeliveryResult:
         parts=parts,
     )
     if result.completed:
-        logger.info("Вечерний дайджест отправлен: %s", user.telegram_id)
+        logger.info("Вечерний дайджест отправлен")
     return result

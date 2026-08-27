@@ -4,8 +4,10 @@ import logging
 
 from sqlalchemy import select
 
+from bot.config import settings
 from bot.db.engine import async_session
-from bot.db.models import DiaryEntry, MemoirEntry, Note
+from bot.db.models import DiaryEntry, MemoirEntry, Note, User
+from bot.logging_safety import error_type
 
 logger = logging.getLogger(__name__)
 
@@ -24,11 +26,18 @@ async def reindex_missing_embeddings() -> None:
     if not _embed_client:
         return
 
+    cloud_embedding = (
+        settings.yaml_config.get("embedding", {}).get("provider") == "cloud"
+    )
+
     async with async_session() as session:
         # Notes
-        result = await session.execute(
-            select(Note).where(Note.embedding.is_(None)).limit(50)
-        )
+        note_query = select(Note).where(Note.embedding.is_(None))
+        if cloud_embedding:
+            note_query = note_query.join(User, User.telegram_id == Note.user_id).where(
+                User.cloud_processing_enabled.is_(True)
+            )
+        result = await session.execute(note_query.limit(50))
         notes = list(result.scalars().all())
 
         for i, note in enumerate(notes, 1):
@@ -37,14 +46,19 @@ async def reindex_missing_embeddings() -> None:
                 embedding = await _embed_client.embed(text.strip())
                 note.embedding = embedding
             except Exception as e:
-                logger.warning("Ошибка embedding для note %s: %s", note.id, e)
+                logger.warning(
+                    "Embedding failed: entity=note error_type=%s", error_type(e)
+                )
             if i % 10 == 0:
                 await session.commit()
 
         # Diary
-        result = await session.execute(
-            select(DiaryEntry).where(DiaryEntry.embedding.is_(None)).limit(50)
-        )
+        diary_query = select(DiaryEntry).where(DiaryEntry.embedding.is_(None))
+        if cloud_embedding:
+            diary_query = diary_query.join(
+                User, User.telegram_id == DiaryEntry.user_id
+            ).where(User.cloud_processing_enabled.is_(True))
+        result = await session.execute(diary_query.limit(50))
         diaries = list(result.scalars().all())
 
         for i, entry in enumerate(diaries, 1):
@@ -52,14 +66,19 @@ async def reindex_missing_embeddings() -> None:
                 embedding = await _embed_client.embed(entry.content)
                 entry.embedding = embedding
             except Exception as e:
-                logger.warning("Ошибка embedding для diary %s: %s", entry.id, e)
+                logger.warning(
+                    "Embedding failed: entity=diary error_type=%s", error_type(e)
+                )
             if i % 10 == 0:
                 await session.commit()
 
         # Memoir
-        result = await session.execute(
-            select(MemoirEntry).where(MemoirEntry.embedding.is_(None)).limit(50)
-        )
+        memoir_query = select(MemoirEntry).where(MemoirEntry.embedding.is_(None))
+        if cloud_embedding:
+            memoir_query = memoir_query.join(
+                User, User.telegram_id == MemoirEntry.user_id
+            ).where(User.cloud_processing_enabled.is_(True))
+        result = await session.execute(memoir_query.limit(50))
         memoirs = list(result.scalars().all())
 
         for i, entry in enumerate(memoirs, 1):
@@ -67,7 +86,9 @@ async def reindex_missing_embeddings() -> None:
                 embedding = await _embed_client.embed(entry.content)
                 entry.embedding = embedding
             except Exception as e:
-                logger.warning("Ошибка embedding для memoir %s: %s", entry.id, e)
+                logger.warning(
+                    "Embedding failed: entity=memoir error_type=%s", error_type(e)
+                )
             if i % 10 == 0:
                 await session.commit()
 

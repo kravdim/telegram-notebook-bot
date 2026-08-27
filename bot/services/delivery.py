@@ -14,6 +14,7 @@ from sqlalchemy.dialects.postgresql import insert
 
 from bot.db.engine import async_session
 from bot.db.models import DeliveryBatch, DeliveryPart
+from bot.logging_safety import error_type
 
 
 @dataclass(frozen=True)
@@ -259,7 +260,7 @@ async def deliver_batch(
                 )
                 .values(
                     attempts=DeliveryPart.attempts + 1,
-                    last_error=str(exc)[:1000],
+                    last_error=error_type(exc),
                 )
             )
             await session.execute(
@@ -272,7 +273,7 @@ async def deliver_batch(
                     status="pending",
                     lease_token=None,
                     lease_expires_at=None,
-                    last_error=str(exc)[:1000],
+                    last_error=error_type(exc),
                     updated_at=failed_at,
                 )
             )

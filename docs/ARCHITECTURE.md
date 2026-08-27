@@ -45,8 +45,11 @@ handlers ──► IntentNormalizer / typed intents ◄── LLM adapter
    runtime advisory lock permits only one scheduler/polling process.
 5. `observability.py` may read operational state but must never be required for a
    successful domain write or a valid backup archive.
-6. User export is disk-backed and bounded in `services/export.py`; Telegram
-   handlers never hold the complete ZIP payload in process memory.
+6. `services/user_export.py` derives the complete versioned dataset inventory
+   from the same SQLAlchemy metadata and special ownership rules as deletion,
+   and verifies row counts before handing JSONL streams to the bounded,
+   disk-backed archive writer in `services/export.py`. Telegram handlers never
+   hold the complete ZIP payload in process memory.
 7. Multi-step interaction workflows have one PostgreSQL slot per user and are
    accessed through `application/interactions.py`. Claims, transitions and
    clears are compare-and-set operations by type and session token. Voice and

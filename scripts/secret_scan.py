@@ -15,14 +15,19 @@ PATTERNS = {
 def main() -> None:
     files = subprocess.check_output(["git", "ls-files"], text=True).splitlines()
     findings: list[str] = []
+    scanned = 0
     for filename in files:
-        data = Path(filename).read_bytes()
+        path = Path(filename)
+        if not path.is_file():
+            continue
+        data = path.read_bytes()
+        scanned += 1
         for label, pattern in PATTERNS.items():
             if pattern.search(data):
                 findings.append(f"{filename}: {label}")
     if findings:
         raise SystemExit("Potential secrets found:\n" + "\n".join(findings))
-    print(f"secret scan ok: {len(files)} tracked files")
+    print(f"secret scan ok: {scanned} present tracked files")
 
 
 if __name__ == "__main__":

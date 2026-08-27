@@ -14,3 +14,6 @@ class STTClient(ABC):
     @abstractmethod
     async def health_check(self) -> bool:
         """Проверить доступность провайдера."""
+
+    async def close(self) -> None:
+        """Release provider resources during graceful shutdown."""

@@ -14,6 +14,7 @@ from bot.db.engine import async_session
 from bot.llm.client import LLMClient
 from bot.llm.prompts import get_prompt
 from bot.llm.queue import PRIORITY_CHRONOMETRY, LLMQueue
+from bot.logging_safety import error_type
 
 logger = logging.getLogger(__name__)
 
@@ -154,7 +155,7 @@ async def process_chronometry_response(
         return "⏱ Записал."
 
     except Exception as e:
-        logger.error("Ошибка обработки хронометража: %s", e)
+        logger.error("Ошибка обработки хронометража: error_type=%s", error_type(e))
         # Даже при ошибке LLM — записываем
         async with async_session() as session:
             from bot.db.crud.interaction_states import clear_state_if_type

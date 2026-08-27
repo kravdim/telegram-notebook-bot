@@ -12,6 +12,7 @@ from bot.db.crud.projects import get_project_progress, get_user_projects
 from bot.db.crud.tasks import get_completed_in_range, get_frogs_in_range
 from bot.db.crud.users import claim_date_marker, get_all_users, release_date_marker
 from bot.db.engine import async_session
+from bot.logging_safety import error_type
 
 logger = logging.getLogger(__name__)
 
@@ -102,10 +103,7 @@ async def send_weekly_review(bot: Bot) -> None:
                 raise
 
         except Exception as e:
-            logger.error(
-                "Ошибка weekly review для %s: %s",
-                user.telegram_id, e, exc_info=True,
-            )
+            logger.error("Ошибка weekly review: error_type=%s", error_type(e))
 
 
 async def _send_review(bot: Bot, user, tz: str) -> None:
@@ -153,7 +151,7 @@ async def _send_review(bot: Bot, user, tz: str) -> None:
     )
 
     await bot.send_message(chat_id=user.telegram_id, text=text, parse_mode="HTML")
-    logger.info("Weekly review отправлен: %s", user.telegram_id)
+    logger.info("Weekly review отправлен")
 
 
 def _format_review(

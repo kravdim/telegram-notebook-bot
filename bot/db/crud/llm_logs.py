@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from bot.config import settings
 from bot.db.models import LlmLog
+from bot.logging_safety import safe_error_code
 
 
 def _metadata_only_function_call(call: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
@@ -58,7 +59,7 @@ async def log_llm_request(
         ),
         total_tokens=total_tokens,
         latency_ms=latency_ms,
-        error=error[:500] if error else None,
+        error=safe_error_code(error),
     )
     session.add(log)
     await session.commit()

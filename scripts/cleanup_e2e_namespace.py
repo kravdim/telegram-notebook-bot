@@ -34,6 +34,7 @@ from bot.db.models import (
     Trip,
     User,
 )
+from bot.privacy import PRIVACY_NOTICE_VERSION
 
 RUN_ID_RE = re.compile(r"^DP-\d{8}T\d{6}-[a-f0-9]{6}$")
 
@@ -213,7 +214,11 @@ async def cleanup(
             reset = await session.execute(
                 update(User)
                 .where(User.telegram_id == user_id)
-                .values(focus_until=None)
+                .values(
+                    focus_until=None,
+                    privacy_notice_version=PRIVACY_NOTICE_VERSION,
+                    cloud_processing_enabled=True,
+                )
             )
             counts["users_reset"] = int(getattr(reset, "rowcount", 0) or 0)
 

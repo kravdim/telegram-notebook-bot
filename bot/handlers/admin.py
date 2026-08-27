@@ -13,6 +13,7 @@ from bot.db.crud.users import get_all_users, get_user
 from bot.db.engine import async_session
 from bot.handlers.telegram import message_bot
 from bot.llm.prompts import get_all_prompts
+from bot.logging_safety import error_type
 from bot.services.access_config import write_allowed_telegram_ids
 
 logger = logging.getLogger(__name__)
@@ -87,7 +88,7 @@ async def cmd_digest_now(message: Message, command: CommandObject) -> None:
     try:
         sent = await send_digest_now(message_bot(message), user, parts[0].lower())
     except Exception as exc:
-        logger.error("Ручной digest завершился ошибкой: %s", exc, exc_info=True)
+        logger.error("Ручной digest завершился ошибкой: error_type=%s", error_type(exc))
         await message.answer("Не удалось отправить дайджест; слот освобождён для повтора.")
         return
     if not sent:
@@ -117,7 +118,10 @@ async def cmd_review_now(message: Message, command: CommandObject) -> None:
     try:
         sent = await send_weekly_review_now(message_bot(message), user)
     except Exception as exc:
-        logger.error("Ручной weekly review завершился ошибкой: %s", exc, exc_info=True)
+        logger.error(
+            "Ручной weekly review завершился ошибкой: error_type=%s",
+            error_type(exc),
+        )
         await message.answer("Не удалось отправить обзор; слот освобождён для повтора.")
         return
     if not sent:
@@ -144,7 +148,10 @@ async def cmd_chrono_ping(message: Message, command: CommandObject) -> None:
     try:
         status = await send_chronometry_prompt_now(message_bot(message), user)
     except Exception as exc:
-        logger.error("Ручной chrono ping завершился ошибкой: %s", exc, exc_info=True)
+        logger.error(
+            "Ручной chrono ping завершился ошибкой: error_type=%s",
+            error_type(exc),
+        )
         await message.answer("Не удалось отправить вопрос хронометража.")
         return
     if status == "pending":
@@ -304,4 +311,4 @@ async def _persist_whitelist() -> None:
         config_path,
         list(settings.allowed_telegram_ids),
     )
-    logger.info("Whitelist сохранён в config.yaml: %s", settings.allowed_telegram_ids)
+    logger.info("Whitelist сохранён в config.yaml: count=%d", len(settings.allowed_telegram_ids))

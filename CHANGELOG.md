@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- Enforced a global private-chat transport boundary and content-free exception
+  logging, including whitelist-log canaries.
+- Added a versioned, count-verified full JSONL export backed by the deletion
+  inventory, plus user-facing privacy disclosure and explicit cloud-AI choice.
+- Made conversation history bounded at its API boundary and upgraded the live
+  Telegram gate with an independent PostgreSQL state and cleanup oracle.
+- Removed the incomplete systemd target; hardened the supported Docker target
+  as non-root/read-only with pinned images, limits, SBOM, vulnerability scan,
+  Dependabot and tag-triggered provenance evidence.
+- Added critical PostgreSQL domain constraints, arbitrary IANA timezone
+  settings, timezone-correct frog statistics and explicit attachment feedback.
+- Added explicit local-STT model teardown and run-scoped voice/log artifact
+  cleanup; raised the coverage floor and introduced complexity ratchets.
 - Made mutation responses fail closed unless a typed mutating command actually
   completed; added a dedicated typed clarification intent and deterministic
   routing for the failed live reminder phrase.

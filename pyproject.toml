@@ -2,13 +2,25 @@
 name = "dailyplanner"
 version = "0.2.0"
 description = "Telegram daily planner with reminders and LLM-assisted intent handling"
+readme = "README.md"
+license = { file = "LICENSE" }
+authors = [{ name = "kravdim" }]
+maintainers = [{ name = "kravdim" }]
 requires-python = ">=3.12"
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Environment :: Other Environment",
+  "Framework :: AsyncIO",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: Office/Business :: Scheduling",
+  "Typing :: Typed",
+]
 dependencies = [
   "aiogram>=3.4",
   "aiohttp-socks",
   "alembic",
   "anyio",
-  "apscheduler>=3.10",
   "asyncpg",
   "httpx[socks]",
   "json-repair",
@@ -20,6 +32,12 @@ dependencies = [
   "sqlalchemy[asyncio]>=2.0",
   "tiktoken",
 ]
+
+[project.urls]
+Homepage = "https://github.com/kravdim/telegram-notebook-bot"
+Repository = "https://github.com/kravdim/telegram-notebook-bot"
+Issues = "https://github.com/kravdim/telegram-notebook-bot/issues"
+Changelog = "https://github.com/kravdim/telegram-notebook-bot/blob/main/CHANGELOG.md"
 
 [project.optional-dependencies]
 stt = ["faster-whisper"]
@@ -43,7 +61,15 @@ target-version = "py312"
 line-length = 100
 
 [tool.ruff.lint]
-select = ["E4", "E7", "E9", "F", "I"]
+select = ["E4", "E7", "E9", "F", "I", "C90", "PLR0911", "PLR0912", "PLR0915"]
+
+[tool.ruff.lint.mccabe]
+max-complexity = 60
+
+[tool.ruff.lint.pylint]
+max-branches = 70
+max-returns = 25
+max-statements = 300
 
 [tool.mypy]
 python_version = "3.12"
@@ -58,6 +84,6 @@ source = ["bot", "scripts"]
 omit = ["bot/db/migrations/*"]
 
 [tool.coverage.report]
-fail_under = 45
+fail_under = 46
 show_missing = true
 skip_covered = true

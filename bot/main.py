@@ -23,13 +23,15 @@ from bot.handlers import (
     evening_review,
     messages,
     onboarding,
+    privacy,
     trip,
     voice,
 )
 from bot.llm.client import LLMClient
 from bot.llm.context import clear_all as clear_context
 from bot.llm.queue import LLMQueue
-from bot.middleware import RateLimitMiddleware, WhitelistMiddleware
+from bot.logging_safety import error_type
+from bot.middleware import PrivateChatMiddleware, RateLimitMiddleware, WhitelistMiddleware
 from bot.observability import (
     alert_slo_violations,
     evaluate_slos,
@@ -87,7 +89,7 @@ def _init_embedding_client():
         logger.info("Embedding-клиент инициализирован: %s", provider)
         return client
     except Exception as e:
-        logger.warning("Embedding-клиент не инициализирован: %s", e)
+        logger.warning("Embedding client initialization failed: error_type=%s", error_type(e))
         return None
 
 
@@ -109,7 +111,7 @@ def _init_stt_client():
         logger.info("STT-клиент инициализирован: %s", provider)
         return client
     except Exception as e:
-        logger.warning("STT-клиент не инициализирован: %s", e)
+        logger.warning("STT client initialization failed: error_type=%s", error_type(e))
         return None
 
 
@@ -201,6 +203,8 @@ async def main() -> None:
             BotCommand(command="birthdays", description="Дни рождения"),
             BotCommand(command="stats", description="Статистика"),
             BotCommand(command="export", description="Экспорт данных"),
+            BotCommand(command="privacy", description="Privacy и cloud AI"),
+            BotCommand(command="delete_data", description="Удаление всех данных"),
             BotCommand(command="settings", description="Настройки"),
             BotCommand(command="help", description="Справка"),
         ],
@@ -217,7 +221,7 @@ async def main() -> None:
                 async with observe_job("reminders"):
                     await send_pending_reminders(bot)
             except Exception as e:
-                logger.error("Reminders loop error: %s", e)
+                logger.error("Reminders loop error: error_type=%s", error_type(e))
 
     async def _sweep_loop():
         """Двойной контур: sweep пропущенных каждые 5 минут."""
@@ -227,7 +231,7 @@ async def main() -> None:
                 async with observe_job("reminder_sweep"):
                     await sweep_missed_reminders(bot)
             except Exception as e:
-                logger.error("Sweep loop error: %s", e)
+                logger.error("Sweep loop error: error_type=%s", error_type(e))
 
     async def _health_loop():
         """Health check main LLM каждые 5 минут."""
@@ -239,7 +243,7 @@ async def main() -> None:
                     slo_result = await evaluate_slos()
                     await alert_slo_violations(bot, slo_result)
             except Exception as e:
-                logger.error("Health check error: %s", e)
+                logger.error("Health check error: error_type=%s", error_type(e))
 
     async def _digest_loop():
         """Проверка и отправка дайджестов каждую минуту."""
@@ -249,7 +253,7 @@ async def main() -> None:
                 async with observe_job("digest"):
                     await send_digests(bot)
             except Exception as e:
-                logger.error("Digest loop error: %s", e)
+                logger.error("Digest loop error: error_type=%s", error_type(e))
 
     async def _memoir_loop():
         """Проверка и отправка вопросов мемуарника каждую минуту."""
@@ -259,7 +263,7 @@ async def main() -> None:
                 async with observe_job("memoir"):
                     await send_memoir_prompts(bot)
             except Exception as e:
-                logger.error("Memoir loop error: %s", e)
+                logger.error("Memoir loop error: error_type=%s", error_type(e))
 
     async def _chronometry_loop():
         """Хронометраж: проверка каждую минуту."""
@@ -269,7 +273,7 @@ async def main() -> None:
                 async with observe_job("chronometry"):
                     await send_chronometry_prompts(bot)
             except Exception as e:
-                logger.error("Chronometry loop error: %s", e)
+                logger.error("Chronometry loop error: error_type=%s", error_type(e))
 
     async def _task_reminders_loop():
         """Напоминание актуальных задач каждые 2 часа в рабочее время."""
@@ -279,7 +283,7 @@ async def main() -> None:
                 async with observe_job("task_reminders"):
                     await send_task_reminders(bot)
             except Exception as e:
-                logger.error("Task reminders loop error: %s", e)
+                logger.error("Task reminders loop error: error_type=%s", error_type(e))
 
     async def _weekly_review_loop():
         """Еженедельный обзор: проверка каждую минуту (отправка в вс 21:00)."""
@@ -289,7 +293,7 @@ async def main() -> None:
                 async with observe_job("weekly_review"):
                     await send_weekly_review(bot)
             except Exception as e:
-                logger.error("Weekly review loop error: %s", e)
+                logger.error("Weekly review loop error: error_type=%s", error_type(e))
 
     async def _maintenance_loop():
         """Обслуживание: бэкап, ротация логов, реиндекс — раз в час."""
@@ -300,7 +304,7 @@ async def main() -> None:
                     await rotate_llm_logs()
                     await run_backup_if_due()
             except Exception as e:
-                logger.error("Maintenance loop error: %s", e)
+                logger.error("Maintenance loop error: error_type=%s", error_type(e))
             await asyncio.sleep(3600)
 
     background_tasks = [
@@ -327,13 +331,15 @@ async def main() -> None:
             except asyncio.TimeoutError:
                 logger.warning("Прогрев STT превысил %s сек", timeout_sec)
             except Exception as exc:
-                logger.warning("Прогрев STT завершился ошибкой: %s", exc)
+                logger.warning("STT warmup failed: error_type=%s", error_type(exc))
 
         background_tasks.append(
             asyncio.create_task(_warmup_stt(), name="_warmup_stt")
         )
 
-    # Middleware (порядок: whitelist первым, rate limit вторым)
+    # Transport privacy is the outer fail-closed boundary for every handler.
+    dp.message.middleware(PrivateChatMiddleware())
+    dp.callback_query.middleware(PrivateChatMiddleware())
     dp.message.middleware(WhitelistMiddleware())
     dp.callback_query.middleware(WhitelistMiddleware())
     dp.message.middleware(RateLimitMiddleware())
@@ -341,6 +347,7 @@ async def main() -> None:
 
     # Роутеры (порядок важен: onboarding, admin, commands, callbacks первыми; messages — последний)
     dp.include_router(onboarding.router)
+    dp.include_router(privacy.router)
     dp.include_router(admin.router)
     dp.include_router(commands.router)
     dp.include_router(callbacks.router)
@@ -371,6 +378,11 @@ async def main() -> None:
             task.cancel()
         await asyncio.gather(*background_tasks, return_exceptions=True)
         await llm_queue.stop()
+        if stt_client is not None:
+            try:
+                await stt_client.close()
+            except Exception as exc:
+                logger.warning("STT cleanup failed: error_type=%s", error_type(exc))
         await bot.session.close()
         await singleton.release()
         await engine.dispose()

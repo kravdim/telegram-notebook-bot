@@ -13,7 +13,7 @@ jobs:
     runs-on: ubuntu-latest
     services:
       postgres:
-        image: pgvector/pgvector:pg16
+        image: pgvector/pgvector:pg16@sha256:ccc6e83d6e35e931dc7c5def2022729d5a6c370318d099181995567ff1fb4d6b
         env:
           POSTGRES_USER: planner
           POSTGRES_PASSWORD: planner
@@ -34,8 +34,8 @@ jobs:
       OPERATOR_DATABASE_URL: postgresql://planner_recovery:planner_recovery@localhost:5432/postgres
       PYTHONPATH: .
     steps:
-      - uses: actions/checkout@v5
-      - uses: astral-sh/setup-uv@v6
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
         with:
           enable-cache: true
       - run: uv sync --frozen --group dev
@@ -91,7 +91,7 @@ jobs:
       OPENAI_API_KEY: container-smoke
       EMBEDDING_API_KEY: container-smoke
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
       - name: Build and wait for application readiness
         run: >-
           docker compose -p dailyplanner-ci
@@ -100,6 +100,27 @@ jobs:
           up --build --wait --wait-timeout 240
       - name: Exercise the readiness probe explicitly
         run: docker exec dailyplanner-ci-bot-1 python scripts/container_healthcheck.py
+      - name: Generate CycloneDX SBOM
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
+        with:
+          image: dailyplanner-ci-bot:latest
+          format: cyclonedx-json
+          output-file: dailyplanner.sbom.cdx.json
+          upload-artifact: false
+      - name: Upload SBOM
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: dailyplanner-sbom
+          path: dailyplanner.sbom.cdx.json
+          retention-days: 30
+      - name: Scan application image
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: dailyplanner-ci-bot:latest
+          format: table
+          exit-code: "1"
+          ignore-unfixed: true
+          severity: CRITICAL,HIGH
       - name: Preserve container diagnostics
         if: always()
         run: >-
@@ -118,9 +139,9 @@ jobs:
   secrets:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           fetch-depth: 0
-      - uses: gitleaks/gitleaks-action@v2
+      - uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7 # v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

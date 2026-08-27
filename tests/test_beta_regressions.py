@@ -132,7 +132,7 @@ async def test_mutation_without_tool_retries_with_required_tool(monkeypatch):
             return await coro
 
     async def fake_get_user(session, user_id):
-        return SimpleNamespace(timezone="Europe/Moscow")
+        return SimpleNamespace(timezone="Europe/Moscow", privacy_notice_version=1, cloud_processing_enabled=True)
 
     async def fake_get_prompt(session, prompt_key):
         return "prompt {now} {timezone}"
@@ -190,7 +190,7 @@ async def test_project_decomposition_has_no_duplicate_confirmation(monkeypatch):
             return await coro
 
     async def fake_get_user(session, user_id):
-        return SimpleNamespace(timezone="Europe/Moscow")
+        return SimpleNamespace(timezone="Europe/Moscow", privacy_notice_version=1, cloud_processing_enabled=True)
 
     async def fake_get_prompt(session, prompt_key):
         return "prompt {now} {timezone}"
@@ -340,6 +340,12 @@ async def test_voice_reports_progress_and_times_out(monkeypatch):
         coro.close()
         raise asyncio.TimeoutError
 
+    async def consented_user(session, user_id):
+        return SimpleNamespace(
+            privacy_notice_version=1,
+            cloud_processing_enabled=True,
+        )
+
     class Bot:
         async def send_chat_action(self, chat_id, action):
             return None
@@ -355,6 +361,7 @@ async def test_voice_reports_progress_and_times_out(monkeypatch):
     msg.voice = SimpleNamespace(file_id="abc", file_size=10)
     monkeypatch.setattr(voice, "_stt_client", STT())
     monkeypatch.setattr(voice.asyncio, "wait_for", fake_wait_for)
+    monkeypatch.setattr(voice, "get_user", consented_user)
 
     await voice.handle_voice(msg)
 

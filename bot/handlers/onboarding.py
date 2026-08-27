@@ -1,4 +1,4 @@
-"""FSM онбординга — 6 шагов."""
+"""FSM onboarding: privacy choice followed by six setup steps."""
 
 from __future__ import annotations
 
@@ -17,6 +17,7 @@ from bot.db.crud.tasks import create_task
 from bot.db.crud.users import get_or_create_user, get_user, update_user_settings
 from bot.db.engine import async_session
 from bot.handlers.telegram import callback_message
+from bot.privacy import PRIVACY_NOTICE_VERSION, privacy_notice_text
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +34,7 @@ def _parse_clock(value: str) -> dt_time | None:
 
 class OnboardingStates(StatesGroup):
     """Состояния онбординга."""
+    step_privacy = State()
     step_name = State()
     step_timezone = State()
     step_timezone_input = State()
@@ -55,10 +57,18 @@ async def cmd_start(message: Message, state: FSMContext) -> None:
     async with async_session() as session:
         user = await get_user(session, message.from_user.id)
 
-    if user and user.onboarding_completed:
+    if (
+        user
+        and user.onboarding_completed
+        and getattr(user, "privacy_notice_version", 0) >= PRIVACY_NOTICE_VERSION
+    ):
+        next_step = (
+            "Напиши задачу или используй /help для списка команд."
+            if getattr(user, "cloud_processing_enabled", False)
+            else "Cloud AI отключён; используй slash-команды или включи его через /privacy."
+        )
         await message.answer(
-            f"С возвращением, {user.username}! Чем могу помочь?\n"
-            "Напиши задачу или используй /help для списка команд.",
+            f"С возвращением, {user.username}! Чем могу помочь?\n{next_step}",
             parse_mode=None,
         )
         return
@@ -73,6 +83,67 @@ async def cmd_start(message: Message, state: FSMContext) -> None:
         return
 
     first_name = message.from_user.first_name or "друг"
+    await state.update_data(
+        suggested_name=first_name,
+        privacy_return="completed" if user and user.onboarding_completed else "onboarding",
+    )
+    await _send_privacy_step(message, state)
+
+
+async def _send_privacy_step(message: Message, state: FSMContext) -> None:
+    """Show the privacy contract before any cloud-assisted user input."""
+    keyboard = InlineKeyboardBuilder()
+    keyboard.button(text="✅ Разрешить cloud AI", callback_data="onb_privacy_accept")
+    keyboard.button(text="🚫 Продолжить без cloud AI", callback_data="onb_privacy_decline")
+    keyboard.adjust(1)
+    await message.answer(
+        privacy_notice_text(),
+        parse_mode=None,
+        reply_markup=keyboard.as_markup(),
+    )
+    await state.set_state(OnboardingStates.step_privacy)
+
+
+@router.callback_query(
+    OnboardingStates.step_privacy,
+    F.data.in_({"onb_privacy_accept", "onb_privacy_decline"}),
+)
+async def onb_privacy_choice(callback: CallbackQuery, state: FSMContext) -> None:
+    """Persist an explicit cloud-processing choice before onboarding continues."""
+    await callback.answer()
+    enabled = callback.data == "onb_privacy_accept"
+    await state.update_data(
+        privacy_notice_version=PRIVACY_NOTICE_VERSION,
+        cloud_processing_enabled=enabled,
+    )
+    async with async_session() as session:
+        user = await get_user(session, callback.from_user.id)
+        if user:
+            await update_user_settings(
+                session,
+                callback.from_user.id,
+                privacy_notice_version=PRIVACY_NOTICE_VERSION,
+                cloud_processing_enabled=enabled,
+            )
+    data = await state.get_data()
+    if data.get("privacy_return") == "completed":
+        await state.clear()
+        await callback_message(callback).edit_text(
+            "Настройка сохранена. Cloud AI включён."
+            if enabled
+            else "Настройка сохранена. Cloud AI отключён; доступны slash-команды.",
+            parse_mode=None,
+        )
+        return
+    await _send_name_step(
+        callback_message(callback),
+        state,
+        str(data.get("suggested_name") or "друг"),
+    )
+
+
+async def _send_name_step(message: Message, state: FSMContext, first_name: str) -> None:
+    """Ask for a display name after the privacy choice."""
 
     kb = InlineKeyboardBuilder()
     kb.button(text=f"Использовать \"{first_name[:30]}\"", callback_data="onb_name_use")
@@ -132,7 +203,9 @@ async def _resend_current_step(
 ) -> None:
     """Повторить актуальный вопрос, чтобы resume не зависел от истории чата."""
     data = await state.get_data()
-    if current_state == OnboardingStates.step_name.state:
+    if current_state == OnboardingStates.step_privacy.state:
+        await _send_privacy_step(message, state)
+    elif current_state == OnboardingStates.step_name.state:
         await message.answer("Как тебя зовут? Введи имя (1–3 слова).")
     elif current_state == OnboardingStates.step_timezone.state:
         await _send_timezone_step(message, state, str(data.get("username") or "друг"))
@@ -163,8 +236,15 @@ async def _save_name_and_proceed(callback: CallbackQuery, state: FSMContext, nam
     if not _is_valid_name(name):
         name = "друг"
 
+    data = await state.get_data()
     async with async_session() as session:
         await get_or_create_user(session, user_id, username=name)
+        await update_user_settings(
+            session,
+            user_id,
+            privacy_notice_version=int(data.get("privacy_notice_version") or 0),
+            cloud_processing_enabled=bool(data.get("cloud_processing_enabled", False)),
+        )
 
     await state.update_data(username=name)
     await _send_timezone_step(callback_message(callback), state, name)
@@ -176,8 +256,15 @@ async def _save_name_and_proceed_msg(message: Message, state: FSMContext, name: 
         return
     user_id = message.from_user.id
 
+    data = await state.get_data()
     async with async_session() as session:
         await get_or_create_user(session, user_id, username=name)
+        await update_user_settings(
+            session,
+            user_id,
+            privacy_notice_version=int(data.get("privacy_notice_version") or 0),
+            cloud_processing_enabled=bool(data.get("cloud_processing_enabled", False)),
+        )
 
     await state.update_data(username=name)
     await _send_timezone_step(message, state, name)
@@ -539,11 +626,15 @@ async def _finish_onboarding(message: Message, user_id: int, state: FSMContext) 
 
     await state.clear()
 
-    await message.answer(
-        "Настройка завершена! 🎉\n\n"
-        "Теперь ты можешь:\n"
-        "• Написать задачу свободным текстом\n"
-        "• Отправить голосовое сообщение\n"
-        "• Использовать /help для списка команд\n\n"
-        "Поехали! 🚀"
-    )
+    if data.get("cloud_processing_enabled"):
+        capabilities = (
+            "• Написать задачу свободным текстом\n"
+            "• Отправить голосовое сообщение\n"
+            "• Использовать /help для списка команд"
+        )
+    else:
+        capabilities = (
+            "Cloud AI отключён: свободный текст и голос не обрабатываются.\n"
+            "Используй slash-команды из /help или измени выбор через /privacy."
+        )
+    await message.answer(f"Настройка завершена! 🎉\n\n{capabilities}\n\nПоехали! 🚀")

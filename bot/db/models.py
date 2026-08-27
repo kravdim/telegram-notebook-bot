@@ -45,6 +45,10 @@ class User(Base):
     work_days: Mapped[List[int]] = mapped_column(ARRAY(Integer), nullable=False, default=lambda: [1, 2, 3, 4, 5])
     focus_until: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
     onboarding_completed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    privacy_notice_version: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    cloud_processing_enabled: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False
+    )
     digest_sent_date: Mapped[Optional[date]] = mapped_column(Date)
     digest_evening_sent_date: Mapped[Optional[date]] = mapped_column(Date)
     memoir_asked_date: Mapped[Optional[date]] = mapped_column(Date)
@@ -58,6 +62,23 @@ class User(Base):
 
     __table_args__ = (
         CheckConstraint("role IN ('admin', 'user')", name="ck_users_role"),
+        CheckConstraint(
+            "privacy_notice_version >= 0",
+            name="ck_users_privacy_notice_version",
+        ),
+        CheckConstraint(
+            "chronometry_interval_min > 0",
+            name="ck_users_chronometry_interval_positive",
+        ),
+        CheckConstraint(
+            "work_start_time < work_end_time",
+            name="ck_users_work_time_order",
+        ),
+        CheckConstraint(
+            "cardinality(work_days) > 0 "
+            "AND work_days <@ ARRAY[1, 2, 3, 4, 5, 6, 7]::integer[]",
+            name="ck_users_work_days",
+        ),
     )
 
 
@@ -105,6 +126,7 @@ class Trip(Base):
 
     __table_args__ = (
         CheckConstraint("status IN ('active', 'completed')", name="ck_trips_status"),
+        CheckConstraint("end_date >= start_date", name="ck_trips_date_order"),
     )
 
 
@@ -148,6 +170,11 @@ class Task(Base):
         CheckConstraint("category IN ('work', 'personal')", name="ck_tasks_category"),
         CheckConstraint("priority IN ('high', 'medium', 'normal')", name="ck_tasks_priority"),
         CheckConstraint("status IN ('open', 'done', 'cancelled')", name="ck_tasks_status"),
+        CheckConstraint(
+            "remind_before_min IS NULL OR remind_before_min >= 0",
+            name="ck_tasks_remind_before_nonnegative",
+        ),
+        CheckConstraint("version > 0", name="ck_tasks_version_positive"),
         CheckConstraint(
             "resolution IN ('completed', 'cancelled', 'deferred', 'expired')",
             name="ck_tasks_resolution",
@@ -267,6 +294,7 @@ class DeliveryBatch(Base):
             "status IN ('pending', 'delivering', 'delivered')",
             name="ck_delivery_batches_status",
         ),
+        CheckConstraint("attempts >= 0", name="ck_delivery_batches_attempts"),
         Index("idx_delivery_batches_pending", "status", "lease_expires_at"),
     )
 
@@ -303,6 +331,8 @@ class DeliveryPart(Base):
             "status IN ('pending', 'delivered')",
             name="ck_delivery_parts_status",
         ),
+        CheckConstraint("position >= 0", name="ck_delivery_parts_position"),
+        CheckConstraint("attempts >= 0", name="ck_delivery_parts_attempts"),
         UniqueConstraint("batch_id", "position", name="uq_delivery_part_position"),
         Index("idx_delivery_parts_pending", "batch_id", "status", "position"),
     )
@@ -371,6 +401,10 @@ class TimeTrackingEntry(Base):
         CheckConstraint(
             "productivity_score BETWEEN 1 AND 5",
             name="ck_time_tracking_score",
+        ),
+        CheckConstraint(
+            "duration_minutes > 0",
+            name="ck_time_tracking_duration_positive",
         ),
     )
 
@@ -461,6 +495,11 @@ class Reminder(Base):
         CheckConstraint(
             "status IN ('pending', 'delivered', 'snoozed', 'resolved', 'cancelled')",
             name="ck_reminders_status",
+        ),
+        CheckConstraint("snooze_count >= 0", name="ck_reminders_snooze_count"),
+        CheckConstraint(
+            "delivery_attempts >= 0",
+            name="ck_reminders_delivery_attempts",
         ),
         UniqueConstraint("series_id", "occurrence_at", name="uq_reminder_series_occurrence"),
         Index("idx_reminders_pending", "remind_at", postgresql_where="is_sent = FALSE"),

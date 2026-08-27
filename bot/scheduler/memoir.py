@@ -15,6 +15,7 @@ from bot.db.engine import async_session
 from bot.formatters import split_html_message
 from bot.formatters.chronometry import format_day_timeline
 from bot.formatters.memoir import format_memoir_question, format_weekly_review
+from bot.logging_safety import error_type
 from bot.services.delivery import DeliveryPartSpec, DeliveryResult, deliver_batch
 
 logger = logging.getLogger(__name__)
@@ -80,13 +81,10 @@ async def send_memoir_prompts(bot: Bot) -> None:
                     await claim_date_marker(
                         session, user.telegram_id, "memoir_asked_date", today
                     )
-                logger.info("Мемуарник отправлен: %s", user.telegram_id)
+                logger.info("Мемуарник отправлен")
 
         except Exception as e:
-            logger.error(
-                "Ошибка мемуарника для %s: %s",
-                user.telegram_id, e, exc_info=True,
-            )
+            logger.error("Ошибка мемуарника: error_type=%s", error_type(e))
 
 
 async def _send_day_timeline(bot: Bot, user, tz: str, today=None) -> DeliveryResult:
@@ -172,7 +170,10 @@ async def _claim_memoir_state(user_id: int, session_token: str) -> bool:
         )
         return state is not None
     except Exception as e:
-        logger.warning("Не удалось сохранить ожидание мемуарника: %s", e)
+        logger.warning(
+            "Не удалось сохранить ожидание мемуарника: error_type=%s",
+            error_type(e),
+        )
         return False
 
 
@@ -195,7 +196,10 @@ async def _persist_memoir_state(
         )
         return state is not None
     except Exception as e:
-        logger.warning("Не удалось обновить ожидание мемуарника: %s", e)
+        logger.warning(
+            "Не удалось обновить ожидание мемуарника: error_type=%s",
+            error_type(e),
+        )
         return False
 
 
@@ -205,7 +209,10 @@ async def _clear_memoir_state(
     try:
         await interaction_service.clear(user_id, "memoir", session_token)
     except Exception as e:
-        logger.warning("Не удалось освободить ожидание мемуарника: %s", e)
+        logger.warning(
+            "Не удалось освободить ожидание мемуарника: error_type=%s",
+            error_type(e),
+        )
 
 
 async def _send_monthly_review(bot: Bot, user, tz: str, today=None) -> DeliveryResult:

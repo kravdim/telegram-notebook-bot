@@ -11,10 +11,11 @@ from typing import cast
 import pendulum
 from aiogram import F, Router
 from aiogram.filters import Command, CommandObject
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, Message
 from aiogram.types.input_file import FSInputFile
 from aiogram.utils.keyboard import InlineKeyboardBuilder
-from sqlalchemy import select
 
 from bot.config import settings
 from bot.db.crud.birthdays import get_all_birthdays
@@ -31,53 +32,25 @@ from bot.db.crud.tasks import (
 )
 from bot.db.crud.users import get_user, update_user_settings
 from bot.db.engine import async_session
-from bot.db.models import DiaryEntry, Note
+from bot.db.models import Note
 from bot.formatters import split_html_message
 from bot.formatters.chronometry import format_day_photo, format_week_summary
 from bot.formatters.memoir import format_memoir_entries, format_value_stats
 from bot.handlers.telegram import callback_data, callback_message, message_bot
+from bot.logging_safety import error_type
 from bot.services.export import ExportTooLargeError, write_export_archive
 from bot.services.tasks import closed_task_status, complete_task_workflow
+from bot.services.user_export import build_user_export_sections
 
 logger = logging.getLogger(__name__)
 
 router = Router()
 
+
+class SettingsStates(StatesGroup):
+    timezone_input = State()
+
 _PRIORITY_EMOJI = {"high": "🔴", "medium": "🟡", "normal": "⚪"}
-
-
-def _task_export_lines(tasks):
-    yield "# Задачи\n\n"
-    for task in tasks:
-        status = "x" if task.status == "done" else " "
-        frog = " 🐸" if task.is_frog else ""
-        date_str = (
-            f" (до {task.due_date.strftime('%d.%m.%Y')})" if task.due_date else ""
-        )
-        yield f"- [{status}] {task.title}{frog}{date_str}\n"
-
-
-def _note_export_lines(notes):
-    yield "# Заметки\n\n"
-    for note in notes:
-        title = note.title or "Без названия"
-        date_str = note.created_at.strftime("%Y-%m-%d %H:%M")
-        yield f"## {title}\n*{date_str}*\n\n{note.content}\n\n---\n\n"
-
-
-def _dated_export_lines(title, entries, date_attribute):
-    yield f"# {title}\n\n"
-    for entry in entries:
-        entry_date = getattr(entry, date_attribute).strftime("%Y-%m-%d")
-        tag = f" [{entry.value_tag}]" if getattr(entry, "value_tag", None) else ""
-        yield f"## {entry_date}{tag}\n\n{entry.content}\n\n---\n\n"
-
-
-def _birthday_export_lines(birthdays):
-    yield "# Дни рождения\n\n"
-    for birthday in birthdays:
-        note = f" — {birthday.note}" if birthday.note else ""
-        yield f"- {birthday.name}: {birthday.birth_date.strftime('%d.%m.%Y')}{note}\n"
 
 
 async def _answer_html_parts(message: Message, text: str) -> None:
@@ -126,7 +99,9 @@ async def cmd_help(message: Message) -> None:
         "/birthdays — дни рождения\n"
         "/stats — статистика\n"
         "/settings — настройки\n"
-        "/export — выгрузить данные\n\n"
+        "/export — выгрузить данные\n"
+        "/privacy — privacy и cloud AI\n"
+        "/delete_data — полное удаление данных\n\n"
         "💡 <b>Примеры фраз:</b>\n"
         "• Купить продукты завтра\n"
         "• Напомни в 15:00 позвонить врачу\n"
@@ -623,17 +598,15 @@ async def _stats_frogs(message: Message) -> None:
         tz = user.timezone if user else "Europe/Moscow"
         # За последние 30 дней
         now = pendulum.now(tz)
-        since = now.subtract(days=30).date()
+        since_utc = _frog_stats_since_utc(tz, now)
 
         result = await session.execute(
             select(func.count()).where(
                 Task.user_id == message.from_user.id,
                 Task.is_frog.is_(True),
                 or_(
-                    Task.created_at
-                    >= pendulum.instance(datetime.combine(since, datetime.min.time())),
-                    Task.completed_at
-                    >= pendulum.instance(datetime.combine(since, datetime.min.time())),
+                    Task.created_at >= since_utc,
+                    Task.completed_at >= since_utc,
                 ),
             )
         )
@@ -644,8 +617,7 @@ async def _stats_frogs(message: Message) -> None:
                 Task.user_id == message.from_user.id,
                 Task.is_frog.is_(True),
                 Task.status == "done",
-                Task.completed_at
-                >= pendulum.instance(datetime.combine(since, datetime.min.time())),
+                Task.completed_at >= since_utc,
             )
         )
         done = result.scalar() or 0
@@ -670,6 +642,15 @@ async def _stats_frogs(message: Message) -> None:
     streak = _current_frog_streak(completed_dates, now.date())
     text = format_frog_stats(done, total, streak)
     await message.answer(text, parse_mode="HTML")
+
+
+def _frog_stats_since_utc(
+    timezone_name: str,
+    now: pendulum.DateTime | None = None,
+) -> pendulum.DateTime:
+    """Return the user's local 30-day boundary represented in UTC."""
+    local_now = now.in_tz(timezone_name) if now else pendulum.now(timezone_name)
+    return local_now.subtract(days=30).start_of("day").in_tz("UTC")
 
 
 def _current_frog_streak(completed_dates: set[date], today: date) -> int:
@@ -870,6 +851,7 @@ async def cb_timezone(callback: CallbackQuery) -> None:
     kb = InlineKeyboardBuilder()
     for label, timezone in choices:
         kb.button(text=label, callback_data=f"settings:set_tz:{timezone}")
+    kb.button(text="Другой IANA timezone", callback_data="settings:timezone_custom")
     kb.button(text="◀️ Назад", callback_data="settings:back")
     kb.adjust(2)
     await callback_message(callback).edit_text(
@@ -889,6 +871,35 @@ async def cb_set_timezone(callback: CallbackQuery) -> None:
     async with async_session() as session:
         await update_user_settings(session, callback.from_user.id, timezone=timezone)
     await _show_settings(callback)
+
+
+@router.callback_query(F.data == "settings:timezone_custom")
+async def cb_timezone_custom(callback: CallbackQuery, state: FSMContext) -> None:
+    await callback.answer()
+    await state.set_state(SettingsStates.timezone_input)
+    await callback_message(callback).edit_text(
+        "Введи IANA timezone, например Europe/London или America/New_York.",
+        parse_mode=None,
+    )
+
+
+@router.message(SettingsStates.timezone_input)
+async def settings_timezone_text(message: Message, state: FSMContext) -> None:
+    if not message.from_user or not message.text:
+        return
+    timezone = message.text.strip()
+    try:
+        pendulum.now(timezone)
+    except Exception:
+        await message.answer(
+            "Неизвестный timezone. Используй IANA-формат Continent/City.",
+            parse_mode=None,
+        )
+        return
+    async with async_session() as session:
+        await update_user_settings(session, message.from_user.id, timezone=timezone)
+    await state.clear()
+    await message.answer(f"Часовой пояс сохранён: {timezone}", parse_mode=None)
 
 
 # --- Время утреннего дайджеста ---
@@ -1168,7 +1179,7 @@ async def cmd_birthdays(message: Message) -> None:
 
 @router.message(Command("export"))
 async def cmd_export(message: Message) -> None:
-    """Экспорт данных в Markdown-файлы."""
+    """Export every user-owned dataset as a versioned JSONL archive."""
     if not message.from_user:
         return
 
@@ -1181,61 +1192,32 @@ async def cmd_export(message: Message) -> None:
     try:
         with tempfile.TemporaryDirectory(prefix="dailyplanner-export-") as temp_dir:
             archive_path = Path(temp_dir) / "export.zip"
-            sections = []
             async with async_session() as session:
-                tasks = await get_user_tasks(session, user_id, status=None)
-                if tasks:
-                    sections.append(("tasks.md", _task_export_lines(tasks)))
-
-                res = await session.execute(
-                    select(Note)
-                    .where(Note.user_id == user_id)
-                    .order_by(Note.created_at.desc())
+                sections = await build_user_export_sections(
+                    session,
+                    user_id,
+                    Path(temp_dir) / "data",
+                    max_bytes=max_bytes,
                 )
-                notes = list(res.scalars().all())
-                if notes:
-                    sections.append(("notes.md", _note_export_lines(notes)))
-
-                diary_result = await session.execute(
-                    select(DiaryEntry)
-                    .where(DiaryEntry.user_id == user_id)
-                    .order_by(DiaryEntry.entry_date.desc())
-                )
-                diary = list(diary_result.scalars().all())
-                if diary:
-                    sections.append(
-                        ("diary.md", _dated_export_lines("Дневник", diary, "entry_date"))
-                    )
-
-                memoirs = await get_memoir_entries(session, user_id, limit=365)
-                if memoirs:
-                    sections.append(
-                        (
-                            "memoir.md",
-                            _dated_export_lines("Мемуарник", memoirs, "event_date"),
-                        )
-                    )
-
-                birthdays = await get_all_birthdays(session, user_id)
-                if birthdays:
-                    sections.append(
-                        ("birthdays.md", _birthday_export_lines(birthdays))
-                    )
 
             write_export_archive(archive_path, sections, max_bytes=max_bytes)
             doc = FSInputFile(
                 archive_path,
-                filename=f"export_{pendulum.now().format('YYYY-MM-DD')}.zip",
+                filename=f"dailyplanner_export_v1_{pendulum.now().format('YYYY-MM-DD')}.zip",
             )
             await message.answer_document(
-                doc, caption="📦 Экспорт данных в Markdown (Obsidian-совместимый)"
+                doc,
+                caption=(
+                    "📦 Полный версионированный экспорт: manifest.json и JSONL "
+                    "по всем пользовательским наборам"
+                ),
             )
     except ExportTooLargeError:
-        logger.warning("Export for user %s exceeded the configured size", user_id)
+        logger.warning("Export exceeded the configured size")
         await message.answer(
             "Экспорт слишком большой для безопасной отправки. "
             "Обратись к администратору за архивом данных."
         )
-    except Exception:
-        logger.exception("Export failed for user %s", user_id)
+    except Exception as exc:
+        logger.error("Export failed: error_type=%s", error_type(exc))
         await message.answer("Не удалось подготовить экспорт. Попробуй позже.")

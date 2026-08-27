@@ -14,6 +14,7 @@ from sqlalchemy.engine import make_url
 from bot.config import settings
 from bot.db.crud.operational import get_operational_state, set_operational_state
 from bot.db.engine import async_session
+from bot.logging_safety import error_type
 from bot.observability import metrics
 
 logger = logging.getLogger(__name__)
@@ -44,7 +45,9 @@ async def run_backup() -> Path | None:
         if not user or not dbname:
             raise ValueError("username or database is empty")
     except (TypeError, ValueError) as e:
-        logger.error("Не удалось распарсить DATABASE_URL: %s", e)
+        logger.error(
+            "Не удалось распарсить DATABASE_URL: error_type=%s", error_type(e)
+        )
         metrics.increment("backup.error")
         return None
 
@@ -102,14 +105,18 @@ async def run_backup() -> Path | None:
 
         if pg_dump.returncode != 0:
             logger.error(
-                "pg_dump failed (rc=%d): %s",
+                "pg_dump failed: rc=%d stderr_bytes=%d",
                 pg_dump.returncode,
-                pg_stderr.decode(errors="replace"),
+                len(pg_stderr),
             )
             filepath.unlink(missing_ok=True)
             metrics.increment("backup.error")
         elif gzip_proc.returncode != 0:
-            logger.error("gzip failed: %s", gzip_stderr.decode(errors="replace"))
+            logger.error(
+                "gzip failed: rc=%d stderr_bytes=%d",
+                gzip_proc.returncode,
+                len(gzip_stderr),
+            )
             filepath.unlink(missing_ok=True)
             metrics.increment("backup.error")
         else:
@@ -137,7 +144,10 @@ async def run_backup() -> Path | None:
             except Exception as state_error:
                 # The archive is still valid. Do not delete it merely because the
                 # observability marker could not be persisted.
-                logger.error("Бэкап создан, но SLO-маркер не сохранён: %s", state_error)
+                logger.error(
+                    "Бэкап создан, но SLO-маркер не сохранён: error_type=%s",
+                    error_type(state_error),
+                )
             metrics.increment("backup.success")
             logger.info("Бэкап создан: %s (%.1f MB)", filename, size_mb)
     except asyncio.TimeoutError:
@@ -156,7 +166,7 @@ async def run_backup() -> Path | None:
         filepath.unlink(missing_ok=True)
         metrics.increment("backup.error")
     except Exception as e:
-        logger.error("Ошибка бэкапа: %s", e)
+        logger.error("Ошибка бэкапа: error_type=%s", error_type(e))
         for process in (pg_dump, gzip_proc):
             if process and process.returncode is None:
                 process.kill()

@@ -1,4 +1,4 @@
-"""Основной контур: отправка напоминаний через APScheduler."""
+"""Основной контур отправки напоминаний из собственного async scheduler loop."""
 
 import logging
 from html import escape
@@ -10,6 +10,7 @@ from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
 from bot.db.crud.reminders import get_pending_reminders, mark_sent, record_delivery_failure
 from bot.db.engine import async_session
 from bot.handlers.callbacks import build_snooze_keyboard
+from bot.logging_safety import error_type
 from bot.observability import metrics
 
 logger = logging.getLogger(__name__)
@@ -37,16 +38,17 @@ async def send_pending_reminders(bot: Bot) -> None:
                     "reminders.delivery_lag_seconds",
                     max(0.0, (now - pendulum.instance(reminder.remind_at)).total_seconds()),
                 )
-                logger.info("Напоминание %s отправлено пользователю %s", reminder.id, reminder.user_id)
+                logger.info("Напоминание отправлено")
             except Exception as e:
                 metrics.increment("reminders.delivery_error")
                 logger.error(
-                    "Не удалось отправить напоминание %s: %s", reminder.id, e, exc_info=True
+                    "Не удалось отправить напоминание: error_type=%s",
+                    error_type(e),
                 )
                 await session.rollback()
                 await record_delivery_failure(
                     session,
                     reminder.id,
-                    str(e),
+                    error_type(e),
                     terminal=isinstance(e, (TelegramBadRequest, TelegramForbiddenError)),
                 )

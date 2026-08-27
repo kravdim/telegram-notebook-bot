@@ -1,12 +1,14 @@
 """STT через faster-whisper (macOS, локально)."""
 
 import asyncio
+import gc
 import logging
 import os
 import threading
 from pathlib import Path
 
 from bot.config import settings
+from bot.logging_safety import error_type
 from bot.stt.base import STTClient
 
 logger = logging.getLogger(__name__)
@@ -77,5 +79,22 @@ class LocalWhisperClient(STTClient):
             await loop.run_in_executor(None, self._load_model)
             return self._model is not None
         except Exception as exc:
-            logger.warning("Whisper health check failed: %s", exc, exc_info=True)
+            logger.warning("Whisper health check failed: error_type=%s", error_type(exc))
             return False
+
+    async def close(self) -> None:
+        """Release the native CTranslate2 model and collect adapter resources."""
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(None, self._close_sync)
+
+    def _close_sync(self) -> None:
+        try:
+            with self._load_lock:
+                model = self._model
+                self._model = None
+                native_model = getattr(model, "model", None)
+                unload = getattr(native_model, "unload_model", None)
+                if callable(unload):
+                    unload()
+        finally:
+            gc.collect()

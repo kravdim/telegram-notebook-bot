@@ -11,6 +11,7 @@ from aiogram import Bot
 from bot.application.interactions import interaction_service
 from bot.db.crud.users import get_all_users, update_user_settings
 from bot.db.engine import async_session
+from bot.logging_safety import error_type
 
 logger = logging.getLogger(__name__)
 
@@ -125,7 +126,7 @@ async def _send_prompt(bot: Bot, user, now: pendulum.DateTime) -> str:
                 session, user_id,
                 chronometry_last_asked=now,
             )
-        logger.info("Хронометраж: вопрос отправлен %s", user_id)
+        logger.info("Хронометраж: вопрос отправлен")
         return "sent"
 
 
@@ -184,10 +185,7 @@ async def send_chronometry_prompts(bot: Bot) -> None:
             await _send_prompt(bot, user, now)
 
         except Exception as e:
-            logger.error(
-                "Ошибка хронометража для %s: %s",
-                user.telegram_id, e, exc_info=True,
-            )
+            logger.error("Ошибка хронометража: error_type=%s", error_type(e))
 
 
 def _awaiting_is_stale(user_id: int, now: pendulum.DateTime, interval_min: int) -> bool:

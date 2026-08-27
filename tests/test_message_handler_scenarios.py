@@ -97,7 +97,7 @@ async def test_done_message_routes_directly_to_dispatch(monkeypatch):
     calls = []
 
     async def fake_get_user(session, user_id):
-        return SimpleNamespace(timezone="Europe/Moscow")
+        return SimpleNamespace(timezone="Europe/Moscow", privacy_notice_version=1, cloud_processing_enabled=True)
 
     async def fake_dispatch(function_call, user_id, user_tz):
         calls.append((function_call, user_id, user_tz))
@@ -130,7 +130,7 @@ async def test_conversational_done_bypasses_pending_chronometry(monkeypatch):
     calls = []
 
     async def fake_get_user(session, user_id):
-        return SimpleNamespace(timezone="Europe/Moscow")
+        return SimpleNamespace(timezone="Europe/Moscow", privacy_notice_version=1, cloud_processing_enabled=True)
 
     async def fake_dispatch(function_call, user_id, user_tz):
         calls.append(function_call)
@@ -163,7 +163,7 @@ async def test_reschedule_bypasses_pending_chronometry(monkeypatch):
     calls = []
 
     async def fake_get_user(session, user_id):
-        return SimpleNamespace(timezone="Europe/Moscow")
+        return SimpleNamespace(timezone="Europe/Moscow", privacy_notice_version=1, cloud_processing_enabled=True)
 
     async def fake_dispatch(function_call, user_id, user_tz):
         calls.append(function_call)
@@ -193,7 +193,7 @@ async def test_cancel_bypasses_pending_chronometry(monkeypatch):
     calls = []
 
     async def fake_get_user(session, user_id):
-        return SimpleNamespace(timezone="Europe/Moscow")
+        return SimpleNamespace(timezone="Europe/Moscow", privacy_notice_version=1, cloud_processing_enabled=True)
 
     async def fake_dispatch(function_call, user_id, user_tz):
         calls.append(function_call)
@@ -227,7 +227,7 @@ async def test_cancel_bypasses_pending_chronometry(monkeypatch):
 @pytest.mark.asyncio
 async def test_chronometry_reply_routes_to_chronometry_handler(monkeypatch):
     async def fake_get_user(session, user_id):
-        return SimpleNamespace(timezone="Europe/Moscow")
+        return SimpleNamespace(timezone="Europe/Moscow", privacy_notice_version=1, cloud_processing_enabled=True)
 
     async def fake_process_chrono(user_id, text, tz):
         assert (user_id, text, tz) == (42, "Обедаю", "Europe/Moscow")
@@ -261,7 +261,7 @@ async def test_reply_to_other_message_does_not_go_to_chronometry(monkeypatch):
             return FakeResponse(content="Обычный ответ")
 
     async def fake_get_user(session, user_id):
-        return SimpleNamespace(timezone="Europe/Moscow")
+        return SimpleNamespace(timezone="Europe/Moscow", privacy_notice_version=1, cloud_processing_enabled=True)
 
     async def fake_get_prompt(session, prompt_key):
         return "prompt {now} {timezone}"
@@ -296,7 +296,7 @@ async def test_pending_memoir_requires_explicit_reply(monkeypatch):
             return FakeResponse(content="Обычный ответ")
 
     async def fake_get_user(session, user_id):
-        return SimpleNamespace(timezone="Europe/Moscow")
+        return SimpleNamespace(timezone="Europe/Moscow", privacy_notice_version=1, cloud_processing_enabled=True)
 
     async def fake_get_prompt(session, prompt_key):
         return "prompt {now} {timezone}"
@@ -333,7 +333,7 @@ async def test_explicit_reply_to_persisted_memoir_is_saved(monkeypatch):
     cleared = []
 
     async def fake_get_user(session, user_id):
-        return SimpleNamespace(timezone="Europe/Moscow")
+        return SimpleNamespace(timezone="Europe/Moscow", privacy_notice_version=1, cloud_processing_enabled=True)
 
     async def memoir_state(user_id, state_type):
         if state_type == "memoir":
@@ -366,7 +366,7 @@ async def test_explicit_reply_to_persisted_memoir_is_saved(monkeypatch):
 @pytest.mark.asyncio
 async def test_incomplete_mutation_never_reuses_old_context(monkeypatch):
     async def fake_get_user(session, user_id):
-        return SimpleNamespace(timezone="Europe/Moscow")
+        return SimpleNamespace(timezone="Europe/Moscow", privacy_notice_version=1, cloud_processing_enabled=True)
 
     monkeypatch.setattr(messages, "async_session", lambda: FakeSessionContext())
     monkeypatch.setattr(messages, "get_user", fake_get_user)
@@ -389,7 +389,7 @@ async def test_greeting_does_not_get_captured_by_pending_chronometry(monkeypatch
             return FakeResponse(content="И тебе доброе утро.")
 
     async def fake_get_user(session, user_id):
-        return SimpleNamespace(timezone="Europe/Moscow")
+        return SimpleNamespace(timezone="Europe/Moscow", privacy_notice_version=1, cloud_processing_enabled=True)
 
     async def fake_get_prompt(session, prompt_key):
         return "prompt {now} {timezone}"
@@ -420,7 +420,7 @@ async def test_task_request_bypasses_pending_chronometry(monkeypatch):
     calls = []
 
     async def fake_get_user(session, user_id):
-        return SimpleNamespace(timezone="Europe/Moscow")
+        return SimpleNamespace(timezone="Europe/Moscow", privacy_notice_version=1, cloud_processing_enabled=True)
 
     async def fake_dispatch(function_call, user_id, user_tz):
         calls.append(function_call)
@@ -457,7 +457,7 @@ async def test_project_completion_waits_for_title_and_dispatches(monkeypatch):
     calls = []
 
     async def fake_get_user(session, user_id):
-        return SimpleNamespace(timezone="Europe/Moscow")
+        return SimpleNamespace(timezone="Europe/Moscow", privacy_notice_version=1, cloud_processing_enabled=True)
 
     async def fake_dispatch_result(function_call, user_id, user_tz):
         calls.append(function_call)
@@ -495,7 +495,7 @@ async def test_free_text_fake_task_creation_is_blocked(monkeypatch):
             return FakeResponse(content="Создаю задачу: Настройка почты ✅\n\nВсё верно?")
 
     async def fake_get_user(session, user_id):
-        return SimpleNamespace(timezone="Europe/Moscow")
+        return SimpleNamespace(timezone="Europe/Moscow", privacy_notice_version=1, cloud_processing_enabled=True)
 
     async def fake_get_prompt(session, prompt_key):
         return "prompt {now} {timezone}"
@@ -549,7 +549,7 @@ async def test_failed_mutation_is_closed_in_history_before_next_turn(monkeypatch
             return await coro
 
     async def fake_get_user(session, user_id):
-        return SimpleNamespace(timezone="Europe/Moscow")
+        return SimpleNamespace(timezone="Europe/Moscow", privacy_notice_version=1, cloud_processing_enabled=True)
 
     async def fake_get_prompt(session, prompt_key):
         return "prompt {now} {timezone}"
@@ -610,7 +610,7 @@ async def test_llm_multiple_function_calls_are_dispatched(monkeypatch):
             )
 
     async def fake_get_user(session, user_id):
-        return SimpleNamespace(timezone="Europe/Moscow")
+        return SimpleNamespace(timezone="Europe/Moscow", privacy_notice_version=1, cloud_processing_enabled=True)
 
     async def fake_get_prompt(session, prompt_key):
         return "prompt {now} {timezone}"
@@ -650,7 +650,7 @@ async def test_confirm_delete_result_builds_keyboard(monkeypatch):
             return FakeResponse(function_calls=[{"name": "delete_task", "arguments": {}}])
 
     async def fake_get_user(session, user_id):
-        return SimpleNamespace(timezone="Europe/Moscow")
+        return SimpleNamespace(timezone="Europe/Moscow", privacy_notice_version=1, cloud_processing_enabled=True)
 
     async def fake_get_prompt(session, prompt_key):
         return "prompt {now} {timezone}"
@@ -696,7 +696,7 @@ async def test_llm_unavailable_message(monkeypatch):
             raise LLMUnavailableError("down")
 
     async def fake_get_user(session, user_id):
-        return SimpleNamespace(timezone="Europe/Moscow")
+        return SimpleNamespace(timezone="Europe/Moscow", privacy_notice_version=1, cloud_processing_enabled=True)
 
     async def fake_get_prompt(session, prompt_key):
         return "prompt {now} {timezone}"

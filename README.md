@@ -15,20 +15,23 @@
 - **Reply-контекст** — ответ reply'ем на конкретное сообщение бота направляется в нужный обработчик (хронометраж или LLM)
 - **Дайджесты** — утренний (с днями рождения!) и вечерний с разбором невыполненных задач
 - **Sunday Review** — еженедельный обзор: распределение времени, лягушки, ценности, прогресс по слонам
-- **Периодические напоминания** — список задач каждые 2 часа в рабочее время (9, 11, 13, 15, 17)
+- **Периодические напоминания** — список задач каждые 2 часа в рабочее время (11, 13, 15, 17)
 - **Режим фокуса** (`/focus`) — хронометраж не беспокоит
 - **Командировки** (`/trip`) — отдельный список задач, адаптированный дайджест
 - **Голосовые сообщения** — STT + confirm перед обработкой, лимит размера 20 МБ
 - **Семантический поиск** — pgvector + pg_trgm, гибридный RAG (vector + trigram) по всем записям
 - **База знаний** — советы по методике Архангельского через RAG-поиск
 - **Дни рождения** (`/birthdays`) — запоминает и показывает в утреннем дайджесте
-- **Экспорт** (`/export`) — ограниченная по размеру дисковая выгрузка в Markdown
-  (Obsidian-совместимый ZIP, временный файл удаляется после отправки)
+- **Экспорт** (`/export`) — полный версионированный ZIP с manifest и отдельным
+  JSONL для каждого пользовательского набора; временный файл удаляется после отправки
+- **Privacy controls** (`/privacy`, `/delete_data`) — disclosure фактических AI-провайдеров,
+  явное включение cloud processing, экспорт и проверяемый запрос удаления
 - **Статистика** (`/stats`) — лягушки, продуктивность, ценности
 - **Повторяющиеся задачи** — бот распознаёт и комментирует рутину с юмором
 
 ## Безопасность
 
+- **Private-only boundary** — handlers принимают сообщения и callback только из личного чата
 - **Whitelist** — доступ только для разрешённых Telegram ID (middleware на message + callback_query)
 - **Rate limiting** — анти-флуд middleware: макс. 20 сообщений/минуту на пользователя
 - **Prompt injection protection** — жёсткие границы роли, игнорирование попыток смены поведения, лимит длины ответов
@@ -122,12 +125,9 @@ cp config.docker.yaml.example config.docker.yaml
 docker compose up -d --wait
 ```
 
-Или через systemd:
-
-```bash
-chmod +x platform/linux/install.sh
-NOTEBOOK_DB_PASSWORD='replace-with-a-long-random-password' sudo -E ./platform/linux/install.sh
-```
+Standalone systemd installer снят с поддержки: он не мог безопасно получить
+полную provider-конфигурацию и секреты с чистого хоста. Поддерживаемый Linux
+target — только проверяемый Docker Compose профиль выше.
 
 ## Структура проекта
 
@@ -135,12 +135,13 @@ NOTEBOOK_DB_PASSWORD='replace-with-a-long-random-password' sudo -E ./platform/li
 bot/
 ├── main.py                     # Точка входа, инициализация, polling
 ├── config.py                   # Pydantic Settings + config.yaml
-├── middleware.py                # Whitelist + Rate Limiting middleware
+├── middleware.py                # Private-chat boundary + whitelist + rate limit
 ├── handlers/
-│   ├── onboarding.py           # FSM онбординга (6 шагов)
+│   ├── onboarding.py           # FSM онбординга (privacy + 6 шагов)
 │   ├── commands.py             # /today, /tasks, /frog, /done, /notes, /projects,
 │   │                           # /memoir, /chrono, /focus, /stats, /birthdays,
 │   │                           # /export, /settings, /help
+│   ├── privacy.py              # /privacy, /delete_data и cloud-processing choice
 │   ├── messages.py             # Свободный текст → LLM → function call (с reply-контекстом)
 │   ├── callbacks.py            # Snooze, confirm удаления
 │   ├── evening_review.py       # Разбор невыполненных задач
@@ -151,7 +152,7 @@ bot/
 ├── llm/
 │   ├── client.py               # LLMClient: MiniMax M2.7 + опциональный fallback
 │   ├── queue.py                # PriorityQueue для LLM-запросов
-│   ├── functions.py            # JSON Schema function tools (14 функций)
+│   ├── functions.py            # JSON Schema function tools (15 функций)
 │   ├── dispatcher.py           # Исполнение function calls + валидация
 │   ├── decompose.py            # LLM-декомпозиция проектов на бифштексы
 │   ├── prompts.py              # Промпты из БД + 5-мин кэш
@@ -179,7 +180,7 @@ bot/
 │   ├── digest.py               # Утренний/вечерний дайджесты
 │   ├── memoir.py               # Вопросы мемуарника
 │   ├── chronometry.py          # Периодический опрос хронометража (с reply-tracking)
-│   ├── task_reminders.py       # Напоминания задач каждые 2 часа (9/11/13/15/17)
+│   ├── task_reminders.py       # Напоминания задач каждые 2 часа (11/13/15/17)
 │   ├── weekly_review.py        # Еженедельный обзор (воскресенье 21:00)
 │   ├── healthcheck.py          # Health check (DB, LLM, Embedding, STT + SLO)
 │   ├── backup.py               # pg_dump + ротация (30 дней)
@@ -215,7 +216,7 @@ Telegram-сообщения дедуплицируются в PostgreSQL.
 
 ## LLM Function Calling
 
-Бот использует 14 функций через OpenAI-совместимый function calling. Поддерживает множественные tool_calls из одного сообщения.
+Бот использует 15 функций через OpenAI-совместимый function calling. Поддерживает множественные tool_calls из одного сообщения.
 
 | Функция | Описание |
 |---------|----------|
@@ -233,6 +234,7 @@ Telegram-сообщения дедуплицируются в PostgreSQL.
 | `get_advice` | Совет по тайм-менеджменту из базы знаний Архангельского |
 | `add_birthday` | Запомнить день рождения |
 | `respond_to_user` | Свободный ответ (с ограничением роли) |
+| `clarify_request` | Запросить недостающие данные без ложного подтверждения мутации |
 
 ## Надёжность
 
@@ -284,7 +286,9 @@ Telegram-сообщения дедуплицируются в PostgreSQL.
 | `/stats frogs` | Статистика лягушек |
 | `/stats productivity` | Статистика продуктивности |
 | `/stats values` | Статистика ценностей |
-| `/export` | Экспорт данных в Markdown (ZIP) |
+| `/export` | Полный версионированный экспорт manifest + JSONL (ZIP) |
+| `/privacy` | Privacy notice и выбор cloud processing |
+| `/delete_data` | Инструкция по полному проверяемому удалению данных |
 | `/settings` | Текущие настройки |
 | `/status` | Статус сервисов (admin) |
 | `/prompts` | Список промптов (admin) |
@@ -373,8 +377,6 @@ Drill никогда не изменяет исходную БД: он пров�
 manager, не командную строку или env-файл.
 Интерактивный `restore_backup.sh` предназначен только для явно выбранной target
 БД и остаётся отдельной аварийной процедурой.
-Для standalone-установки передайте пароль через
-`NOTEBOOK_DB_PASSWORD=... sudo -E platform/linux/install.sh`.
 
 ## Лицензия
 

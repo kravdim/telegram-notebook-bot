@@ -4,6 +4,7 @@ import logging
 from typing import Optional
 
 from bot.embeddings.base import EmbeddingClient
+from bot.logging_safety import error_type
 
 logger = logging.getLogger(__name__)
 
@@ -23,7 +24,7 @@ async def get_embedding(text: str) -> Optional[list]:
     try:
         return await _client.embed(text)
     except Exception as e:
-        logger.warning("Ошибка получения embedding: %s", e)
+        logger.warning("Ошибка получения embedding: error_type=%s", error_type(e))
         return None
 
 

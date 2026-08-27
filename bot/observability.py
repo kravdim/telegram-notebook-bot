@@ -19,6 +19,7 @@ from bot.config import settings
 from bot.db.crud.operational import get_operational_state, set_operational_state
 from bot.db.engine import async_session
 from bot.db.models import Reminder
+from bot.logging_safety import error_type
 
 logger = logging.getLogger(__name__)
 
@@ -60,7 +61,10 @@ async def _alert_telegram_conflict(bot: "Bot") -> None:
             ).subtract(hours=1):
                 return
     except Exception as exc:
-        logger.error("Polling conflict throttle lookup failed: %s", exc)
+        logger.error(
+            "Polling conflict throttle lookup failed: error_type=%s",
+            error_type(exc),
+        )
 
     delivered = False
     for admin_id in settings.admin_telegram_ids:
@@ -72,7 +76,7 @@ async def _alert_telegram_conflict(bot: "Bot") -> None:
             )
             delivered = True
         except Exception as exc:
-            logger.error("Polling conflict alert failed for %s: %s", admin_id, exc)
+            logger.error("Polling conflict alert failed: error_type=%s", error_type(exc))
     if delivered:
         try:
             async with async_session() as session:
@@ -82,7 +86,10 @@ async def _alert_telegram_conflict(bot: "Bot") -> None:
                     {"detected_at": pendulum.now("UTC").to_iso8601_string()},
                 )
         except Exception as exc:
-            logger.error("Polling conflict throttle update failed: %s", exc)
+            logger.error(
+                "Polling conflict throttle update failed: error_type=%s",
+                error_type(exc),
+            )
 
 
 def install_telegram_conflict_alert(
@@ -270,7 +277,9 @@ async def alert_slo_violations(
                 await bot.send_message(admin_id, message)
                 delivered = True
             except Exception as exc:
-                logger.error("SLO alert delivery failed for %s: %s", admin_id, exc)
+                logger.error(
+                    "SLO alert delivery failed: error_type=%s", error_type(exc)
+                )
         if delivered:
             async with async_session() as session:
                 await set_operational_state(session, marker_key, info)

@@ -53,10 +53,24 @@ scripts/run_live_e2e_gate.sh
 ```
 
 The wrapper runs preflight, invokes the isolated messy-human suite, requires
-every executed case to pass, and relies on the runner's mandatory `finally`
-teardown. Its full report remains in the userbot repository. Hosted CI runs the
+every executed case to pass, and requires an independent PostgreSQL oracle for
+the multi-intent effects, negative non-effects and zero-residual teardown. The
+report records `response matched`, `state verified` and `cleanup verified`
+separately. Voice files and wrapper logs live in mode-0700 run directories and
+are removed in `finally`; a failed log is retained only when
+`DAILYPLANNER_KEEP_FAILURE_LOG=1` is explicitly set. Hosted CI runs the
 deterministic 22-case LLM contract gate and container E2E; it intentionally has
 no access to a personal Telegram session.
+
+After a faster-whisper or PyAV upgrade, run the native resource drill on the
+production-class Mac with a non-sensitive audio fixture. It performs 20 full
+transcriptions, explicitly unloads the model and fails on unbounded worker-thread
+growth; the process must also exit without `resource_tracker` warnings:
+
+```bash
+RUN_STT_RESOURCE_TESTS=1 STT_RESOURCE_AUDIO=/absolute/path/to/fixture.ogg \
+  uv run pytest -q tests/integration/test_local_stt_resources.py
+```
 
 ## Release checklist
 
@@ -73,6 +87,7 @@ no access to a personal Telegram session.
 5. For the official macOS target run its installer/preflight. For Docker run
    the same two-file Compose E2E used by the `container-e2e` CI job. It must
    reach healthy from an empty PostgreSQL volume before a VPS release.
+   Standalone systemd installation is not a supported target.
 6. Restart exactly one service. The PostgreSQL singleton lease makes a second
    instance exit before Telegram polling or scheduler startup.
 7. Check logs, `/status`, current Alembic revision and one non-mutating Telegram

@@ -11,6 +11,7 @@ from bot.db.engine import async_session
 from bot.db.models import Task
 from bot.llm.client import LLMClient
 from bot.llm.queue import PRIORITY_DECOMPOSE, LLMQueue
+from bot.logging_safety import error_type
 
 logger = logging.getLogger(__name__)
 
@@ -73,7 +74,7 @@ async def decompose_project(
         return cleaned
 
     except Exception as e:
-        logger.error("Ошибка декомпозиции: %s", e)
+        logger.error("Ошибка декомпозиции: error_type=%s", error_type(e))
         return []
 
 
@@ -105,9 +106,12 @@ async def create_project_tasks(
                 created += 1
 
             await session.commit()
-        except Exception:
+        except Exception as exc:
             await session.rollback()
-            logger.error("Ошибка при создании задач проекта %s, откат", project_id, exc_info=True)
+            logger.error(
+                "Ошибка при создании задач проекта, откат: error_type=%s",
+                error_type(exc),
+            )
             return 0
 
     return created

@@ -6,6 +6,7 @@ from typing import Dict, List
 import tiktoken
 
 from bot.config import settings
+from bot.observability import metrics
 
 logger = logging.getLogger(__name__)
 
@@ -32,15 +33,17 @@ def _count_tokens(messages: List[Dict[str, str]]) -> int:
 
 
 def get_history(user_id: int) -> List[Dict[str, str]]:
-    """Получить историю диалога пользователя."""
-    return _histories.get(user_id, [])
+    """Return a bounded copy; provider callers never see an oversized history."""
+    _enforce_budget(user_id)
+    return [dict(item) for item in _histories.get(user_id, [])]
 
 
 def add_message(user_id: int, role: str, content: str) -> None:
-    """Добавить сообщение в историю."""
+    """Add one message while preserving the global history-size invariant."""
     if user_id not in _histories:
         _histories[user_id] = []
     _histories[user_id].append({"role": role, "content": content})
+    _enforce_budget(user_id)
 
 
 def needs_trimming(user_id: int) -> bool:
@@ -56,15 +59,28 @@ def trim_history(user_id: int) -> None:
     provider call must never keep the per-user request lock after a reply was
     delivered.
     """
+    _enforce_budget(user_id, force_recent_limit=True)
+
+
+def _enforce_budget(user_id: int, *, force_recent_limit: bool = False) -> None:
     history = _histories.get(user_id, [])
     if not history:
+        metrics.gauge("messages.context_items", 0)
+        metrics.gauge("messages.context_tokens", 0)
         return
 
-    # Сохраняем последние N пар (user + assistant)
-    keep_count = _KEEP_RECENT_PAIRS * 2
-    recent = history[-keep_count:] if len(history) > keep_count else history
+    keep_count = max(2, _KEEP_RECENT_PAIRS * 2)
+    if force_recent_limit or len(history) > keep_count:
+        history = history[-keep_count:]
+    # Keep at least the current conversational pair intact. Real Telegram
+    # inputs are size-limited before this layer; the two-message floor also
+    # prevents a dangling assistant reply from becoming the whole context.
+    while len(history) > 2 and _count_tokens(history) > _MAX_TOKENS:
+        history.pop(0)
 
-    _histories[user_id] = list(recent)
+    _histories[user_id] = history
+    metrics.gauge("messages.context_items", float(len(history)))
+    metrics.gauge("messages.context_tokens", float(_count_tokens(history)))
 
 
 def clear_history(user_id: int) -> None:

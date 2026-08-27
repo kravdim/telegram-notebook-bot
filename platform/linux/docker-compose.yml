@@ -5,6 +5,15 @@ services:
       dockerfile: platform/linux/Dockerfile
     init: true
     restart: always
+    user: "10001:10001"
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 256
+    mem_limit: 2g
+    cpus: 2.0
     environment:
       DATABASE_URL: postgresql+asyncpg://notebook:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}@db:5432/notebook_bot
       BOT_TOKEN: ${BOT_TOKEN:?set BOT_TOKEN}
@@ -22,6 +31,13 @@ services:
     volumes:
       - ${DAILYPLANNER_CONFIG_PATH:-./config.docker.yaml}:/app/config.yaml:ro
       - backups:/app/backups
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,mode=1777,size=128m
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "7"
     healthcheck:
       test: ["CMD", "python", "scripts/container_healthcheck.py"]
       interval: 5s
@@ -31,7 +47,7 @@ services:
     stop_grace_period: 30s
 
   db:
-    image: pgvector/pgvector:pg16
+    image: pgvector/pgvector:pg16@sha256:ccc6e83d6e35e931dc7c5def2022729d5a6c370318d099181995567ff1fb4d6b
     restart: always
     environment:
       POSTGRES_USER: notebook

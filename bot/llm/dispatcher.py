@@ -44,6 +44,7 @@ from bot.db.crud.tasks import (
 from bot.db.crud.trips import get_active_trip
 from bot.db.engine import async_session
 from bot.llm.contracts import Action, ToolName
+from bot.logging_safety import error_type, field_names, payload_size, validation_codes
 from bot.observability import metrics
 from bot.services.tasks import complete_task_workflow
 
@@ -105,12 +106,21 @@ def parse_function_call(raw: Dict[str, Any]) -> Tuple[ToolName, Dict[str, Any]]:
         try:
             args = json.loads(args_raw)
         except json.JSONDecodeError:
-            logger.warning("Невалидный JSON от LLM, применяю json_repair")
+            logger.warning(
+                "Invalid LLM tool JSON; attempting repair: tool=%s payload_bytes=%d",
+                str(name)[:80],
+                payload_size(args_raw),
+            )
             try:
                 repaired = repair_json(args_raw)
                 args = json.loads(repaired)
             except (json.JSONDecodeError, ValueError) as repair_err:
-                logger.error("json_repair не смог восстановить JSON: %s | raw: %.200s", repair_err, args_raw)
+                logger.error(
+                    "LLM tool JSON repair failed: tool=%s payload_bytes=%d error_type=%s",
+                    str(name)[:80],
+                    payload_size(args_raw),
+                    error_type(repair_err),
+                )
                 args = {}
     else:
         args = args_raw
@@ -149,15 +159,21 @@ async def dispatch_result(
         )
     except ValidationError as e:
         metrics.increment("llm.invalid_tool")
-        logger.warning("LLM tool contract rejected: %s", e)
+        logger.warning(
+            "LLM tool contract rejected: tool=%s fields=%s errors=%s",
+            str(function_call.get("name", "?"))[:80],
+            field_names(function_call.get("arguments")),
+            validation_codes(e),
+        )
         return CommandResult(
             "Ошибка распознавания команды. Переформулируй её, пожалуйста.", "error"
         )
     except Exception as e:
         metrics.increment("llm.tool_error")
         logger.error(
-            "Ошибка при выполнении tool call %s: %s",
-            function_call.get("name", "?"), e, exc_info=True,
+            "Tool execution failed: tool=%s error_type=%s",
+            str(function_call.get("name", "?"))[:80],
+            error_type(e),
         )
         return CommandResult(
             "Произошла ошибка при обработке. Попробуй ещё раз.", "error"

@@ -14,6 +14,7 @@ from bot.db.crud.users import (
 )
 from bot.db.engine import async_session
 from bot.formatters import split_html_message
+from bot.logging_safety import error_type
 
 logger = logging.getLogger(__name__)
 
@@ -83,14 +84,14 @@ async def send_task_reminders(bot: Bot) -> None:
                 raise
 
             logger.info(
-                "Напоминание задач (%d:00) отправлено: %s",
-                current_hour, user.telegram_id,
+                "Напоминание задач (%d:00) отправлено",
+                current_hour,
             )
 
         except Exception as e:
             logger.error(
-                "Ошибка напоминания задач для %s: %s",
-                user.telegram_id, e, exc_info=True,
+                "Ошибка напоминания задач: error_type=%s",
+                error_type(e),
             )
 
 

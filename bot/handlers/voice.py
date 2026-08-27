@@ -15,8 +15,12 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from bot.application.interactions import WorkflowType, interaction_service
 from bot.config import settings
+from bot.db.crud.users import get_user
+from bot.db.engine import async_session
 from bot.handlers.telegram import callback_data, callback_message, message_bot
+from bot.logging_safety import error_type
 from bot.observability import metrics
+from bot.privacy import PRIVACY_NOTICE_VERSION, privacy_keyboard, privacy_notice_text
 from bot.stt.base import STTClient
 
 logger = logging.getLogger(__name__)
@@ -84,7 +88,7 @@ async def _persist_voice_state(
             )
         return state is not None
     except Exception as e:
-        logger.warning("Не удалось сохранить voice state: %s", e)
+        logger.warning("Voice state save failed: error_type=%s", error_type(e))
         return False
 
 
@@ -92,7 +96,7 @@ async def _load_voice_state(user_id: int, state_type: WorkflowType):
     try:
         return await interaction_service.get(user_id, state_type)
     except Exception as e:
-        logger.debug("Не удалось прочитать voice state: %s", e)
+        logger.debug("Voice state load failed: error_type=%s", error_type(e))
     return None
 
 
@@ -112,13 +116,31 @@ async def _clear_voice_state(
                 user_id, cast(WorkflowType, state.state_type)
             )
     except Exception as e:
-        logger.debug("Не удалось очистить voice state: %s", e)
+        logger.debug("Voice state clear failed: error_type=%s", error_type(e))
 
 
 @router.message(F.voice)
 async def handle_voice(message: Message) -> None:
     """Голосовое → STT → confirm."""
     if not message.from_user:
+        return
+
+    async with async_session() as session:
+        user = await get_user(session, message.from_user.id)
+    if (
+        user is None
+        or getattr(user, "privacy_notice_version", 0) < PRIVACY_NOTICE_VERSION
+        or not getattr(user, "cloud_processing_enabled", False)
+    ):
+        await message.answer(
+            privacy_notice_text(
+                enabled=getattr(user, "cloud_processing_enabled", None)
+                if user
+                else None
+            ),
+            parse_mode=None,
+            reply_markup=privacy_keyboard(),
+        )
         return
 
     if not _stt_client:
@@ -168,7 +190,7 @@ async def handle_voice(message: Message) -> None:
         return
     except Exception as e:
         metrics.increment("stt.error")
-        logger.error("Ошибка STT: %s", e)
+        logger.error("STT failed: error_type=%s", error_type(e))
         await message.answer("Не удалось распознать голосовое. Попробуй ещё раз.")
         return
     finally:
@@ -287,8 +309,11 @@ async def cb_voice_confirm(callback: CallbackQuery) -> None:
     from bot.handlers.messages import MessageOutcome, process_text_message
     try:
         outcome = await process_text_message(user_id, text, message)
-    except Exception:
-        logger.exception("Voice command failed; confirmation remains retryable")
+    except Exception as e:
+        logger.error(
+            "Voice command failed; confirmation remains retryable: error_type=%s",
+            error_type(e),
+        )
         outcome = MessageOutcome.RETRYABLE_ERROR
     if outcome != MessageOutcome.COMPLETED:
         retry_payload = {**state.payload, "phase": "failed"}

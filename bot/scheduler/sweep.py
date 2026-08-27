@@ -10,6 +10,7 @@ from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
 from bot.db.crud.reminders import get_pending_reminders, mark_sent, record_delivery_failure
 from bot.db.engine import async_session
 from bot.handlers.callbacks import build_snooze_keyboard
+from bot.logging_safety import error_type
 from bot.observability import metrics
 
 logger = logging.getLogger(__name__)
@@ -42,14 +43,14 @@ async def sweep_missed_reminders(bot: Bot) -> None:
                     "reminders.delivery_lag_seconds",
                     max(0.0, (now - pendulum.instance(reminder.remind_at)).total_seconds()),
                 )
-                logger.info("Sweep: напоминание %s отправлено", reminder.id)
+                logger.info("Sweep: напоминание отправлено")
             except Exception as e:
                 metrics.increment("reminders.delivery_error")
-                logger.error("Sweep: ошибка отправки %s: %s", reminder.id, e, exc_info=True)
+                logger.error("Sweep: ошибка отправки: error_type=%s", error_type(e))
                 await session.rollback()
                 await record_delivery_failure(
                     session,
                     reminder.id,
-                    str(e),
+                    error_type(e),
                     terminal=isinstance(e, (TelegramBadRequest, TelegramForbiddenError)),
                 )
