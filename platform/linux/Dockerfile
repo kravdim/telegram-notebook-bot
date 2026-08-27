@@ -1,6 +1,6 @@
-FROM python:3.12-slim@sha256:7a8b475003c4fe15a2cd4e55e5cfc2f3560bdc9333d624f24cdd6d4340fd7a17
+FROM python:3.12-slim@sha256:09f7da3bc104798d0afb40bc08d23ab2da20a76130cec1f2ef170848f5d85217
 
-COPY --from=ghcr.io/astral-sh/uv:0.11.21@sha256:ff07b86af50d4d9391d9daf4ff89ce427bc544f9aae87057e69a1cc0aa369946 /uv /uvx /bin/
+COPY --from=ghcr.io/astral-sh/uv:0.12.6@sha256:88bc6eb1ccd4b82efd0e1b530caffabddf50dc2bf612e66c14ea25b8ee8a4d3d /uv /uvx /bin/
 
 WORKDIR /app
 
@@ -9,6 +9,9 @@ RUN groupadd --system --gid 10001 dailyplanner \
 
 # System dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
+    libssl3t64 \
+    openssl \
+    openssl-provider-legacy \
     postgresql-client \
     && rm -rf /var/lib/apt/lists/*
 
