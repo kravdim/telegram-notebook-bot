@@ -115,6 +115,34 @@ def _init_stt_client():
         return None
 
 
+async def _cleanup_runtime_resources(
+    singleton: SingletonLease,
+    bot: Bot,
+    llm_queue: LLMQueue,
+    stt_client: STTClient | None,
+) -> None:
+    """Release every acquired runtime resource, including partial startup."""
+    cleanups = [("LLM queue", llm_queue.stop)]
+    if stt_client is not None:
+        cleanups.append(("STT client", stt_client.close))
+    cleanups.extend(
+        [
+            ("Telegram session", bot.session.close),
+            ("singleton lease", singleton.release),
+            ("database engine", engine.dispose),
+        ]
+    )
+    for resource, cleanup in cleanups:
+        try:
+            await cleanup()
+        except Exception as exc:
+            logger.warning(
+                "Runtime cleanup failed: resource=%s error_type=%s",
+                resource,
+                error_type(exc),
+            )
+
+
 async def main() -> None:
     """Запуск бота."""
     if _tmux_runtime_disallowed():
@@ -188,28 +216,32 @@ async def main() -> None:
     clear_context()
 
     # Меню команд в Telegram
-    await bot.set_my_commands(
-        [
-            BotCommand(command="today", description="Задачи на сегодня"),
-            BotCommand(command="tasks", description="Все открытые задачи"),
-            BotCommand(command="frog", description="Лягушка дня"),
-            BotCommand(command="done", description="Отметить задачу выполненной"),
-            BotCommand(command="projects", description="Проекты (слоны)"),
-            BotCommand(command="notes", description="Заметки"),
-            BotCommand(command="memoir", description="Мемуарник"),
-            BotCommand(command="chrono", description="Хронометраж"),
-            BotCommand(command="focus", description="Режим фокуса"),
-            BotCommand(command="trip", description="Командировка"),
-            BotCommand(command="birthdays", description="Дни рождения"),
-            BotCommand(command="stats", description="Статистика"),
-            BotCommand(command="export", description="Экспорт данных"),
-            BotCommand(command="privacy", description="Privacy и cloud AI"),
-            BotCommand(command="delete_data", description="Удаление всех данных"),
-            BotCommand(command="settings", description="Настройки"),
-            BotCommand(command="help", description="Справка"),
-        ],
-        scope=BotCommandScopeAllPrivateChats(),
-    )
+    try:
+        await bot.set_my_commands(
+            [
+                BotCommand(command="today", description="Задачи на сегодня"),
+                BotCommand(command="tasks", description="Все открытые задачи"),
+                BotCommand(command="frog", description="Лягушка дня"),
+                BotCommand(command="done", description="Отметить задачу выполненной"),
+                BotCommand(command="projects", description="Проекты (слоны)"),
+                BotCommand(command="notes", description="Заметки"),
+                BotCommand(command="memoir", description="Мемуарник"),
+                BotCommand(command="chrono", description="Хронометраж"),
+                BotCommand(command="focus", description="Режим фокуса"),
+                BotCommand(command="trip", description="Командировка"),
+                BotCommand(command="birthdays", description="Дни рождения"),
+                BotCommand(command="stats", description="Статистика"),
+                BotCommand(command="export", description="Экспорт данных"),
+                BotCommand(command="privacy", description="Privacy и cloud AI"),
+                BotCommand(command="delete_data", description="Удаление всех данных"),
+                BotCommand(command="settings", description="Настройки"),
+                BotCommand(command="help", description="Справка"),
+            ],
+            scope=BotCommandScopeAllPrivateChats(),
+        )
+    except BaseException:
+        await _cleanup_runtime_resources(singleton, bot, llm_queue, stt_client)
+        raise
 
     # --- Фоновые задачи ---
 
@@ -377,15 +409,7 @@ async def main() -> None:
         for task in background_tasks:
             task.cancel()
         await asyncio.gather(*background_tasks, return_exceptions=True)
-        await llm_queue.stop()
-        if stt_client is not None:
-            try:
-                await stt_client.close()
-            except Exception as exc:
-                logger.warning("STT cleanup failed: error_type=%s", error_type(exc))
-        await bot.session.close()
-        await singleton.release()
-        await engine.dispose()
+        await _cleanup_runtime_resources(singleton, bot, llm_queue, stt_client)
         logger.info("Бот остановлен.")
 
 

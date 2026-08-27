@@ -58,6 +58,39 @@ def test_common_messy_intents_are_normalized_before_llm():
     ) == "создай задачу: разобрать гараж"
 
 
+@pytest.mark.asyncio
+async def test_partial_startup_cleanup_releases_every_resource(monkeypatch):
+    calls = []
+
+    class Resource:
+        async def stop(self):
+            calls.append("queue")
+
+        async def close(self):
+            calls.append("stt")
+
+    class BotSession:
+        async def close(self):
+            calls.append("telegram")
+
+    class Lease:
+        async def release(self):
+            calls.append("singleton")
+
+    class Engine:
+        async def dispose(self):
+            calls.append("engine")
+
+    monkeypatch.setattr(main_module, "engine", Engine())
+    bot = SimpleNamespace(session=BotSession())
+
+    await main_module._cleanup_runtime_resources(
+        Lease(), bot, Resource(), Resource()
+    )
+
+    assert calls == ["queue", "stt", "telegram", "singleton", "engine"]
+
+
 def test_common_mutation_fast_paths_cover_live_beta_phrases():
     tool, args = messages._extract_common_mutation(
         "напомни через полчаса Б22-полчаса проверить духовку",
