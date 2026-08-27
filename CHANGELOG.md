@@ -23,6 +23,12 @@
 - Reopened completed privacy-deletion journals after legal re-onboarding using
   operation generations and fresh verification counts.
 - Kept memoir skip state and its retry button when persistent cleanup fails.
+- Closed partial-startup resources when Telegram command registration fails and
+  hardened the live DB oracle against provider title normalization.
+- Added deterministic handling for noisy evening-task requests and made the
+  voice acceptance fixture wait for a self-contained terminal mutation result.
+- Refreshed pinned Python/uv container layers and explicitly upgraded OpenSSL
+  security packages after new HIGH advisories reached the CI vulnerability DB.
 
 ## 0.2.0 — 2026-08-26
 

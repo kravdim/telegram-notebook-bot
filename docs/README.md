@@ -7,7 +7,7 @@
 - [`PRIVACY.md`](PRIVACY.md) — хранение, экспорт и удаление данных;
 - [`REVIEW_REMEDIATION_2026-08-26_POST.md`](REVIEW_REMEDIATION_2026-08-26_POST.md) —
   текущий пакет исправлений по повторному аудиту;
-- [`SESSION_CONTEXT_2026-08-26.md`](SESSION_CONTEXT_2026-08-26.md) — последний
+- [`SESSION_CONTEXT_2026-08-27.md`](SESSION_CONTEXT_2026-08-27.md) — последний
   завершённый release handoff; новый handoff создаётся при следующем релизе.
 
 `archive/` содержит исходные постановки этапов, beta-отчёты и планы исправлений.
