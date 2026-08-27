@@ -1343,12 +1343,27 @@ def _extract_common_mutation(text: str, tz: str) -> Optional[tuple[str, dict]]:
             )
 
     evening_task = re.match(
-        r"^вечером\s+(?:надо|нужно)\s+(?P<body>.+)$",
+        r"^(?:(?:ну\s+)?блин,?\s+)?(?:"
+        r"(?:надо|нужно)\s+(?:сегодня\s+)?вечером|"
+        r"(?:сегодня\s+)?вечером\s+(?:надо|нужно)"
+        r")\s+(?P<body>.+)$",
         stripped,
         re.IGNORECASE,
     )
     if evening_task:
-        body = evening_task.group("body").strip(" .!?:;")
+        body = evening_task.group("body")
+        body = re.sub(
+            r",?\s+если\s+не\s+забуду\s*[.!]*$",
+            "",
+            body,
+            flags=re.IGNORECASE,
+        )
+        body = re.sub(
+            r",?\s+наверное\s*[.!]*$",
+            "",
+            body,
+            flags=re.IGNORECASE,
+        ).strip(" .!?:;")
         if body:
             return (
                 "create_task",

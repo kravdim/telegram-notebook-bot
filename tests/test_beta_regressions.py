@@ -324,6 +324,21 @@ def test_fast_task_path_preserves_marker_and_defers_unhandled_time():
     ) is None
 
 
+def test_noisy_evening_task_has_deterministic_mutation_path():
+    tool, arguments = messages._extract_common_mutation(
+        messages._normalize_common_intent_text(
+            "ну блин надо сегодня вечером купить Б22-молоко "
+            "наверное, если не забуду"
+        ),
+        "Europe/Moscow",
+    )
+
+    assert tool == "create_task"
+    assert arguments["title"] == "Купить Б22-молоко"
+    assert arguments["category"] == "personal"
+    assert arguments["scheduled_date"]
+
+
 def test_user_marker_survives_llm_title_cleanup():
     call = messages._preserve_user_marker_in_call(
         "слон: Б22-ремонт балкона",
