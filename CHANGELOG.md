@@ -29,6 +29,8 @@
   voice acceptance fixture wait for a self-contained terminal mutation result.
 - Refreshed pinned Python/uv container layers and explicitly upgraded OpenSSL
   security packages after new HIGH advisories reached the CI vulnerability DB.
+- Raised the measured overall coverage gate to 70% and added independent 85%
+  critical-path gates for access, privacy, export, delivery and reminders.
 
 ## 0.2.0 — 2026-08-26
 
