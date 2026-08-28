@@ -36,6 +36,10 @@ def _message(chat_type: ChatType, *, with_user: bool = True) -> Message:
     )
 
 
+async def _no_persisted_interaction(user_id, state_type):
+    return None
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "chat_type",
@@ -168,6 +172,9 @@ async def test_provider_exception_and_user_text_never_reach_logs(
     monkeypatch.setattr(messages, "async_session", lambda: FakeSessionContext())
     monkeypatch.setattr(messages, "get_user", get_user)
     monkeypatch.setattr(messages, "get_prompt", get_prompt)
+    monkeypatch.setattr(
+        messages, "_get_persisted_interaction", _no_persisted_interaction
+    )
     monkeypatch.setattr(messages, "llm_queue", Queue())
     monkeypatch.setattr(
         chronometry_scheduler, "is_awaiting_response", lambda user_id: False
@@ -253,6 +260,9 @@ async def test_declined_cloud_processing_blocks_text_before_llm(monkeypatch):
 
     monkeypatch.setattr(messages, "async_session", lambda: FakeSessionContext())
     monkeypatch.setattr(messages, "get_user", get_user)
+    monkeypatch.setattr(
+        messages, "_get_persisted_interaction", _no_persisted_interaction
+    )
     monkeypatch.setattr(messages, "llm_client", None)
     monkeypatch.setattr(messages, "llm_queue", None)
     message = FakeMessage("PRIVATE-CONTENT-CANARY", user_id=42)
@@ -270,6 +280,9 @@ async def test_missing_consent_attributes_fail_closed(monkeypatch):
 
     monkeypatch.setattr(messages, "async_session", lambda: FakeSessionContext())
     monkeypatch.setattr(messages, "get_user", get_user)
+    monkeypatch.setattr(
+        messages, "_get_persisted_interaction", _no_persisted_interaction
+    )
     message = FakeMessage("PRIVATE-CONTENT-CANARY", user_id=42)
 
     outcome = await messages.process_text_message(42, message.text, message)

@@ -76,6 +76,8 @@ jobs:
         run: test "$(uv run alembic heads | wc -l)" -eq 1
       - name: Test with coverage floor
         run: uv run pytest --cov --cov-report=term-missing
+      - name: Enforce critical-path coverage
+        run: scripts/check_critical_coverage.sh
       - run: uv run python scripts/evaluate_llm_contracts.py
       - name: Create and restore a real backup
         run: |
