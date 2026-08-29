@@ -141,6 +141,22 @@ suite creates and deletes a disposable account in a disposable database.
 
 Never pipe an unverified archive directly into the production database.
 
+## macOS network profiles
+
+`platform/macos/install.sh` renders a direct-network LaunchAgent by default;
+the tracked plist contains no site-specific proxy endpoints. A proxy is an
+explicit host profile, for example:
+
+```bash
+platform/macos/install.sh \
+  --http-proxy http://127.0.0.1:1081 \
+  --all-proxy socks5://127.0.0.1:1080
+```
+
+The installer rejects proxy URLs containing credentials and verifies Telegram
+reachability through every requested endpoint before replacing/restarting the
+LaunchAgent. Keep authenticated proxy material outside plist and `.env`.
+
 ## Recovery operator and scheduled drill
 
 The application role must remain `NOSUPERUSER NOCREATEDB NOCREATEROLE`. Recovery

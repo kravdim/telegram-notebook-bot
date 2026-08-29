@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- Made the macOS proxy profile explicit and validated, with direct networking
+  as the portable default and secret-free LaunchAgent rendering tests.
+- Added reproducible Docker-backed developer bootstrap and local PostgreSQL
+  quality gates, and made CI smoke-test the documented clean-host path.
+- Added deterministic task-list scope contracts for today, all, overdue and
+  completed-today requests, including morphology and negative examples.
+- Made weekend digest empty states depend only on visible sections and covered
+  personal, work, overdue, frog, project, trip and birthday combinations.
+- Split the central message pipeline into routing, LLM request, mutation guard,
+  persistence and presentation phases; tightened complexity and typed-module
+  ratchets.
+- Archived historical review/session evidence, added an active-document link
+  contract, CODEOWNERS and a release-evidence pull-request checklist.
 - Enforced a global private-chat transport boundary and content-free exception
   logging, including whitelist-log canaries.
 - Added a versioned, count-verified full JSONL export backed by the deletion

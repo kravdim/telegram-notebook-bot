@@ -5,7 +5,7 @@ import pytest
 
 from bot.config import validate_runtime_config
 from bot.handlers.messages import (
-    _extract_common_mutation,
+    _extract_common_intent,
     _extract_cross_user_request,
     _extract_explicit_delete,
     _extract_note_and_task_mutations,
@@ -127,7 +127,7 @@ async def test_stt_health_exposes_last_latency_and_slo(monkeypatch):
 )
 def test_messy_mutations_have_deterministic_safe_path(text, tool):
     normalized = _normalize_common_intent_text(text)
-    name, arguments = _extract_common_mutation(normalized, "Europe/Moscow")
+    name, arguments = _extract_common_intent(normalized, "Europe/Moscow")
     assert name == tool
     assert arguments
     if "лягушка" in text:

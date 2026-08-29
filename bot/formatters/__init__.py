@@ -35,7 +35,9 @@ _HTML_TAG_RE = re.compile(
 )
 
 
-def split_html_message(text: str, max_len: int = MAX_MESSAGE_LEN) -> List[str]:
+def split_html_message(  # noqa: C901 - REVIEW-20260829 legacy ratchet
+    text: str, max_len: int = MAX_MESSAGE_LEN
+) -> List[str]:
     """Разбить Telegram HTML, не разрывая entity и балансируя теги."""
     if len(text) <= max_len:
         return [text]

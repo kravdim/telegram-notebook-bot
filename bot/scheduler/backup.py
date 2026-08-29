@@ -24,7 +24,7 @@ _BACKUP_DIR = Path(
 )
 
 
-async def run_backup() -> Path | None:
+async def run_backup() -> Path | None:  # noqa: C901, PLR0915 - REVIEW-20260829 legacy ratchet
     """Выполнить pg_dump и удалить старые бэкапы."""
     yaml_cfg = settings.yaml_config
     retention_days = yaml_cfg.get("scheduler", {}).get("backup_retention_days", 30)

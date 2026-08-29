@@ -26,7 +26,7 @@ def test_failed_live_reminder_phrase_has_deterministic_mutation_path():
         "DP-20260826T164140-62c608-чай попить, а то забуду"
     )
 
-    tool, arguments = messages._extract_common_mutation(text, "Europe/Moscow")
+    tool, arguments = messages._extract_common_intent(text, "Europe/Moscow")
 
     assert tool == "create_reminder"
     assert arguments["message"] == "DP-20260826T164140-62c608-чай попить"
@@ -34,7 +34,7 @@ def test_failed_live_reminder_phrase_has_deterministic_mutation_path():
 
 
 def test_explicit_diary_phrase_has_deterministic_mutation_path():
-    tool, arguments = messages._extract_common_mutation(
+    tool, arguments = messages._extract_common_intent(
         "запиши в дневник: сегодня был странный день",
         "Europe/Moscow",
     )
@@ -56,7 +56,7 @@ def test_explicit_diary_phrase_has_deterministic_mutation_path():
 def test_invalid_dates_have_deterministic_clarification(
     text, expected_fragment
 ):
-    tool, arguments = messages._extract_common_mutation(text, "Europe/Moscow")
+    tool, arguments = messages._extract_common_intent(text, "Europe/Moscow")
 
     assert tool == "respond_to_user"
     assert expected_fragment in arguments["message"]

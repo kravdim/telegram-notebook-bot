@@ -154,7 +154,7 @@ async def _send_review(bot: Bot, user, tz: str) -> None:
     logger.info("Weekly review отправлен")
 
 
-def _format_review(
+def _format_review(  # noqa: C901 - REVIEW-20260829 legacy ratchet
     week_start,
     chrono_stats: dict,
     completed_tasks: list,

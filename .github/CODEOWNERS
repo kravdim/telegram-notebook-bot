@@ -1,0 +1,7 @@
+# Default owner and explicit review boundaries for sensitive runtime surfaces.
+* @kravdim
+/.github/ @kravdim
+/bot/middleware/ @kravdim
+/bot/privacy.py @kravdim
+/platform/ @kravdim
+/scripts/ @kravdim

@@ -13,13 +13,15 @@ from typing import Optional
 from aiogram import F, Router
 from aiogram.types import Message
 
+from bot.application.command_bus import CommandResult
 from bot.application.interactions import WorkflowType, interaction_service
 from bot.application.normalizer import intent_normalizer
+from bot.application.task_query_recognizer import extract_task_list_scope
 from bot.db.crud.users import get_user
 from bot.db.engine import async_session
 from bot.formatters import split_message
 from bot.handlers.telegram import message_bot
-from bot.llm.client import LLMClient, LLMUnavailableError
+from bot.llm.client import LLMClient, LLMResponse, LLMUnavailableError
 from bot.llm.context import add_message, get_history, needs_trimming, trim_history
 from bot.llm.dispatcher import dispatch, dispatch_result
 from bot.llm.functions import FUNCTIONS
@@ -111,39 +113,6 @@ _INCOMPLETE_MUTATION_RE = re.compile(
     r"напоминани[ея]|слона?|проект))?\s*[.!?]*$",
     re.IGNORECASE,
 )
-
-_TASK_LIST_QUERY_PATTERNS = [
-    re.compile(
-        r"^\s*(?:а\s+)?какие\s+(?:ещ[её]\s+)?(?:у\s+меня\s+)?"
-        r"(?:задачи|дела)(?:\s+(?:есть|остались))?(?:\s+на\s+сегодня)?\s*[?!.]*$",
-        re.IGNORECASE,
-    ),
-    re.compile(
-        r"^\s*(?:а\s+)?какие\s+у\s+меня\s+(?:ещ[её]\s+)?"
-        r"(?:задачи|дела)(?:\s+(?:есть|остались))?(?:\s+на\s+сегодня)?\s*[?!.]*$",
-        re.IGNORECASE,
-    ),
-    re.compile(
-        r"^\s*(?:покажи|перечисли)\s+(?:мои\s+)?(?:все\s+)?"
-        r"(?:открытые\s+)?(?:задачи|дела)(?:\s+на\s+сегодня)?\s*[?!.]*$",
-        re.IGNORECASE,
-    ),
-    re.compile(
-        r"^\s*(?:список|перечень)\s+(?:моих\s+)?(?:задач|дел)"
-        r"(?:\s+на\s+сегодня)?\s*[?!.]*$",
-        re.IGNORECASE,
-    ),
-    re.compile(
-        r"^\s*(?:а\s+)?что\s+(?:ещ[её]\s+)?(?:нужно|надо|осталось)\s+"
-        r"сделать(?:\s+сегодня)?\s*[?!.]*$",
-        re.IGNORECASE,
-    ),
-    re.compile(
-        r"^\s*(?:а\s+)?что\s+у\s+меня\s+(?:по\s+)?(?:задачам|делам)"
-        r"(?:\s+на\s+сегодня)?\s*[?!.]*$",
-        re.IGNORECASE,
-    ),
-]
 
 _MUTATING_TOOLS = {
     "create_task",
@@ -343,6 +312,279 @@ async def _finish_request(request_key: str, status: str) -> None:
         logger.debug("Request finalization failed: error_type=%s", error_type(e))
 
 
+async def _route_basic_task_shortcuts(
+    user_id: int,
+    text: str,
+    message: Message,
+    user_tz: str,
+) -> MessageOutcome | None:
+    """Handle high-confidence task phrases before any pending workflow or LLM."""
+    if _INCOMPLETE_MUTATION_RE.fullmatch(text.strip()):
+        reply = "Уточни, что именно нужно сделать — например, название задачи."
+        add_message(user_id, "user", text)
+        add_message(user_id, "assistant", reply)
+        await message.answer(reply, parse_mode=None)
+        return MessageOutcome.REJECTED
+
+    direct_call: dict | None = None
+    if done_query := _extract_done_query(text):
+        direct_call = {"name": "complete_task", "arguments": {"search_query": done_query}}
+    elif reschedule_args := _extract_reschedule_request(text, user_tz):
+        direct_call = {"name": "update_task", "arguments": reschedule_args}
+    elif cancel_args := _extract_cancel_request(text):
+        direct_call = {"name": "update_task", "arguments": cancel_args}
+    if direct_call is None:
+        return None
+
+    await message_bot(message).send_chat_action(chat_id=message.chat.id, action="typing")
+    result = await dispatch(direct_call, user_id, user_tz)
+    add_message(user_id, "user", text)
+    add_message(user_id, "assistant", result)
+    for part in split_message(result):
+        await message.answer(part, parse_mode=None)
+    return MessageOutcome.COMPLETED
+
+
+async def _route_project_and_delete_workflows(
+    user_id: int,
+    text: str,
+    message: Message,
+    user_tz: str,
+) -> MessageOutcome | None:
+    """Continue explicit project/delete workflows with their confirmation UI."""
+    pending_state = await _get_persisted_interaction(user_id, "complete_project")
+    if pending_state:
+        return await _continue_project_completion(
+            user_id, text, message, user_tz, pending_state
+        )
+
+    if _PROJECT_DONE_RE.match(text):
+        claimed = await _set_pending_interaction(user_id, "complete_project")
+        reply = (
+            "Какой слон закрываем? Напиши название проекта."
+            if claimed
+            else "Сначала заверши текущий диалог с ботом, затем закрой слона."
+        )
+        await message.answer(reply)
+        return MessageOutcome.COMPLETED
+
+    delete_query = _extract_explicit_delete(text)
+    if not delete_query:
+        return None
+    await message_bot(message).send_chat_action(chat_id=message.chat.id, action="typing")
+    command_result = await dispatch_result(
+        {"name": "delete_task", "arguments": {"search_query": delete_query}},
+        user_id,
+        user_tz,
+    )
+    add_message(user_id, "user", text)
+    await _present_delete_result(user_id, message, command_result)
+    return MessageOutcome.COMPLETED
+
+
+async def _continue_project_completion(
+    user_id: int,
+    text: str,
+    message: Message,
+    user_tz: str,
+    pending_state,
+) -> MessageOutcome:
+    session_token = pending_state.payload.get("session_token")
+    project_input = (
+        str(pending_state.payload.get("input"))
+        if pending_state.payload.get("phase") in {"processing", "failed"}
+        and pending_state.payload.get("input")
+        else text
+    )
+    processing_payload = {**pending_state.payload, "phase": "processing", "input": project_input}
+    claimed = await _transition_persisted_interaction(
+        user_id,
+        "complete_project",
+        processing_payload,
+        session_token,
+    )
+    if not claimed:
+        await message.answer("Этот диалог уже обрабатывается или устарел.")
+        return MessageOutcome.DUPLICATE
+
+    await message_bot(message).send_chat_action(chat_id=message.chat.id, action="typing")
+    command_result = await dispatch_result(
+        {"name": "complete_project", "arguments": {"search_query": project_input}},
+        user_id,
+        user_tz,
+    )
+    add_message(user_id, "user", text)
+    await _present_project_completion_result(user_id, message, command_result)
+    if command_result.kind == "error":
+        await _transition_persisted_interaction(
+            user_id,
+            "complete_project",
+            {**pending_state.payload, "phase": "failed", "input": project_input},
+            session_token,
+        )
+        return MessageOutcome.RETRYABLE_ERROR
+    await _clear_persisted_interaction(user_id, "complete_project", session_token)
+    return MessageOutcome.COMPLETED
+
+
+async def _present_project_completion_result(user_id, message, command_result) -> None:
+    if command_result.kind == "confirm_project_complete":
+        payload = command_result.dict_payload()
+        from bot.handlers.callbacks import build_project_complete_keyboard
+
+        prompt = (
+            f"У слона «{payload['title']}» осталось открытых задач: "
+            f"{payload['open_count']}. Закрыть слона и отменить эти задачи?"
+        )
+        add_message(user_id, "assistant", prompt)
+        await message.answer(
+            prompt,
+            parse_mode=None,
+            reply_markup=build_project_complete_keyboard(str(payload["project_id"])).as_markup(),
+        )
+        return
+    add_message(user_id, "assistant", command_result.text)
+    for part in split_message(command_result.text):
+        await message.answer(part, parse_mode=None)
+
+
+async def _present_delete_result(user_id, message, command_result) -> None:
+    if command_result.kind == "confirm_delete":
+        payload = command_result.dict_payload()
+        from bot.handlers.callbacks import build_delete_confirm_keyboard
+
+        prompt = f"Нашёл задачу «{payload['title']}». Удалить?"
+        keyboard = build_delete_confirm_keyboard(str(payload["task_id"]))
+    elif command_result.kind == "choose_delete":
+        from bot.handlers.callbacks import build_delete_choice_keyboard
+
+        prompt = "Нашёл несколько похожих задач. Какую удалить?"
+        keyboard = build_delete_choice_keyboard(command_result.list_payload())
+    else:
+        add_message(user_id, "assistant", command_result.text)
+        for part in split_message(command_result.text):
+            await message.answer(part, parse_mode=None)
+        return
+    add_message(user_id, "assistant", prompt)
+    await message.answer(prompt, parse_mode=None, reply_markup=keyboard.as_markup())
+
+
+async def _route_deterministic_intents(
+    user_id: int,
+    text: str,
+    message: Message,
+    user_tz: str,
+) -> MessageOutcome | None:
+    """Dispatch pure recognizer results through the application command boundary."""
+    cross_user_id = _extract_cross_user_request(text)
+    if cross_user_id is not None and cross_user_id != user_id:
+        await _answer_and_remember(user_id, text, message, "Нет доступа к данным других пользователей.")
+        return MessageOutcome.COMPLETED
+
+    combined_intents = _extract_note_and_task_mutations(text)
+    if combined_intents:
+        add_message(user_id, "user", text)
+        await message_bot(message).send_chat_action(chat_id=message.chat.id, action="typing")
+        results = [
+            await dispatch({"name": name, "arguments": arguments}, user_id, user_tz)
+            for name, arguments in combined_intents
+        ]
+        await _answer_and_remember(user_id, None, message, "\n".join(results))
+        return MessageOutcome.COMPLETED
+
+    direct_intent = _extract_common_intent(_normalize_common_intent_text(text), user_tz)
+    if direct_intent:
+        tool_name, arguments = direct_intent
+        add_message(user_id, "user", text)
+        if tool_name == "respond_to_user":
+            result = str(arguments["message"])
+        else:
+            await message_bot(message).send_chat_action(chat_id=message.chat.id, action="typing")
+            result = await dispatch(
+                {"name": tool_name, "arguments": arguments}, user_id, user_tz
+            )
+        await _answer_and_remember(user_id, None, message, result)
+        return MessageOutcome.COMPLETED
+
+    task_args = _extract_task_request(text, user_tz)
+    if not task_args:
+        return None
+    await message_bot(message).send_chat_action(chat_id=message.chat.id, action="typing")
+    result = await dispatch(
+        {"name": "create_task", "arguments": task_args}, user_id, user_tz
+    )
+    await _answer_and_remember(user_id, text, message, result)
+    return MessageOutcome.COMPLETED
+
+
+async def _answer_and_remember(
+    user_id: int,
+    user_text: str | None,
+    message: Message,
+    answer: str,
+) -> None:
+    if user_text is not None:
+        add_message(user_id, "user", user_text)
+    add_message(user_id, "assistant", answer)
+    for part in split_message(answer):
+        await message.answer(part, parse_mode=None)
+
+
+async def _route_persisted_replies(
+    user_id: int,
+    text: str,
+    message: Message,
+    user_tz: str,
+) -> MessageOutcome | None:
+    """Route replies owned by durable memoir or chronometry interactions."""
+    persisted_memoir = await _get_persisted_interaction(user_id, "memoir")
+    if persisted_memoir and _is_reply_to_interaction(message, persisted_memoir):
+        await message_bot(message).send_chat_action(chat_id=message.chat.id, action="typing")
+        session_token = persisted_memoir.payload.get("session_token")
+        if session_token:
+            await _save_memoir_answer(user_id, text, user_tz, session_token)
+        else:
+            await _save_memoir_answer(user_id, text, user_tz)
+        await message.answer("📔 Записано в мемуарник! ✅")
+        return MessageOutcome.COMPLETED
+
+    from bot.scheduler.chronometry import (
+        clear_awaiting,
+        get_chrono_message_id,
+        is_awaiting_response,
+    )
+
+    persisted_chrono = await _get_persisted_interaction(user_id, "chronometry")
+    if not (is_awaiting_response(user_id) or persisted_chrono):
+        return None
+    chrono_msg_id = get_chrono_message_id(user_id)
+    if not chrono_msg_id and persisted_chrono:
+        chrono_msg_id = persisted_chrono.payload.get("message_id")
+    reply_to = message.reply_to_message
+    if reply_to and chrono_msg_id and reply_to.message_id != chrono_msg_id:
+        return None
+    if not _looks_like_chronometry_answer(text):
+        return None
+
+    await message_bot(message).send_chat_action(chat_id=message.chat.id, action="typing")
+    from bot.handlers.chronometry import process_chronometry_response
+
+    session_token = persisted_chrono.payload.get("session_token") if persisted_chrono else None
+    if session_token:
+        result = await process_chronometry_response(user_id, text, user_tz, session_token)
+    else:
+        result = await process_chronometry_response(user_id, text, user_tz)
+    clear_awaiting(user_id)
+    await message.answer(result)
+    return MessageOutcome.COMPLETED
+
+
+def _is_reply_to_interaction(message: Message, interaction) -> bool:
+    expected_message_id = interaction.payload.get("message_id")
+    reply_to = message.reply_to_message
+    return bool(reply_to and expected_message_id and reply_to.message_id == expected_message_id)
+
+
 async def _process_text_message_unlocked(
     user_id: int, text: str, message: Message
 ) -> MessageOutcome | None:
@@ -380,381 +622,143 @@ async def _process_text_message_unlocked(
         )
         return MessageOutcome.RETRYABLE_ERROR
 
-    if _INCOMPLETE_MUTATION_RE.fullmatch(text.strip()):
-        reply = "Уточни, что именно нужно сделать — например, название задачи."
-        add_message(user_id, "user", text)
-        add_message(user_id, "assistant", reply)
-        await message.answer(reply, parse_mode=None)
-        return MessageOutcome.REJECTED
+    basic_outcome = await _route_basic_task_shortcuts(user_id, text, message, user_tz)
+    if basic_outcome is not None:
+        return basic_outcome
 
-    done_query = _extract_done_query(text)
-    if done_query:
-        await message_bot(message).send_chat_action(chat_id=message.chat.id, action="typing")
-        result = await dispatch(
-            {"name": "complete_task", "arguments": {"search_query": done_query}},
-            user_id,
-            user_tz,
-        )
-        add_message(user_id, "user", text)
-        add_message(user_id, "assistant", result)
-        for part in split_message(result):
-            await message.answer(part, parse_mode=None)
-        return MessageOutcome.COMPLETED
-
-    reschedule_args = _extract_reschedule_request(text, user_tz)
-    if reschedule_args:
-        await message_bot(message).send_chat_action(chat_id=message.chat.id, action="typing")
-        result = await dispatch(
-            {"name": "update_task", "arguments": reschedule_args},
-            user_id,
-            user_tz,
-        )
-        add_message(user_id, "user", text)
-        add_message(user_id, "assistant", result)
-        for part in split_message(result):
-            await message.answer(part, parse_mode=None)
-        return MessageOutcome.COMPLETED
-
-    cancel_args = _extract_cancel_request(text)
-    if cancel_args:
-        await message_bot(message).send_chat_action(chat_id=message.chat.id, action="typing")
-        result = await dispatch(
-            {"name": "update_task", "arguments": cancel_args},
-            user_id,
-            user_tz,
-        )
-        add_message(user_id, "user", text)
-        add_message(user_id, "assistant", result)
-        for part in split_message(result):
-            await message.answer(part, parse_mode=None)
-        return MessageOutcome.COMPLETED
-
-    pending_state = await _get_persisted_interaction(user_id, "complete_project")
-    if pending_state:
-        session_token = pending_state.payload.get("session_token")
-        project_input = (
-            str(pending_state.payload.get("input"))
-            if pending_state.payload.get("phase") in {"processing", "failed"}
-            and pending_state.payload.get("input")
-            else text
-        )
-        claimed = await _transition_persisted_interaction(
-            user_id,
-            "complete_project",
-            {
-                **pending_state.payload,
-                "phase": "processing",
-                "input": project_input,
-            },
-            session_token,
-        )
-        if not claimed:
-            await message.answer("Этот диалог уже обрабатывается или устарел.")
-            return MessageOutcome.DUPLICATE
-        await message_bot(message).send_chat_action(chat_id=message.chat.id, action="typing")
-        command_result = await dispatch_result(
-            {
-                "name": "complete_project",
-                "arguments": {"search_query": project_input},
-            },
-            user_id,
-            user_tz,
-        )
-        result = command_result.text
-        add_message(user_id, "user", text)
-        if command_result.kind == "confirm_project_complete":
-            payload = command_result.dict_payload()
-            from bot.handlers.callbacks import build_project_complete_keyboard
-
-            prompt = (
-                f"У слона «{payload['title']}» осталось открытых задач: "
-                f"{payload['open_count']}. Закрыть слона и отменить эти задачи?"
-            )
-            add_message(user_id, "assistant", prompt)
-            await message.answer(
-                prompt,
-                parse_mode=None,
-                reply_markup=build_project_complete_keyboard(
-                    str(payload["project_id"])
-                ).as_markup(),
-            )
-        else:
-            add_message(user_id, "assistant", result)
-            for part in split_message(result):
-                await message.answer(part, parse_mode=None)
-        if command_result.kind != "error":
-            await _clear_persisted_interaction(
-                user_id,
-                "complete_project",
-                session_token,
-            )
-        else:
-            await _transition_persisted_interaction(
-                user_id,
-                "complete_project",
-                {
-                    **pending_state.payload,
-                    "phase": "failed",
-                    "input": project_input,
-                },
-                session_token,
-            )
-        return (
-            MessageOutcome.RETRYABLE_ERROR
-            if command_result.kind == "error"
-            else MessageOutcome.COMPLETED
-        )
-
-    if _PROJECT_DONE_RE.match(text):
-        claimed = await _set_pending_interaction(user_id, "complete_project")
-        if claimed:
-            await message.answer("Какой слон закрываем? Напиши название проекта.")
-        else:
-            await message.answer(
-                "Сначала заверши текущий диалог с ботом, затем закрой слона."
-            )
-        return MessageOutcome.COMPLETED
-
-    delete_query = _extract_explicit_delete(text)
-    if delete_query:
-        await message_bot(message).send_chat_action(chat_id=message.chat.id, action="typing")
-        command_result = await dispatch_result(
-            {"name": "delete_task", "arguments": {"search_query": delete_query}},
-            user_id,
-            user_tz,
-        )
-        result = command_result.text
-        add_message(user_id, "user", text)
-        if command_result.kind == "confirm_delete":
-            payload = command_result.dict_payload()
-            from bot.handlers.callbacks import build_delete_confirm_keyboard
-
-            prompt = f"Нашёл задачу «{payload['title']}». Удалить?"
-            add_message(user_id, "assistant", prompt)
-            keyboard = build_delete_confirm_keyboard(str(payload["task_id"]))
-            await message.answer(
-                prompt, parse_mode=None, reply_markup=keyboard.as_markup()
-            )
-        elif command_result.kind == "choose_delete":
-            choices = command_result.list_payload()
-            from bot.handlers.callbacks import build_delete_choice_keyboard
-
-            prompt = "Нашёл несколько похожих задач. Какую удалить?"
-            add_message(user_id, "assistant", prompt)
-            keyboard = build_delete_choice_keyboard(choices)
-            await message.answer(
-                prompt, parse_mode=None, reply_markup=keyboard.as_markup()
-            )
-        else:
-            add_message(user_id, "assistant", result)
-            for part in split_message(result):
-                await message.answer(part, parse_mode=None)
-        return MessageOutcome.COMPLETED
-
-    cross_user_id = _extract_cross_user_request(text)
-    if cross_user_id is not None and cross_user_id != user_id:
-        reply = "Нет доступа к данным других пользователей."
-        add_message(user_id, "user", text)
-        add_message(user_id, "assistant", reply)
-        await message.answer(reply)
-        return MessageOutcome.COMPLETED
-
-    combined_mutations = _extract_note_and_task_mutations(text)
-    if combined_mutations:
-        add_message(user_id, "user", text)
-        await message_bot(message).send_chat_action(chat_id=message.chat.id, action="typing")
-        results = [
-            await dispatch({"name": name, "arguments": arguments}, user_id, user_tz)
-            for name, arguments in combined_mutations
-        ]
-        reply = "\n".join(results)
-        add_message(user_id, "assistant", reply)
-        for part in split_message(reply):
-            await message.answer(part, parse_mode=None)
-        return MessageOutcome.COMPLETED
-
-    common_mutation = _extract_common_mutation(
-        _normalize_common_intent_text(text), user_tz
+    workflow_outcome = await _route_project_and_delete_workflows(
+        user_id, text, message, user_tz
     )
-    if common_mutation:
-        tool_name, arguments = common_mutation
-        add_message(user_id, "user", text)
-        if tool_name == "respond_to_user":
-            result = str(arguments["message"])
-        else:
-            await message_bot(message).send_chat_action(chat_id=message.chat.id, action="typing")
-            result = await dispatch(
-                {"name": tool_name, "arguments": arguments},
-                user_id,
-                user_tz,
-            )
-        add_message(user_id, "assistant", result)
-        for part in split_message(result):
-            await message.answer(part, parse_mode=None)
-        return MessageOutcome.COMPLETED
+    if workflow_outcome is not None:
+        return workflow_outcome
 
-    task_args = _extract_task_request(text, user_tz)
-    if task_args:
-        await message_bot(message).send_chat_action(chat_id=message.chat.id, action="typing")
-        result = await dispatch(
-            {"name": "create_task", "arguments": task_args},
-            user_id,
-            user_tz,
-        )
-        add_message(user_id, "user", text)
-        add_message(user_id, "assistant", result)
-        for part in split_message(result):
-            await message.answer(part, parse_mode=None)
-        return MessageOutcome.COMPLETED
-
-    # Мемуарник имеет один источник истины — PostgreSQL state с TTL. Обычное
-    # сообщение без явного reply никогда не считается ответом на вопрос.
-    persisted_memoir = await _get_persisted_interaction(user_id, "memoir")
-    if persisted_memoir:
-        memoir_msg_id = persisted_memoir.payload.get("message_id")
-        reply_to = message.reply_to_message
-        is_memoir_reply = bool(
-            reply_to and memoir_msg_id and reply_to.message_id == memoir_msg_id
-        )
-        if is_memoir_reply:
-            await message_bot(message).send_chat_action(chat_id=message.chat.id, action="typing")
-
-            session_token = persisted_memoir.payload.get("session_token")
-            if session_token:
-                await _save_memoir_answer(
-                    user_id, text, user_tz, session_token
-                )
-            else:
-                await _save_memoir_answer(user_id, text, user_tz)
-            await message.answer("📔 Записано в мемуарник! ✅")
-            return MessageOutcome.COMPLETED
-
-    # Проверяем, ожидается ли ответ на хронометраж
-    from bot.scheduler.chronometry import (
-        clear_awaiting,
-        get_chrono_message_id,
-        is_awaiting_response,
+    deterministic_outcome = await _route_deterministic_intents(
+        user_id, text, message, user_tz
     )
-    persisted_chrono = await _get_persisted_interaction(user_id, "chronometry")
-    if is_awaiting_response(user_id) or persisted_chrono:
-        # Определяем, куда направлять сообщение:
-        # - Reply на хронометражный вопрос → хронометраж
-        # - Reply на другое сообщение → обычная обработка (LLM)
-        # - Без reply → хронометраж (обратная совместимость)
-        chrono_msg_id = get_chrono_message_id(user_id)
-        if not chrono_msg_id and persisted_chrono:
-            chrono_msg_id = persisted_chrono.payload.get("message_id")
-        reply_to = message.reply_to_message
+    if deterministic_outcome is not None:
+        return deterministic_outcome
 
-        is_chrono_reply = True
-        if reply_to and chrono_msg_id and reply_to.message_id != chrono_msg_id:
-            # Пользователь ответил reply'ем на другое сообщение — это не хронометраж
-            is_chrono_reply = False
+    persisted_outcome = await _route_persisted_replies(user_id, text, message, user_tz)
+    if persisted_outcome is not None:
+        return persisted_outcome
 
-        if is_chrono_reply and _looks_like_chronometry_answer(text):
-            await message_bot(message).send_chat_action(chat_id=message.chat.id, action="typing")
+    return await _process_via_llm(user_id, text, message, user_tz)
 
-            from bot.handlers.chronometry import process_chronometry_response
-            if persisted_chrono:
-                result = await process_chronometry_response(
-                    user_id,
-                    text,
-                    user_tz,
-                    persisted_chrono.payload.get("session_token"),
-                )
-            else:
-                result = await process_chronometry_response(user_id, text, user_tz)
-            clear_awaiting(user_id)
-            await message.answer(result)
-            return MessageOutcome.COMPLETED
 
-    # Typing indicator
+async def _process_via_llm(
+    user_id: int, text: str, message: Message, user_tz: str
+) -> MessageOutcome:
     await message_bot(message).send_chat_action(chat_id=message.chat.id, action="typing")
+    messages = await _build_intent_messages(user_id, text, user_tz)
+    response, error_outcome = await _request_intent_response(user_id, message, messages)
+    if error_outcome is not None or response is None:
+        return error_outcome or MessageOutcome.RETRYABLE_ERROR
 
-    # Загружаем промпт
+    response, error_outcome = await _require_mutation_tool_call(
+        user_id, text, message, messages, response
+    )
+    if error_outcome is not None or response is None:
+        return error_outcome or MessageOutcome.RETRYABLE_ERROR
+
+    await _log_intent_response(user_id, messages, response)
+    outcome = await _present_llm_response(user_id, text, message, user_tz, response)
+    if outcome != MessageOutcome.COMPLETED:
+        return outcome
+    _trim_context_if_needed(user_id)
+    return MessageOutcome.COMPLETED
+
+
+async def _build_intent_messages(
+    user_id: int, text: str, user_tz: str
+) -> list[dict[str, str]]:
+    import pendulum
+
     async with async_session() as session:
         system_prompt = await get_prompt(session, "intent_detection")
-
-    if not system_prompt:
-        system_prompt = _default_intent_prompt()
-
-    # Подставляем контекстные переменные в промпт
-    import pendulum
+    system_prompt = system_prompt or _default_intent_prompt()
     now_str = pendulum.now(user_tz).format("YYYY-MM-DD HH:mm dddd", locale="ru")
     system_prompt = system_prompt.replace("{now}", now_str).replace("{timezone}", user_tz)
-
-    # Добавляем нормализованную разговорную формулировку: модель чаще делает
-    # правильный tool call с первого круга, а не после forced retry.
-    intent_text = _normalize_common_intent_text(text)
-    add_message(user_id, "user", intent_text)
-
-    # Собираем сообщения
+    add_message(user_id, "user", _normalize_common_intent_text(text))
     messages = [{"role": "system", "content": system_prompt}]
     messages.extend(get_history(user_id))
+    return messages
 
-    # Отправляем в LLM через очередь
+
+async def _request_intent_response(
+    user_id: int, message: Message, messages: list[dict[str, str]]
+) -> tuple[LLMResponse | None, MessageOutcome | None]:
+    assert llm_client is not None and llm_queue is not None
     try:
         response = await llm_queue.submit(
             PRIORITY_INTENT,
             llm_client.chat(messages=messages, functions=FUNCTIONS),
         )
+        return response, None
     except LLMUnavailableError:
         reply = (
             "Извини, AI-сервис временно недоступен. "
             "Попробуй через пару минут или используй команды напрямую."
         )
-        add_message(user_id, "assistant", reply)
-        await message.answer(reply)
-        return MessageOutcome.RETRYABLE_ERROR
-    except Exception as e:
-        logger.error("LLM request failed: error_type=%s", error_type(e))
+    except Exception as exc:
+        logger.error("LLM request failed: error_type=%s", error_type(exc))
         reply = "Произошла ошибка при обработке. Попробуй ещё раз."
-        add_message(user_id, "assistant", reply)
-        await message.answer(reply)
-        return MessageOutcome.RETRYABLE_ERROR
+    await _answer_and_remember(user_id, None, message, reply)
+    return None, MessageOutcome.RETRYABLE_ERROR
 
-    # Модели иногда имитируют успешную мутацию свободным текстом. Для явного
-    # изменяющего запроса делаем один retry с обязательным вызовом tool.
+
+async def _require_mutation_tool_call(
+    user_id: int,
+    text: str,
+    message: Message,
+    messages: list[dict[str, str]],
+    response: LLMResponse,
+) -> tuple[LLMResponse | None, MessageOutcome | None]:
+    assert llm_client is not None and llm_queue is not None
     mutation_expected = _looks_like_mutation_request(text) or _looks_like_fake_mutation(
         response.content or ""
     )
-    if mutation_expected and not _has_mutating_tool_call(response.function_calls):
-        logger.warning("Mutation intent without tool call; retrying")
-        try:
-            response = await llm_queue.submit(
-                PRIORITY_INTENT,
-                llm_client.chat(
-                    messages=messages,
-                    functions=FUNCTIONS,
-                    tool_choice="required",
-                ),
-            )
-        except Exception as e:
-            logger.error("Required tool retry failed: error_type=%s", error_type(e))
-            reply = "Не смог выполнить изменение. Уточни, что именно нужно сохранить."
-            add_message(user_id, "assistant", reply)
-            await message.answer(reply)
-            return MessageOutcome.RETRYABLE_ERROR
-        if not _has_mutating_tool_call(response.function_calls):
-            clarification = _typed_clarification(response.function_calls)
-            if clarification:
-                reply = f"Нужно уточнение перед изменением: {clarification}"
-                add_message(user_id, "assistant", reply)
-                await message.answer(reply, parse_mode=None)
-                return MessageOutcome.REJECTED
-            logger.error("Required tool retry returned no mutation")
-            reply = (
-                "Не удалось выполнить изменение: нужно уточнить дату или "
-                "формулировку. Повтори запрос."
-            )
-            add_message(user_id, "assistant", reply)
-            await message.answer(reply)
-            return MessageOutcome.RETRYABLE_ERROR
+    if not mutation_expected or _has_mutating_tool_call(response.function_calls):
+        return response, None
 
-    # Логирование в БД
+    logger.warning("Mutation intent without tool call; retrying")
+    try:
+        response = await llm_queue.submit(
+            PRIORITY_INTENT,
+            llm_client.chat(
+                messages=messages,
+                functions=FUNCTIONS,
+                tool_choice="required",
+            ),
+        )
+    except Exception as exc:
+        logger.error("Required tool retry failed: error_type=%s", error_type(exc))
+        reply = "Не смог выполнить изменение. Уточни, что именно нужно сохранить."
+        await _answer_and_remember(user_id, None, message, reply)
+        return None, MessageOutcome.RETRYABLE_ERROR
+
+    if _has_mutating_tool_call(response.function_calls):
+        return response, None
+    clarification = _typed_clarification(response.function_calls)
+    if clarification:
+        reply = f"Нужно уточнение перед изменением: {clarification}"
+        await _answer_and_remember(user_id, None, message, reply)
+        return None, MessageOutcome.REJECTED
+    logger.error("Required tool retry returned no mutation")
+    reply = (
+        "Не удалось выполнить изменение: нужно уточнить дату или "
+        "формулировку. Повтори запрос."
+    )
+    await _answer_and_remember(user_id, None, message, reply)
+    return None, MessageOutcome.RETRYABLE_ERROR
+
+
+async def _log_intent_response(
+    user_id: int, messages: list[dict[str, str]], response: LLMResponse
+) -> None:
     try:
         async with async_session() as session:
             from bot.db.crud.llm_logs import log_llm_request
+
             await log_llm_request(
                 session,
                 user_id=user_id,
@@ -770,167 +774,137 @@ async def _process_text_message_unlocked(
     except Exception as exc:
         logger.warning("LLM metadata log failed: error_type=%s", error_type(exc))
 
-    # Обработка ответа
+
+async def _present_llm_response(
+    user_id: int,
+    text: str,
+    message: Message,
+    user_tz: str,
+    response: LLMResponse,
+) -> MessageOutcome:
     if response.function_calls:
-        all_results = []
-        retryable_error = False
+        return await _present_tool_calls(
+            user_id, text, message, user_tz, response.function_calls
+        )
+    if response.content:
+        return await _present_freeform_response(user_id, text, message, response.content)
+    reply = "Не удалось обработать сообщение. Попробуй переформулировать."
+    await _answer_and_remember(user_id, None, message, reply)
+    return MessageOutcome.RETRYABLE_ERROR
 
-        for fc in response.function_calls:
-            fc = _preserve_user_marker_in_call(text, fc)
-            fc = _guard_relative_birthday(text, fc)
-            command_result = await dispatch_result(fc, user_id, user_tz)
-            result = command_result.text
-            if command_result.kind == "error":
-                retryable_error = True
-                all_results.append(result)
-                continue
 
-            # Специальный случай: confirm удаления
-            if command_result.kind == "confirm_delete":
-                payload = command_result.dict_payload()
-                task_id = str(payload["task_id"])
-                task_title = str(payload["title"])
-                from bot.handlers.callbacks import build_delete_confirm_keyboard
-                kb = build_delete_confirm_keyboard(task_id)
-                prompt = f"Нашёл задачу «{task_title}». Удалить?"
-                add_message(user_id, "assistant", prompt)
-                await message.answer(
-                    prompt,
-                    parse_mode=None,
-                    reply_markup=kb.as_markup(),
-                )
-                continue
+async def _present_tool_calls(
+    user_id: int,
+    text: str,
+    message: Message,
+    user_tz: str,
+    function_calls: list[dict],
+) -> MessageOutcome:
+    all_results: list[str] = []
+    retryable_error = False
+    for function_call in function_calls:
+        function_call = _preserve_user_marker_in_call(text, function_call)
+        function_call = _guard_relative_birthday(text, function_call)
+        command_result = await dispatch_result(function_call, user_id, user_tz)
+        if command_result.kind == "error":
+            retryable_error = True
+            all_results.append(command_result.text)
+        elif command_result.kind in {"confirm_delete", "choose_delete"}:
+            await _present_delete_result(user_id, message, command_result)
+        elif command_result.kind == "confirm_project_complete":
+            await _present_project_completion_result(user_id, message, command_result)
+        elif command_result.kind == "project_created":
+            await _present_created_project(user_id, message, command_result)
+        else:
+            all_results.append(command_result.text)
+    await _present_combined_results(user_id, message, all_results)
+    return (
+        MessageOutcome.RETRYABLE_ERROR
+        if retryable_error
+        else MessageOutcome.COMPLETED
+    )
 
-            if command_result.kind == "choose_delete":
-                choices = command_result.list_payload()
-                from bot.handlers.callbacks import build_delete_choice_keyboard
-                kb = build_delete_choice_keyboard(choices)
-                prompt = "Нашёл несколько похожих задач. Какую удалить?"
-                add_message(user_id, "assistant", prompt)
-                await message.answer(
-                    prompt,
-                    parse_mode=None,
-                    reply_markup=kb.as_markup(),
-                )
-                continue
 
-            if command_result.kind == "confirm_project_complete":
-                payload = command_result.dict_payload()
-                project_id = str(payload["project_id"])
-                project_title = str(payload["title"])
-                open_count = payload["open_count"]
-                from bot.handlers.callbacks import build_project_complete_keyboard
-                kb = build_project_complete_keyboard(project_id)
-                prompt = (
-                    f"У слона «{project_title}» осталось открытых задач: {open_count}. "
-                    "Закрыть слона и отменить эти задачи?"
-                )
-                add_message(user_id, "assistant", prompt)
-                await message.answer(
-                    prompt,
-                    parse_mode=None,
-                    reply_markup=kb.as_markup(),
-                )
-                continue
+async def _present_combined_results(
+    user_id: int, message: Message, results: list[str]
+) -> None:
+    if not results:
+        return
+    combined = "\n\n".join(results)
+    add_message(user_id, "assistant", combined)
+    for part in split_message(combined):
+        await message.answer(part, parse_mode=None)
 
-            # Специальный случай: проект создан → декомпозиция
-            if command_result.kind == "project_created":
-                payload = command_result.dict_payload()
-                project_id = str(payload["project_id"])
-                project_title = str(payload["title"])
-                project_prompt = (
-                    f"🐘 Слон «{project_title}» создан!\n"
-                    "Сейчас нарезаю на бифштексы..."
-                )
-                add_message(user_id, "assistant", project_prompt)
-                await message.answer(
-                    project_prompt,
-                    parse_mode=None,
-                )
-                await message_bot(message).send_chat_action(chat_id=message.chat.id, action="typing")
 
-                import uuid
+async def _present_created_project(
+    user_id: int, message: Message, command_result: CommandResult
+) -> None:
+    import uuid
 
-                from bot.db.crud.projects import get_project_by_id
-                from bot.llm.decompose import create_project_tasks, decompose_project
-                async with async_session() as session:
-                    project = await get_project_by_id(session, uuid.UUID(project_id))
-                project_description = (project.description or "") if project else ""
-                project_category = project.category if project else "work"
-                task_titles = await decompose_project(
-                    llm_client,
-                    llm_queue,
-                    user_id,
-                    project_id,
-                    project_title,
-                    project_description,
-                )
-                if task_titles:
-                    created = await create_project_tasks(
-                        user_id, project_id, task_titles, project_category
-                    )
-                    tasks_list = "\n".join(f"  • {t}" for t in task_titles)
-                    add_message(
-                        user_id,
-                        "assistant",
-                        f"Слон создан, нарезан на {created} бифштексов",
-                    )
-                    await message.answer(
-                        f"🔪 Нарезано {created} бифштексов:\n{tasks_list}\n\n"
-                        "Смотри /projects для прогресса.",
-                        parse_mode=None,
-                    )
-                else:
-                    add_message(user_id, "assistant", "Слон создан без декомпозиции")
-                    await message.answer(
-                        "Не удалось автоматически декомпозировать. "
-                        "Добавь задачи вручную."
-                    )
-                continue
+    from bot.db.crud.projects import get_project_by_id
+    from bot.llm.decompose import create_project_tasks, decompose_project
 
-            all_results.append(result)
+    assert llm_client is not None and llm_queue is not None
 
-        # Отправляем все результаты (с разбивкой по лимиту Telegram)
-        if all_results:
-            combined = "\n\n".join(all_results)
-            add_message(user_id, "assistant", combined)
-            for part in split_message(combined):
-                await message.answer(part, parse_mode=None)
-        if retryable_error:
-            return MessageOutcome.RETRYABLE_ERROR
+    payload = command_result.dict_payload()
+    project_id = str(payload["project_id"])
+    project_title = str(payload["title"])
+    project_prompt = f"🐘 Слон «{project_title}» создан!\nСейчас нарезаю на бифштексы..."
+    add_message(user_id, "assistant", project_prompt)
+    await message.answer(project_prompt, parse_mode=None)
+    await message_bot(message).send_chat_action(chat_id=message.chat.id, action="typing")
 
-    elif response.content:
-        # Ограничиваем длину свободного ответа (защита от prompt injection)
-        content = response.content
-        if _looks_like_fake_mutation(content):
-            logger.warning(
-                "LLM tried to report mutation without function call: user=%s "
-                "input_chars=%d response_chars=%d",
-                user_id, len(text), len(content),
-            )
-            reply = (
-                "Я не сохранил это, потому что не получил реальную команду на изменение. "
-                "Напиши коротко: «надо сделать ...» или «... - сделал»."
-            )
-            add_message(user_id, "assistant", reply)
-            await message.answer(reply)
-            return MessageOutcome.RETRYABLE_ERROR
-        if len(content) > 1000:
-            content = content[:1000] + "..."
-        add_message(user_id, "assistant", content)
-        await message.answer(content, parse_mode=None)
-    else:
-        reply = "Не удалось обработать сообщение. Попробуй переформулировать."
-        add_message(user_id, "assistant", reply)
-        await message.answer(reply)
+    async with async_session() as session:
+        project = await get_project_by_id(session, uuid.UUID(project_id))
+    description = (project.description or "") if project else ""
+    category = project.category if project else "work"
+    task_titles = await decompose_project(
+        llm_client, llm_queue, user_id, project_id, project_title, description
+    )
+    if not task_titles:
+        add_message(user_id, "assistant", "Слон создан без декомпозиции")
+        await message.answer(
+            "Не удалось автоматически декомпозировать. Добавь задачи вручную."
+        )
+        return
+    created = await create_project_tasks(user_id, project_id, task_titles, category)
+    tasks_list = "\n".join(f"  • {title}" for title in task_titles)
+    add_message(user_id, "assistant", f"Слон создан, нарезан на {created} бифштексов")
+    await message.answer(
+        f"🔪 Нарезано {created} бифштексов:\n{tasks_list}\n\n"
+        "Смотри /projects для прогресса.",
+        parse_mode=None,
+    )
+
+
+async def _present_freeform_response(
+    user_id: int, text: str, message: Message, content: str
+) -> MessageOutcome:
+    if _looks_like_fake_mutation(content):
+        logger.warning(
+            "LLM tried to report mutation without function call: user=%s "
+            "input_chars=%d response_chars=%d",
+            user_id,
+            len(text),
+            len(content),
+        )
+        reply = (
+            "Я не сохранил это, потому что не получил реальную команду на изменение. "
+            "Напиши коротко: «надо сделать ...» или «... - сделал»."
+        )
+        await _answer_and_remember(user_id, None, message, reply)
         return MessageOutcome.RETRYABLE_ERROR
-
-    # Provider-independent housekeeping must stay bounded and non-blocking.
-    if needs_trimming(user_id):
-        trim_started = time.monotonic()
-        trim_history(user_id)
-        metrics.observe("messages.context_trim_seconds", time.monotonic() - trim_started)
+    content = f"{content[:1000]}..." if len(content) > 1000 else content
+    await _answer_and_remember(user_id, None, message, content)
     return MessageOutcome.COMPLETED
+
+
+def _trim_context_if_needed(user_id: int) -> None:
+    if not needs_trimming(user_id):
+        return
+    trim_started = time.monotonic()
+    trim_history(user_id)
+    metrics.observe("messages.context_trim_seconds", time.monotonic() - trim_started)
 
 
 @router.message(F.text.startswith("/"))
@@ -1058,22 +1032,6 @@ def _normalize_cancel_query(title: str, text: str) -> str:
     return re.sub(r"\b(тоже|пока|что|брать|это)\b", "", title, flags=re.IGNORECASE).strip()
 
 
-def _extract_task_list_scope(text: str) -> Optional[str]:
-    """Распознать частый запрос списка без зависимости от LLM-маршрутизации."""
-    normalized = " ".join(text.strip().split())
-    if not any(pattern.fullmatch(normalized) for pattern in _TASK_LIST_QUERY_PATTERNS):
-        return None
-
-    lowered = normalized.casefold().replace("ё", "е")
-    if "просроч" in lowered:
-        return "overdue"
-    if "выполн" in lowered and "сегодня" in lowered:
-        return "done_today"
-    if "все" in lowered or "открыт" in lowered:
-        return "all"
-    return "today"
-
-
 def _extract_reschedule_request(text: str, tz: str) -> Optional[dict]:
     """Распознать простое 'задачу перенесли на ...'."""
     match = _RESCHEDULE_RE.match(text.strip())
@@ -1141,13 +1099,15 @@ _RU_MONTHS = {
 }
 
 
-def _extract_common_mutation(text: str, tz: str) -> Optional[tuple[str, dict]]:
+def _extract_common_intent(  # noqa: C901, PLR0911, PLR0912, PLR0915 - REVIEW-20260829 legacy ratchet
+    text: str, tz: str
+) -> Optional[tuple[str, dict]]:
     """Надёжный узкий путь для частых фраз, на которых LLM может отказаться."""
     import pendulum
 
     stripped = " ".join(text.strip().split())
 
-    list_scope = _extract_task_list_scope(stripped)
+    list_scope = extract_task_list_scope(stripped)
     if list_scope:
         return "list_tasks", {"scope": list_scope}
 

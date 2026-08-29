@@ -335,7 +335,7 @@ def _parse_datetime(dt_str: Optional[str], tz: str) -> Optional[datetime]:
         return None
 
 
-async def _handle_create_task(
+async def _handle_create_task(  # noqa: C901, PLR0912, PLR0915 - REVIEW-20260829 legacy ratchet
     user_id: int, args: Dict[str, Any], tz: str
 ) -> str:
     title = _sanitize_title(args.get("title", ""))
@@ -772,7 +772,7 @@ async def _handle_create_reminder(
     return f"Напоминание установлено: {message}\n🔔 {remind_at.strftime('%d.%m.%Y %H:%M')}"
 
 
-async def _handle_list_tasks(
+async def _handle_list_tasks(  # noqa: C901 - REVIEW-20260829 legacy ratchet
     user_id: int, args: Dict[str, Any], tz: str
 ) -> str:
     scope = args.get("scope", "today")
@@ -895,7 +895,9 @@ async def _handle_search(user_id: int, args: Dict[str, Any]) -> str:
     return f"По запросу «{query}» ничего не найдено."
 
 
-async def _handle_update_task(user_id: int, args: Dict[str, Any], tz: str = "Europe/Moscow") -> str:
+async def _handle_update_task(  # noqa: C901, PLR0911, PLR0912 - REVIEW-20260829 legacy ratchet
+    user_id: int, args: Dict[str, Any], tz: str = "Europe/Moscow"
+) -> str:
     query = args.get("search_query", "")
     updates = args.get("updates", {})
 

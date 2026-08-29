@@ -431,7 +431,7 @@ async def test_live_reminder_phrase_creates_row_and_delivers_push():
         setup.add(User(telegram_id=user_id, username="live-reminder-regression"))
         await setup.commit()
 
-    tool, arguments = message_handler._extract_common_mutation(
+    tool, arguments = message_handler._extract_common_intent(
         text, "Europe/Moscow"
     )
     assert tool == "create_reminder"

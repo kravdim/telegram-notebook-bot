@@ -28,7 +28,7 @@ def _is_positive(value: Any) -> bool:
     return isinstance(value, (int, float)) and not isinstance(value, bool) and value > 0
 
 
-def validate_runtime_config(
+def validate_runtime_config(  # noqa: C901, PLR0912 - REVIEW-20260829 legacy ratchet
     config: dict[str, Any], provider_keys: dict[str, str]
 ) -> list[str]:
     """Validate provider and operational settings before starting workers."""

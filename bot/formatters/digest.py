@@ -13,7 +13,7 @@ _WEEKDAYS_RU = {
 }
 
 
-def format_morning_digest(
+def format_morning_digest(  # noqa: C901 - REVIEW-20260829 legacy ratchet
     today: date,
     tasks: List[Task],
     frog: Optional[Task],
@@ -24,6 +24,8 @@ def format_morning_digest(
     birthdays: Optional[List] = None,
 ) -> str:
     """Форматирование утреннего дайджеста."""
+    visible_frog = None if is_weekend else frog
+    visible_projects = [] if is_weekend else projects
     weekday = _WEEKDAYS_RU.get(today.weekday(), "")
     header = f"☀️ <b>Доброе утро!</b> {today.strftime('%d.%m')} ({weekday})"
 
@@ -45,8 +47,8 @@ def format_morning_digest(
         parts.append("  Не забудь поздравить!")
 
     # Лягушка
-    if frog and not is_weekend:
-        parts.append(f"\n🐸 <b>Лягушка дня:</b> {escape(frog.title)}")
+    if visible_frog:
+        parts.append(f"\n🐸 <b>Лягушка дня:</b> {escape(visible_frog.title)}")
         parts.append("Съешь её первой!")
 
     if tasks:
@@ -66,17 +68,20 @@ def format_morning_digest(
             parts.append(f"\n⚠️ Просроченных: {len(overdue)}")
 
     # Слоны
-    if projects and not is_weekend:
+    if visible_projects:
         parts.append("\n🐘 <b>Слоны:</b>")
-        for p in projects[:3]:
+        for p in visible_projects[:3]:
             progress = project_progress.get(str(p.id), {})
             pct = progress.get("percent", 0)
             bar = _progress_bar(pct)
             parts.append(f"  {escape(p.title)} {bar} {pct}%")
 
-    if not tasks and not frog and not projects:
-        parts.append("\n🎉 Сегодня свободный день! Отдыхай или запланируй что-нибудь.")
-    elif not tasks and not frog and projects:
+    if not tasks and not visible_frog and not visible_projects:
+        if active_trip or birthdays:
+            parts.append("\n📋 Задач на сегодня нет.")
+        else:
+            parts.append("\n🎉 Сегодня свободный день! Отдыхай или запланируй что-нибудь.")
+    elif not tasks and not visible_frog and visible_projects:
         parts.append("\n📋 Задач на сегодня нет. Можно взять один маленький шаг по слону.")
 
     return "\n".join(parts)

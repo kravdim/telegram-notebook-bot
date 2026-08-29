@@ -60,6 +60,16 @@ handlers ──► IntentNormalizer / typed intents ◄── LLM adapter
 8. `application/normalizer.py` performs only conservative, meaning-preserving
    normalization and retains opaque user markers. Language-provider heuristics
    do not belong in domain services.
+9. The inbound message adapter executes explicit phases: deterministic task
+   shortcuts, durable interaction workflows, provider-independent recognizers,
+   LLM request/mutation guard, metadata logging and Telegram presentation.
+   `application/task_query_recognizer.py` has no Telegram or provider objects.
+
+New functions are capped by Ruff at complexity 15, 20 branches, 12 returns and
+80 statements. Eleven pre-existing hotspots carry an inline
+`REVIEW-20260829 legacy ratchet` exception, so the remaining debt is named and
+cannot silently spread to new code. Removing those exceptions is incremental
+architecture work; widening the global limits is not an accepted shortcut.
 
 New business workflows should first become a service function callable without
 Telegram objects. Handlers should remain thin adapters around that function.

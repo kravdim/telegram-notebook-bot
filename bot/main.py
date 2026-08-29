@@ -143,7 +143,7 @@ async def _cleanup_runtime_resources(
             )
 
 
-async def main() -> None:
+async def main() -> None:  # noqa: C901, PLR0915 - REVIEW-20260829 legacy ratchet
     """Запуск бота."""
     if _tmux_runtime_disallowed():
         logger.error(

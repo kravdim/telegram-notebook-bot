@@ -82,12 +82,9 @@ cp config.yaml.example config.yaml
 # Отредактировать .env — вписать BOT_TOKEN и API-ключи
 # Отредактировать config.yaml — вписать allowed_telegram_ids
 
-# База данных
-createdb notebook_bot
-psql -d notebook_bot -c "CREATE EXTENSION IF NOT EXISTS vector; CREATE EXTENSION IF NOT EXISTS pg_trgm; CREATE EXTENSION IF NOT EXISTS pgcrypto;"
-
-# Миграции
-PYTHONPATH=. alembic upgrade head
+# Воспроизводимая dev-БД (роль notebook, БД notebook_bot, порт 55432),
+# миграции и preflight. Нужен Docker.
+scripts/bootstrap_dev.sh
 
 # Загрузка базы знаний (тайм-менеджмент советы)
 PYTHONPATH=. python scripts/seed_knowledge.py
@@ -109,6 +106,15 @@ chmod +x platform/macos/install.sh
 ```
 
 Бот будет автоматически запускаться при загрузке macOS и перезапускаться при сбоях.
+По умолчанию installer создаёт direct-network профиль без proxy. Если хост
+действительно требует локальный proxy, включите его явно; installer проверит
+доступность endpoint до перезапуска:
+
+```bash
+./platform/macos/install.sh \
+  --http-proxy http://127.0.0.1:1081 \
+  --all-proxy socks5://127.0.0.1:1080
+```
 
 ### VPS — Docker (cloud adapters)
 
@@ -333,14 +339,13 @@ testing:
   e2e_user_ids: []  # только выделенные аккаунты для destructive E2E teardown
 ```
 
-### .env
+### Переменные окружения
 
-```bash
-BOT_TOKEN=your_telegram_bot_token
-GEMINI_API_KEY=...
-DEEPSEEK_API_KEY=...
-DATABASE_URL=postgresql+asyncpg://notebook:password@localhost:5432/notebook_bot
-```
+Канонический inventory находится только в [`.env.example`](.env.example).
+Для основного MiniMax-профиля обязательны `BOT_TOKEN`, `MINIMAX_API_KEY` и
+`DATABASE_URL`; cloud STT/embedding ключи включаются только вместе с
+соответствующим provider в YAML. Устаревшие Gemini/DeepSeek переменные не
+поддерживаются runtime validation.
 
 ## Деплой
 

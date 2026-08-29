@@ -35,7 +35,9 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-async def run(args: argparse.Namespace) -> dict[str, object]:
+async def run(  # noqa: C901 - REVIEW-20260829 legacy ratchet
+    args: argparse.Namespace,
+) -> dict[str, object]:
     user_id = args.telegram_id
     expected = confirmation_phrase(user_id)
     if args.execute and args.confirm != expected:

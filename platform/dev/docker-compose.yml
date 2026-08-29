@@ -1,0 +1,21 @@
+name: dailyplanner-dev
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16@sha256:ccc6e83d6e35e931dc7c5def2022729d5a6c370318d099181995567ff1fb4d6b
+    environment:
+      POSTGRES_USER: notebook
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: notebook_bot
+    ports:
+      - "127.0.0.1:${DAILYPLANNER_DEV_DB_PORT:-55432}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U notebook -d notebook_bot"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+
+volumes:
+  postgres-data:
