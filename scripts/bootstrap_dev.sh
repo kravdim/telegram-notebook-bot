@@ -6,6 +6,7 @@ PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 COMPOSE_FILE="$PROJECT_DIR/platform/dev/docker-compose.yml"
 DEV_PORT="${DAILYPLANNER_DEV_DB_PORT:-55432}"
 SMOKE_ONLY=0
+CREATED_CONFIG=0
 
 usage() {
     echo "Usage: $0 [--smoke]"
@@ -38,10 +39,19 @@ cleanup() {
     if [ "$SMOKE_ONLY" -eq 1 ]; then
         "${compose[@]}" down --volumes --remove-orphans >/dev/null
     fi
+    if [ "$CREATED_CONFIG" -eq 1 ]; then
+        rm -f -- "$PROJECT_DIR/config.yaml"
+    fi
 }
 trap cleanup EXIT
 
 cd "$PROJECT_DIR"
+if [ ! -f config.yaml ]; then
+    cp config.yaml.example config.yaml
+    if [ "$SMOKE_ONLY" -eq 1 ]; then
+        CREATED_CONFIG=1
+    fi
+fi
 uv sync --frozen --group dev --extra stt
 DAILYPLANNER_DEV_DB_PORT="$DEV_PORT" "${compose[@]}" up -d --wait
 
