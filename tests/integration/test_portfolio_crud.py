@@ -291,8 +291,8 @@ async def test_reminders_cover_recurrence_snooze_resolution_failure_and_task_ups
 @pytest.mark.asyncio
 async def test_tasks_cover_calendar_associations_frogs_completion_and_deletion(portfolio_users):
     owner_id, other_id = portfolio_users
-    today = date.today()
     now = datetime.now(timezone.utc)
+    today = now.date()
     async with async_session() as session:
         project = await create_project(session, owner_id, "Task filter project", category="personal")
         trip = await create_trip(session, owner_id, "Task filter trip", today, today + timedelta(days=2))
@@ -343,7 +343,7 @@ async def test_tasks_cover_calendar_associations_frogs_completion_and_deletion(p
         assert completed and completed.id == scheduled.id and completed.completed_at is not None
         cancelled = await update_task(session, overdue.id, owner_id, status="cancelled")
         assert cancelled and cancelled.resolution == "cancelled" and cancelled.completed_at is not None
-        completed_today = await get_completed_today(session, owner_id, today)
+        completed_today = await get_completed_today(session, owner_id, today, tz="UTC")
         assert [task.id for task in completed_today] == [scheduled.id]
         completed_range = await get_completed_in_range(
             session, owner_id, now - timedelta(days=1), now + timedelta(days=1)
