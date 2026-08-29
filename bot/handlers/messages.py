@@ -112,6 +112,39 @@ _INCOMPLETE_MUTATION_RE = re.compile(
     re.IGNORECASE,
 )
 
+_TASK_LIST_QUERY_PATTERNS = [
+    re.compile(
+        r"^\s*(?:а\s+)?какие\s+(?:ещ[её]\s+)?(?:у\s+меня\s+)?"
+        r"(?:задачи|дела)(?:\s+(?:есть|остались))?(?:\s+на\s+сегодня)?\s*[?!.]*$",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"^\s*(?:а\s+)?какие\s+у\s+меня\s+(?:ещ[её]\s+)?"
+        r"(?:задачи|дела)(?:\s+(?:есть|остались))?(?:\s+на\s+сегодня)?\s*[?!.]*$",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"^\s*(?:покажи|перечисли)\s+(?:мои\s+)?(?:все\s+)?"
+        r"(?:открытые\s+)?(?:задачи|дела)(?:\s+на\s+сегодня)?\s*[?!.]*$",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"^\s*(?:список|перечень)\s+(?:моих\s+)?(?:задач|дел)"
+        r"(?:\s+на\s+сегодня)?\s*[?!.]*$",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"^\s*(?:а\s+)?что\s+(?:ещ[её]\s+)?(?:нужно|надо|осталось)\s+"
+        r"сделать(?:\s+сегодня)?\s*[?!.]*$",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"^\s*(?:а\s+)?что\s+у\s+меня\s+(?:по\s+)?(?:задачам|делам)"
+        r"(?:\s+на\s+сегодня)?\s*[?!.]*$",
+        re.IGNORECASE,
+    ),
+]
+
 _MUTATING_TOOLS = {
     "create_task",
     "complete_task",
@@ -1025,6 +1058,22 @@ def _normalize_cancel_query(title: str, text: str) -> str:
     return re.sub(r"\b(тоже|пока|что|брать|это)\b", "", title, flags=re.IGNORECASE).strip()
 
 
+def _extract_task_list_scope(text: str) -> Optional[str]:
+    """Распознать частый запрос списка без зависимости от LLM-маршрутизации."""
+    normalized = " ".join(text.strip().split())
+    if not any(pattern.fullmatch(normalized) for pattern in _TASK_LIST_QUERY_PATTERNS):
+        return None
+
+    lowered = normalized.casefold().replace("ё", "е")
+    if "просроч" in lowered:
+        return "overdue"
+    if "выполн" in lowered and "сегодня" in lowered:
+        return "done_today"
+    if "все" in lowered or "открыт" in lowered:
+        return "all"
+    return "today"
+
+
 def _extract_reschedule_request(text: str, tz: str) -> Optional[dict]:
     """Распознать простое 'задачу перенесли на ...'."""
     match = _RESCHEDULE_RE.match(text.strip())
@@ -1097,6 +1146,10 @@ def _extract_common_mutation(text: str, tz: str) -> Optional[tuple[str, dict]]:
     import pendulum
 
     stripped = " ".join(text.strip().split())
+
+    list_scope = _extract_task_list_scope(stripped)
+    if list_scope:
+        return "list_tasks", {"scope": list_scope}
 
     explicit_diary = re.match(
         r"^запиши\s+в\s+дневник\s*:\s*(?P<content>.+)$",

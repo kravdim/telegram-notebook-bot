@@ -49,10 +49,6 @@ def format_morning_digest(
         parts.append(f"\n🐸 <b>Лягушка дня:</b> {escape(frog.title)}")
         parts.append("Съешь её первой!")
 
-    if is_weekend:
-        # В выходные — только personal + напоминания
-        tasks = [t for t in tasks if t.category == "personal"]
-
     if tasks:
         parts.append("\n📋 <b>Задачи на сегодня:</b>")
         for t in tasks:

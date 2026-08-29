@@ -360,7 +360,7 @@ def test_chronometry_and_digest_cover_populated_weekend_and_birthday_branches():
         birthdays=[birthday],
     )
     assert "&lt;trip&gt;" in message and "&lt;Аня&gt; (26 лет)" in message
-    assert "личное &lt;дело&gt;" in message and "work" not in message
+    assert "личное &lt;дело&gt;" in message and "work" in message
     assert "Лягушка дня" not in message and "Слоны:" not in message
 
 

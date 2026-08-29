@@ -126,6 +126,44 @@ async def test_done_message_routes_directly_to_dispatch(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_followup_task_list_question_bypasses_llm(monkeypatch):
+    calls = []
+
+    async def fake_get_user(session, user_id):
+        return SimpleNamespace(
+            timezone="Europe/Moscow",
+            privacy_notice_version=1,
+            cloud_processing_enabled=True,
+        )
+
+    async def fake_dispatch(function_call, user_id, user_tz):
+        calls.append((function_call, user_id, user_tz))
+        return (
+            "📋 Задачи на сегодня:\n\n"
+            "📌 Подтвердить домены через госуслуги\n"
+            "📌 Доделать регистрацию в Люмен БОнус\n"
+            "📌 Заполнить данные по заправкам и пробегу"
+        )
+
+    monkeypatch.setattr(messages, "async_session", lambda: FakeSessionContext())
+    monkeypatch.setattr(messages, "get_user", fake_get_user)
+    monkeypatch.setattr(messages, "dispatch", fake_dispatch)
+
+    msg = FakeMessage("А какие еще задачи есть?", user_id=42)
+    await messages.process_text_message(42, msg.text, msg)
+
+    assert calls == [
+        (
+            {"name": "list_tasks", "arguments": {"scope": "today"}},
+            42,
+            "Europe/Moscow",
+        )
+    ]
+    assert "Доделать регистрацию в Люмен БОнус" in msg.answers[-1][0]
+    assert msg.bot.actions == [(42, "typing")]
+
+
+@pytest.mark.asyncio
 async def test_conversational_done_bypasses_pending_chronometry(monkeypatch):
     calls = []
 
