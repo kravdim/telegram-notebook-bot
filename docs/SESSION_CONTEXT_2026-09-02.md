@@ -30,8 +30,8 @@ Production process после переключения: PID `58957`, `runs=1`,
 - общий coverage floor поднят до 71%, измеренное покрытие — 72,24%;
 - future GitHub Releases публикуются draft-first и проверяются на
   `immutable=true` после публикации;
-- до письменного legal/product sign-off внешний клиентский контур запрещён и
-  разрешён только закрытый owner/internal allowlist.
+- проект формально зафиксирован как личный owner-only deployment без внешних
+  клиентов; legal/product market review к текущему scope неприменим.
 
 ## Test, CI и release evidence
 
@@ -78,13 +78,16 @@ reviewer нужно включить `required_approving_review_count=1`,
 `require_code_owner_reviews=true` и last-push approval, затем проверить это
 тестовым PR ([issue #6](https://github.com/kravdim/telegram-notebook-bot/issues/6)).
 
-## Оставшийся внешний scope
+## Оставшийся scope
 
 - пригласить второго GitHub collaborator/reviewer и включить обязательное
   независимое approval;
-- получить письменный legal/product sign-off до обработки данных внешних
-  клиентов ([issue #7](https://github.com/kravdim/telegram-notebook-bot/issues/7));
 - архитектурная декомпозиция продолжается в milestones
   [v0.4.0](https://github.com/kravdim/telegram-notebook-bot/issues/4) и
   [v0.5.0](https://github.com/kravdim/telegram-notebook-bot/issues/5); это
   контролируемый backlog, а не блокер production release `v0.3.1`.
+
+Legal issue
+[#7](https://github.com/kravdim/telegram-notebook-bot/issues/7) закрыт как
+неприменимый: владелец подтвердил, что проект останется личным и внешних
+клиентов не будет.
