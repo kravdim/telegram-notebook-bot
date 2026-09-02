@@ -2,23 +2,26 @@
 
 ## Текущее состояние
 
-Замечания из независимой финальной перепроверки закрыты релизом `v0.3.1`.
+Замечания из независимой финальной перепроверки закрыты релизом `v0.3.1`;
+последующий production-дефект ответа на мемуарник исправлен релизом `v0.3.2`.
 Release/tag/production revision совпадают:
-`61d2dd457c067dbe36863845286a30359035f5db`. GitHub Release опубликован как
+`64d769ddc21b93d1f6767b4529ecaebab4b47f5b`. GitHub Release опубликован как
 immutable, production LaunchAgent работает с versioned release directory,
 heartbeat подтверждает точный release SHA.
 
 Deploy report: `status=deployed`, `phase=complete`, previous
-`070c9a732407d91d4f3a5ee61af6dae78e37dc0f`, rollback `not_required`.
-Production process после переключения: PID `58957`, `runs=1`,
+`61d2dd457c067dbe36863845286a30359035f5db`, rollback `not_required`.
+Production process после переключения: PID `3468`, `runs=1`,
 `last exit=(never exited)`.
 
 После релиза диагностирован отдельный production-дефект ответа на мемуарник:
 prompt был доставлен, но ответ мог раньше попасть в task/LLM routing, а обычное
-следующее сообщение без Telegram Reply не считалось ответом. Исправление
-подготовлено для `v0.3.2`: активный мемуарник получает текст первым, принимает
-как точный Reply, так и следующее обычное сообщение, но не перехватывает Reply
-на другую ветку.
+следующее сообщение без Telegram Reply не считалось ответом. В `v0.3.2`
+активный мемуарник получает текст первым, принимает как точный Reply, так и
+следующее обычное сообщение, но не перехватывает Reply на другую ветку.
+Сегодняшнее потерянное ожидание точечно восстановлено на исходный prompt
+`9483` на один час; исходный текст Telegram не сохранялся и требует повторной
+отправки пользователем.
 
 ## Что исправлено
 
@@ -42,20 +45,21 @@ prompt был доставлен, но ответ мог раньше попас
 
 ## Test, CI и release evidence
 
-- canonical local PostgreSQL gate: `450 passed, 1 skipped`, coverage `72,24%`;
+- canonical local PostgreSQL gate: `452 passed, 1 skipped`, coverage `72,26%`;
 - Ruff, mypy (112 source files), docs/version/migration contracts и complexity
   ratchet: PASS;
 - intentional macOS deploy failure drill: `11/11 PASS`;
-- PR #8: <https://github.com/kravdim/telegram-notebook-bot/pull/8>;
-- post-merge CI run `33653912307`: все пять required jobs PASS;
-- release workflow run `33660146451`: PASS;
+- memoir fix PR #11:
+  <https://github.com/kravdim/telegram-notebook-bot/pull/11>;
+- post-merge CI run `33675039515`: все пять required jobs PASS;
+- release workflow run `33675498986`: PASS;
 - immutable GitHub Release:
-  <https://github.com/kravdim/telegram-notebook-bot/releases/tag/v0.3.1>;
+  <https://github.com/kravdim/telegram-notebook-bot/releases/tag/v0.3.2>;
 - release assets: image tar, CycloneDX SBOM, SHA256SUMS и attestation; Release
   API возвращает `immutable=true`, `draft=false`;
 - pre-deploy backup:
-  `notebook_bot_2026-09-02_191842.sql.gz`, 1 231 142 bytes, SHA-256
-  `ce1dfd3c9a216c19567167e7005363bbd560f117a596135c6aef513d99f11a95`;
+  `notebook_bot_2026-09-02_225026.sql.gz`, 1 231 608 bytes, SHA-256
+  `b2f7616e8bfddf28e055254427e2cdf47ee02585b010fb657cae25d0f83c6bd6`;
 - recovery LaunchAgent: 20 public tables, migration `a6c9d1e4f7b2`, users 2,
   tasks 122, delivery batches 34, RTO 0,54 s, status `ok`, exit 0;
 - post-live SLO: reminders `ok`, lag 0 s, pending 0; backup `ok`, artifact
