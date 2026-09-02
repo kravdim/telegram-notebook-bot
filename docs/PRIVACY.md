@@ -4,6 +4,12 @@ DailyPlanner stores task, project, reminder, diary, memoir, time-tracking,
 birthday and interaction data in PostgreSQL. Embeddings are derived from user
 text and are personal data even when they are not directly readable.
 
+Until a written legal/product review of notice, consent and retention is
+complete for the intended market, DailyPlanner is not approved for external
+customer or employee data. Production use is limited to the closed
+owner/internal allowlist described below. Public demonstrations must use
+synthetic data.
+
 Before any free-text or voice path can call an AI adapter, onboarding presents
 the versioned privacy notice and requires an explicit cloud-processing choice.
 `/privacy` keeps the same notice and choice available later. The notice derives

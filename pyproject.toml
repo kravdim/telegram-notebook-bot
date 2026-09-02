@@ -1,6 +1,6 @@
 [project]
 name = "dailyplanner"
-version = "0.3.0"
+version = "0.3.1"
 description = "Telegram daily planner with reminders and LLM-assisted intent handling"
 readme = "README.md"
 license = { file = "LICENSE" }
@@ -91,6 +91,6 @@ source = ["bot", "scripts"]
 omit = ["bot/db/migrations/*"]
 
 [tool.coverage.report]
-fail_under = 70
+fail_under = 71
 show_missing = true
 skip_covered = true

@@ -44,6 +44,7 @@ export PYTHONPATH="."
 
 uv run alembic upgrade head
 uv run alembic check
+uv run python scripts/check_complexity_ratchet.py
 uv run pytest --cov --cov-report=term-missing --cov-report=xml
 scripts/check_critical_coverage.sh
 scripts/check_risk_coverage.sh

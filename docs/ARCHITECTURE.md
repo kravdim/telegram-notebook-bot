@@ -69,10 +69,23 @@ handlers ──► IntentNormalizer / typed intents ◄── LLM adapter
    settings cover the complete `bot.application` package.
 
 New functions are capped by Ruff at complexity 15, 20 branches, 12 returns and
-80 statements. Eleven pre-existing hotspots carry an inline
-`REVIEW-20260829 legacy ratchet` exception, so the remaining debt is named and
-cannot silently spread to new code. Removing those exceptions is incremental
-architecture work; widening the global limits is not an accepted shortcut.
+80 statements. Nine pre-existing hotspots carry 16 inline complexity exceptions
+across product and operational code (15 under `bot/`).
+`scripts/check_complexity_ratchet.py` contains the explicit allowlist, rejects
+new or widened exceptions, and permits only reductions. Removing those
+exceptions is incremental architecture work; widening the global limits is not
+an accepted shortcut.
+
+The first central-path milestone is complete. Background scheduling and STT
+warmup are owned by `bot.runtime.background`, while `bot.main` is now a 295-line
+composition root with no complexity suppression. Task creation is a typed,
+transport-independent use case in `bot.application.task_creation`; its former
+43-complexity/104-statement dispatcher function is now a thin adapter without a
+suppression. The remaining owned milestones are Telegram intent adaptation and
+list/update task execution ([issue #4](https://github.com/kravdim/telegram-notebook-bot/issues/4),
+owner: `kravdim`, milestone `v0.4.0`) and command presentation
+([issue #5](https://github.com/kravdim/telegram-notebook-bot/issues/5), owner:
+`kravdim`, milestone `v0.5.0`).
 
 New business workflows should first become a service function callable without
 Telegram objects. Handlers should remain thin adapters around that function.

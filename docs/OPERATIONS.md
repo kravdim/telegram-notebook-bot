@@ -142,6 +142,16 @@ bounded-readiness failure. Migrations must therefore remain expand/contract
 compatible with the previous release. A destructive schema rollback is never
 performed automatically.
 
+Every attempt that reaches the deployment state directory atomically writes
+`last-deploy-report.txt`, including pre-switch failures and failures while
+loading or validating the previous LaunchAgent. Telegram credentials and STT
+warmup are checked before migration; the expand/contract migration is applied
+immediately before the process switch. Run the isolated intentional-failure
+matrix with `scripts/run_macos_deploy_failure_drill.sh`. It executes dependency,
+database, Telegram, STT, plist, migration, candidate load/readiness and broken
+rollback cases with a fake LaunchAgent boundary and asserts both the report and
+the preserved previous revision.
+
 1. Stop the new process. Keep the pre-release backup and checksum immutable.
 2. If the migration is backward compatible, deploy the previous Git revision and
    run its preflight. Do not downgrade the database merely to roll back code.
@@ -152,6 +162,11 @@ performed automatically.
    measured recovery time.
 
 Never pipe an unverified archive directly into the production database.
+
+Repository-level immutable releases are enabled. The release workflow creates
+a draft, attaches every image/SBOM/checksum/attestation asset, publishes it, and
+then verifies the API `immutable` flag. Immutability applies to releases created
+after the repository setting was enabled; historical `v0.3.0` remains mutable.
 
 ## macOS network profiles
 
