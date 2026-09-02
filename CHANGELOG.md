@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## 0.3.2 — 2026-09-02
+
+- Gave an active memoir prompt ownership of the next text before task shortcuts
+  or LLM intent routing, including task-like reflections sent as Telegram
+  replies.
+- Accepted the next plain text as a memoir answer without requiring Telegram's
+  explicit Reply action, while preserving unrelated reply threads.
+
 ## 0.3.1 — 2026-09-02
 
 - Removed recognized date, urgency and explicit priority qualifiers from fast-path

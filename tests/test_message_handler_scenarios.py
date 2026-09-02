@@ -348,45 +348,30 @@ async def test_reply_to_other_message_does_not_go_to_chronometry(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_pending_memoir_requires_explicit_reply(monkeypatch):
-    class Queue:
-        async def submit(self, priority, coro):
-            try:
-                await coro
-            except AssertionError:
-                pass
-            return FakeResponse(content="Обычный ответ")
+async def test_pending_memoir_accepts_next_text_without_explicit_reply(monkeypatch):
+    saved = []
 
     async def fake_get_user(session, user_id):
         return SimpleNamespace(timezone="Europe/Moscow", privacy_notice_version=1, cloud_processing_enabled=True)
-
-    async def fake_get_prompt(session, prompt_key):
-        return "prompt {now} {timezone}"
 
     async def memoir_state(user_id, state_type):
         if state_type == "memoir":
             return SimpleNamespace(state_type="memoir", payload={"message_id": 100})
         return None
 
-    async def forbidden_save(*args, **kwargs):
-        raise AssertionError("message without reply must not become memoir")
-
-    async def fake_log(*args, **kwargs):
-        return None
+    async def fake_save(user_id, text, timezone):
+        saved.append((user_id, text, timezone))
 
     monkeypatch.setattr(messages, "async_session", lambda: FakeSessionContext())
     monkeypatch.setattr(messages, "get_user", fake_get_user)
-    monkeypatch.setattr(messages, "get_prompt", fake_get_prompt)
-    monkeypatch.setattr(messages, "llm_queue", Queue())
     monkeypatch.setattr(messages, "_get_persisted_interaction", memoir_state)
-    monkeypatch.setattr(messages, "_save_memoir_answer", forbidden_save)
-    monkeypatch.setattr("bot.db.crud.llm_logs.log_llm_request", fake_log)
-    monkeypatch.setattr(chronometry_scheduler, "is_awaiting_response", lambda _: False)
+    monkeypatch.setattr(messages, "_save_memoir_answer", fake_save)
 
     msg = FakeMessage("Это обычное сообщение", user_id=42)
     await messages.process_text_message(42, msg.text, msg)
 
-    assert msg.answers[-1][0] == "Обычный ответ"
+    assert saved == [(42, "Это обычное сообщение", "Europe/Moscow")]
+    assert "Записано в мемуарник" in msg.answers[-1][0]
 
 
 @pytest.mark.asyncio
@@ -423,6 +408,90 @@ async def test_explicit_reply_to_persisted_memoir_is_saved(monkeypatch):
     # the handler no longer clears it before the durable side effect.
     assert cleared == []
     assert "Записано в мемуарник" in msg.answers[-1][0]
+
+
+@pytest.mark.asyncio
+async def test_task_like_reply_is_owned_by_pending_memoir(monkeypatch):
+    saved = []
+
+    async def fake_get_user(session, user_id):
+        return SimpleNamespace(timezone="Europe/Moscow", privacy_notice_version=1, cloud_processing_enabled=True)
+
+    async def memoir_state(user_id, state_type):
+        if state_type == "memoir":
+            return SimpleNamespace(
+                state_type="memoir",
+                payload={"message_id": 100, "session_token": "memoir-token"},
+            )
+        return None
+
+    async def fake_save(user_id, text, timezone, session_token):
+        saved.append((user_id, text, timezone, session_token))
+
+    async def forbidden_dispatch(*args, **kwargs):
+        raise AssertionError("memoir answer must precede deterministic task routing")
+
+    monkeypatch.setattr(messages, "async_session", lambda: FakeSessionContext())
+    monkeypatch.setattr(messages, "get_user", fake_get_user)
+    monkeypatch.setattr(messages, "_get_persisted_interaction", memoir_state)
+    monkeypatch.setattr(messages, "_save_memoir_answer", fake_save)
+    monkeypatch.setattr(messages, "dispatch", forbidden_dispatch)
+
+    reply = SimpleNamespace(message_id=100)
+    msg = FakeMessage(
+        "Позвонить маме — сделал",
+        user_id=42,
+        reply_to_message=reply,
+    )
+    await messages.process_text_message(42, msg.text, msg)
+
+    assert saved == [
+        (42, "Позвонить маме — сделал", "Europe/Moscow", "memoir-token")
+    ]
+    assert "Записано в мемуарник" in msg.answers[-1][0]
+
+
+@pytest.mark.asyncio
+async def test_pending_memoir_does_not_steal_reply_to_another_message(monkeypatch):
+    class Queue:
+        async def submit(self, priority, coro):
+            try:
+                await coro
+            except AssertionError:
+                pass
+            return FakeResponse(content="Обычный ответ")
+
+    async def fake_get_user(session, user_id):
+        return SimpleNamespace(timezone="Europe/Moscow", privacy_notice_version=1, cloud_processing_enabled=True)
+
+    async def fake_get_prompt(session, prompt_key):
+        return "prompt {now} {timezone}"
+
+    async def memoir_state(user_id, state_type):
+        if state_type == "memoir":
+            return SimpleNamespace(state_type="memoir", payload={"message_id": 100})
+        return None
+
+    async def forbidden_save(*args, **kwargs):
+        raise AssertionError("reply to another message must not become memoir")
+
+    async def fake_log(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(messages, "async_session", lambda: FakeSessionContext())
+    monkeypatch.setattr(messages, "get_user", fake_get_user)
+    monkeypatch.setattr(messages, "get_prompt", fake_get_prompt)
+    monkeypatch.setattr(messages, "llm_queue", Queue())
+    monkeypatch.setattr(messages, "_get_persisted_interaction", memoir_state)
+    monkeypatch.setattr(messages, "_save_memoir_answer", forbidden_save)
+    monkeypatch.setattr("bot.db.crud.llm_logs.log_llm_request", fake_log)
+    monkeypatch.setattr(chronometry_scheduler, "is_awaiting_response", lambda _: False)
+
+    reply = SimpleNamespace(message_id=999)
+    msg = FakeMessage("Это ответ в другой ветке", user_id=42, reply_to_message=reply)
+    await messages.process_text_message(42, msg.text, msg)
+
+    assert msg.answers[-1][0] == "Обычный ответ"
 
 
 @pytest.mark.asyncio

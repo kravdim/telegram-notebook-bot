@@ -539,18 +539,7 @@ async def _route_persisted_replies(
     message: Message,
     user_tz: str,
 ) -> MessageOutcome | None:
-    """Route replies owned by durable memoir or chronometry interactions."""
-    persisted_memoir = await _get_persisted_interaction(user_id, "memoir")
-    if persisted_memoir and _is_reply_to_interaction(message, persisted_memoir):
-        await message_bot(message).send_chat_action(chat_id=message.chat.id, action="typing")
-        session_token = persisted_memoir.payload.get("session_token")
-        if session_token:
-            await _save_memoir_answer(user_id, text, user_tz, session_token)
-        else:
-            await _save_memoir_answer(user_id, text, user_tz)
-        await message.answer("📔 Записано в мемуарник! ✅")
-        return MessageOutcome.COMPLETED
-
+    """Route replies owned by durable chronometry interactions."""
     from bot.scheduler.chronometry import (
         clear_awaiting,
         get_chrono_message_id,
@@ -582,10 +571,34 @@ async def _route_persisted_replies(
     return MessageOutcome.COMPLETED
 
 
-def _is_reply_to_interaction(message: Message, interaction) -> bool:
+async def _route_pending_memoir(
+    user_id: int,
+    text: str,
+    message: Message,
+    user_tz: str,
+) -> MessageOutcome | None:
+    """Consume the next answer owned by an active memoir prompt."""
+    persisted_memoir = await _get_persisted_interaction(user_id, "memoir")
+    if not persisted_memoir or not _is_memoir_answer(message, persisted_memoir):
+        return None
+
+    await message_bot(message).send_chat_action(chat_id=message.chat.id, action="typing")
+    session_token = persisted_memoir.payload.get("session_token")
+    if session_token:
+        await _save_memoir_answer(user_id, text, user_tz, session_token)
+    else:
+        await _save_memoir_answer(user_id, text, user_tz)
+    await message.answer("📔 Записано в мемуарник! ✅")
+    return MessageOutcome.COMPLETED
+
+
+def _is_memoir_answer(message: Message, interaction) -> bool:
+    """Accept the next text, but never steal an explicit reply to another message."""
     expected_message_id = interaction.payload.get("message_id")
+    if not expected_message_id:
+        return False
     reply_to = message.reply_to_message
-    return bool(reply_to and expected_message_id and reply_to.message_id == expected_message_id)
+    return reply_to is None or reply_to.message_id == expected_message_id
 
 
 async def _process_text_message_unlocked(
@@ -618,6 +631,10 @@ async def _process_text_message_unlocked(
             reply_markup=privacy_keyboard(),
         )
         return MessageOutcome.REJECTED
+
+    memoir_outcome = await _route_pending_memoir(user_id, text, message, user_tz)
+    if memoir_outcome is not None:
+        return memoir_outcome
 
     if not llm_client or not llm_queue:
         await message.answer(
