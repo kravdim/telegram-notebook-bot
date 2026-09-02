@@ -4,11 +4,13 @@ DailyPlanner stores task, project, reminder, diary, memoir, time-tracking,
 birthday and interaction data in PostgreSQL. Embeddings are derived from user
 text and are personal data even when they are not directly readable.
 
-Until a written legal/product review of notice, consent and retention is
-complete for the intended market, DailyPlanner is not approved for external
-customer or employee data. Production use is limited to the closed
-owner/internal allowlist described below. Public demonstrations must use
-synthetic data.
+DailyPlanner is a personal, owner-operated project. It is not offered to
+external customers or employees, and production access is limited to the
+owner's closed allowlist. A market-specific legal/product review is therefore
+outside the project's scope. Public demonstrations, if any, must use synthetic
+data. Any future decision to provide the service to other people would be a
+scope change requiring a new privacy and operational review before access is
+granted.
 
 Before any free-text or voice path can call an AI adapter, onboarding presents
 the versioned privacy notice and requires an explicit cloud-processing choice.
@@ -22,8 +24,8 @@ embedding adapter is external.
 Depending on the active profile, external AI recipients can receive task,
 note, diary and conversation text for intent recognition or search, and voice
 audio for transcription. Local Ollama and local Whisper do not send those
-payloads to an external recipient. This product notice is a technical control;
-the operator remains responsible for legal review in the deployment market.
+payloads to an external recipient. This notice remains a technical control for
+the owner's informed choice even though the deployment has no external users.
 
 `/export` creates a complete versioned ZIP in a private temporary directory.
 `manifest.json` records schema version, generation time and exact row counts;
@@ -73,7 +75,7 @@ operator recovery. A process crash or power loss between YAML and PostgreSQL is
 reconciled by repeating the exact same confirmed command: phases `prepared`,
 `access_revoked` and `completed` are idempotent, and an already completed
 operation returns its recorded content-free result.
-Completion is scoped to one operation generation. A later legal re-onboarding
+Completion is scoped to one operation generation. A later access re-onboarding
 of the same Telegram ID is detected from fresh row counts and the current
 access list, and starts a new UUID-bound deletion operation. The command
 returns `already-completed` only after a new zero/access check.

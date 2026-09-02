@@ -15,7 +15,7 @@ Remediation опубликован релизом `v0.3.1`. Tag, release и prod
 | FINAL-004 | Закрыт | Распознанные leading/trailing `сегодня`/`завтра`, `срочно` и explicit priority удаляются из title. Неизвестные qualifier-варианты fail closed. |
 | FINAL-005 | Улучшен | Overall gate поднят с 70% до 71%, `main.py` с 25% до 35%, dispatcher с 50% до 58% и остальные low floors также подняты; новые task use case/background lifecycle имеют floors 90%/75%. |
 | FINAL-006 | Закрыт для новых релизов | Repository immutable releases включены. Workflow публикует draft со всеми assets и после publish требует API `immutable=true`. Исторический `v0.3.0` GitHub не меняет ретроактивно. |
-| FINAL-007 | Scope ограничен | До письменного legal/product sign-off запрещена обработка данных внешних клиентов; разрешён только закрытый owner/internal контур. |
+| FINAL-007 | Закрыт как неприменимый | Владелец подтвердил постоянный personal owner-only scope без внешних клиентов. Production ограничен закрытым allowlist; выход за этот scope потребовал бы отдельной новой проверки. |
 
 ## Проверки до релиза
 
@@ -56,6 +56,5 @@ Remediation опубликован релизом `v0.3.1`. Tag, release и prod
   [`v0.4.0`](https://github.com/kravdim/telegram-notebook-bot/issues/4), затем
   command presentation в
   [`v0.5.0`](https://github.com/kravdim/telegram-notebook-bot/issues/5);
-- получить письменный legal/product sign-off перед внешним клиентским
-  использованием
-  ([issue #7](https://github.com/kravdim/telegram-notebook-bot/issues/7)).
+Legal issue [#7](https://github.com/kravdim/telegram-notebook-bot/issues/7)
+закрыт как неприменимый к подтверждённому personal owner-only scope.
