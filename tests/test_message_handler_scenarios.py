@@ -164,6 +164,30 @@ async def test_followup_task_list_question_bypasses_llm(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_qualified_task_list_question_fails_closed_before_llm(monkeypatch):
+    async def fake_get_user(session, user_id):
+        return SimpleNamespace(
+            timezone="Europe/Moscow",
+            privacy_notice_version=1,
+            cloud_processing_enabled=True,
+        )
+
+    async def forbidden_dispatch(*args, **kwargs):
+        raise AssertionError("Unsupported qualifier must not be discarded")
+
+    monkeypatch.setattr(messages, "async_session", lambda: FakeSessionContext())
+    monkeypatch.setattr(messages, "get_user", fake_get_user)
+    monkeypatch.setattr(messages, "dispatch", forbidden_dispatch)
+
+    msg = FakeMessage("Покажи задачи на завтра", user_id=42)
+    outcome = await messages.process_text_message(42, msg.text, msg)
+
+    assert outcome == messages.MessageOutcome.REJECTED
+    assert "не буду молча его отбрасывать" in msg.answers[-1][0]
+    assert msg.bot.actions == []
+
+
+@pytest.mark.asyncio
 async def test_conversational_done_bypasses_pending_chronometry(monkeypatch):
     calls = []
 

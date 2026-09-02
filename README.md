@@ -62,8 +62,14 @@
 ### Требования
 
 - Python 3.12+
-- PostgreSQL 15+ с расширениями `pgvector`, `pg_trgm`, `pgcrypto`
+- Docker для воспроизводимой dev-БД PostgreSQL с `pgvector`, `pg_trgm`, `pgcrypto`
 - API-ключи: Telegram Bot Token, MiniMax
+
+По умолчанию quick start использует профиль `minimal`: голосовые сообщения и
+семантические embeddings явно отключены, поэтому Ollama, модель Whisper и
+дополнительные cloud-ключи не нужны. Все задачи, напоминания, проекты, заметки,
+дайджесты и обычный текстовый LLM-маршрут работают; голос и vector search
+честно отвечают как ненастроенные возможности.
 
 ### Установка
 
@@ -73,18 +79,18 @@ git clone https://github.com/kravdim/telegram-notebook-bot.git
 cd telegram-notebook-bot
 
 # Воспроизводимое окружение из lockfile
-uv sync --frozen --extra stt
+uv sync --frozen
 source .venv/bin/activate
 
 # Конфигурация
 cp .env.example .env
-cp config.yaml.example config.yaml
+cp config.minimal.yaml.example config.yaml
 # Отредактировать .env — вписать BOT_TOKEN и API-ключи
 # Отредактировать config.yaml — вписать allowed_telegram_ids
 
 # Воспроизводимая dev-БД (роль notebook, БД notebook_bot, порт 55432),
 # миграции и preflight. Нужен Docker.
-scripts/bootstrap_dev.sh
+scripts/bootstrap_dev.sh --profile minimal
 
 # Загрузка базы знаний (тайм-менеджмент советы)
 PYTHONPATH=. python scripts/seed_knowledge.py
@@ -92,6 +98,25 @@ PYTHONPATH=. python scripts/seed_knowledge.py
 # Запуск
 PYTHONPATH=. python -m bot.main
 ```
+
+### Полный локальный профиль macOS
+
+Полный профиль добавляет Ollama `nomic-embed-text` и локальный Whisper
+`medium`. Он требует установленных `ollama`, загруженной embedding-модели,
+нескольких гигабайт RAM и STT extra:
+
+```bash
+cp config.yaml.example config.yaml
+uv sync --frozen --extra stt
+ollama pull nomic-embed-text
+scripts/bootstrap_dev.sh --profile local
+uv run python scripts/prefetch_stt_model.py
+uv run python scripts/preflight.py
+```
+
+`preflight.py` подтверждает структуру config, БД и миграцию; installer ниже
+дополнительно проверяет Telegram `getMe`, прогревает модель и ждёт heartbeat
+конкретного release SHA после переключения.
 
 ### macOS — автозапуск через LaunchAgent
 
@@ -104,6 +129,12 @@ Mac mini процесс использовал около 1,46 ГиБ RSS; cloud
 chmod +x platform/macos/install.sh
 ./platform/macos/install.sh
 ```
+
+Installer собирает immutable release-каталог из текущего commit, выполняет все
+preflight-проверки до остановки работающей версии, затем ждёт bounded readiness.
+При ошибке автоматически возвращается предыдущий release и записывается
+`last-deploy-report.txt`. При первой миграции со старой unversioned-установки
+укажите её commit: `--previous-revision SHA`.
 
 Бот будет автоматически запускаться при загрузке macOS и перезапускаться при сбоях.
 По умолчанию installer создаёт direct-network профиль без proxy. Если хост

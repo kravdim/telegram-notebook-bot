@@ -65,13 +65,13 @@ def validate_runtime_config(  # noqa: C901, PLR0912 - REVIEW-20260829 legacy rat
         errors.append("embedding config must be a mapping")
         embedding = {}
     embed_provider = embedding.get("provider", "ollama")
-    if embed_provider not in {"ollama", "cloud"}:
+    if embed_provider not in {"disabled", "ollama", "cloud"}:
         errors.append(f"unsupported embedding provider: {embed_provider}")
-    if not embedding.get("model"):
+    if embed_provider != "disabled" and not embedding.get("model"):
         errors.append("embedding model is empty")
     if embed_provider == "ollama" and not embedding.get("base_url"):
         errors.append("embedding base_url is empty")
-    if embedding.get("dimensions", 768) != 768:
+    if embed_provider != "disabled" and embedding.get("dimensions", 768) != 768:
         errors.append("embedding dimensions must match Vector(768)")
     if embed_provider == "cloud" and not provider_keys.get("embedding"):
         errors.append("API key is missing for cloud embedding provider")
@@ -81,13 +81,13 @@ def validate_runtime_config(  # noqa: C901, PLR0912 - REVIEW-20260829 legacy rat
         errors.append("stt config must be a mapping")
         stt = {}
     stt_provider = stt.get("provider", "local_whisper")
-    if stt_provider not in {"local_whisper", "groq", "openai"}:
+    if stt_provider not in {"disabled", "local_whisper", "groq", "openai"}:
         errors.append(f"unsupported STT provider: {stt_provider}")
-    if not stt.get("model"):
+    if stt_provider != "disabled" and not stt.get("model"):
         errors.append("STT model is empty")
-    if not _is_positive(stt.get("timeout_sec", 90)):
+    if stt_provider != "disabled" and not _is_positive(stt.get("timeout_sec", 90)):
         errors.append("STT timeout_sec must be positive")
-    if not _is_positive(stt.get("warmup_timeout_sec", 120)):
+    if stt_provider != "disabled" and not _is_positive(stt.get("warmup_timeout_sec", 120)):
         errors.append("STT warmup_timeout_sec must be positive")
     if stt_provider in {"groq", "openai"} and not provider_keys.get(stt_provider):
         errors.append(f"API key is missing for STT provider: {stt_provider}")

@@ -48,6 +48,8 @@ def render_launchagent(
     *,
     http_proxy: str | None = None,
     all_proxy: str | None = None,
+    readiness_file: Path | None = None,
+    release_sha: str | None = None,
 ) -> None:
     """Render one valid plist atomically; direct networking is the default."""
     with template.open("rb") as source:
@@ -62,6 +64,10 @@ def render_launchagent(
         environment["HTTPS_PROXY"] = http_proxy
     if all_proxy:
         environment["ALL_PROXY"] = validate_proxy_url(all_proxy, "all")
+    if readiness_file:
+        environment["READINESS_FILE"] = str(readiness_file.resolve())
+    if release_sha:
+        environment["DAILYPLANNER_RELEASE_SHA"] = release_sha
 
     output.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.NamedTemporaryFile("wb", dir=output.parent, delete=False) as temporary:
@@ -78,6 +84,8 @@ def main() -> None:
     parser.add_argument("--home", type=Path, required=True)
     parser.add_argument("--http-proxy")
     parser.add_argument("--all-proxy")
+    parser.add_argument("--readiness-file", type=Path)
+    parser.add_argument("--release-sha")
     args = parser.parse_args()
     render_launchagent(
         args.template,
@@ -86,6 +94,8 @@ def main() -> None:
         args.home,
         http_proxy=args.http_proxy,
         all_proxy=args.all_proxy,
+        readiness_file=args.readiness_file,
+        release_sha=args.release_sha,
     )
 
 

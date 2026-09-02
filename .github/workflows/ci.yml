@@ -8,9 +8,14 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   developer-bootstrap:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
       - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
@@ -19,6 +24,7 @@ jobs:
 
   quality:
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     services:
       postgres:
         image: pgvector/pgvector:pg16@sha256:ccc6e83d6e35e931dc7c5def2022729d5a6c370318d099181995567ff1fb4d6b
@@ -51,6 +57,10 @@ jobs:
         run: uv run ruff check .
       - name: Validate active documentation links
         run: uv run python scripts/check_documentation.py
+      - name: Validate version and changelog consistency
+        run: uv run python scripts/check_version_consistency.py
+      - name: ShellCheck operational scripts
+        run: shellcheck platform/**/*.sh scripts/*.sh
       - name: Typecheck all production and operational code
         run: uv run mypy --explicit-package-bases bot scripts
       - name: Block medium/high-confidence security findings
@@ -85,9 +95,17 @@ jobs:
       - name: Require a single Alembic head
         run: test "$(uv run alembic heads | wc -l)" -eq 1
       - name: Test with coverage floor
-        run: uv run pytest --cov --cov-report=term-missing
+        run: uv run pytest --cov --cov-report=term-missing --cov-report=xml
+      - name: Upload machine-readable coverage
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: dailyplanner-coverage
+          path: coverage.xml
+          retention-days: 30
       - name: Enforce critical-path coverage
         run: scripts/check_critical_coverage.sh
+      - name: Enforce central-runtime risk coverage ratchets
+        run: scripts/check_risk_coverage.sh
       - run: uv run python scripts/evaluate_llm_contracts.py
       - name: Create and restore a real backup
         run: |
@@ -97,6 +115,7 @@ jobs:
 
   container-e2e:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     env:
       POSTGRES_PASSWORD: container-smoke
       BOT_TOKEN: container-smoke
@@ -150,6 +169,7 @@ jobs:
 
   secrets:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
@@ -157,3 +177,22 @@ jobs:
       - uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7 # v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  canonical-local-gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
+        with:
+          enable-cache: true
+      - name: Run the documented disposable PostgreSQL quality gate
+        env:
+          DAILYPLANNER_SKIP_STT_EXTRA: "1"
+        run: scripts/run_local_test_gate.sh
+      - name: Upload canonical-gate coverage
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: dailyplanner-canonical-gate-coverage
+          path: coverage.xml
+          retention-days: 30

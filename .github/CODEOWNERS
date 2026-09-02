@@ -1,7 +1,14 @@
 # Default owner and explicit review boundaries for sensitive runtime surfaces.
 * @kravdim
 /.github/ @kravdim
-/bot/middleware/ @kravdim
+/bot/middleware.py @kravdim
+/bot/handlers/privacy.py @kravdim
 /bot/privacy.py @kravdim
+/bot/services/user_deletion.py @kravdim
+/bot/services/user_export.py @kravdim
+/bot/db/migrations/ @kravdim
 /platform/ @kravdim
-/scripts/ @kravdim
+/scripts/backup_postgres.sh @kravdim
+/scripts/restore_backup.sh @kravdim
+/scripts/restore_drill.py @kravdim
+/scripts/run_live_e2e_gate.sh @kravdim

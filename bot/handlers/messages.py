@@ -16,7 +16,13 @@ from aiogram.types import Message
 from bot.application.command_bus import CommandResult
 from bot.application.interactions import WorkflowType, interaction_service
 from bot.application.normalizer import intent_normalizer
-from bot.application.task_query_recognizer import extract_task_list_scope
+from bot.application.task_creation_recognizer import extract_task_request as _extract_task_request
+from bot.application.task_creation_recognizer import guess_task_category as _guess_task_category
+from bot.application.task_creation_recognizer import normalize_task_title as _normalize_task_title
+from bot.application.task_query_recognizer import (
+    extract_task_list_scope,
+    recognize_task_list_query,
+)
 from bot.db.crud.users import get_user
 from bot.db.engine import async_session
 from bot.formatters import split_message
@@ -55,19 +61,6 @@ _NON_CHRONO_PATTERNS = [
     re.compile(r"^\s*(?:доброе\s+утро|добрый\s+день|добрый\s+вечер|привет|здравствуй|здравствуйте|салют|хай)[!.,\s]*$", re.IGNORECASE),
     re.compile(r"^\s*(?:спасибо|ок|ладно|понял|поняла|ага|угу|да|нет)[!.,\s]*$", re.IGNORECASE),
 ]
-
-_TASK_REQUEST_PATTERNS = [
-    re.compile(
-        r"^\s*(?:надо|нужно|нужна|нужен|нужны|следует)\s+(?P<body>.+?)\s*[.!]*$",
-        re.IGNORECASE,
-    ),
-    re.compile(
-        r"^\s*(?P<date>сегодня|завтра)\s+(?:надо|нужно)\s+(?P<body>.+?)\s*[.!]*$",
-        re.IGNORECASE,
-    ),
-]
-
-_TASK_LEADING_DATE_RE = re.compile(r"^\s*(?P<date>сегодня|завтра)\s+(?P<body>.+)$", re.IGNORECASE)
 
 _RESCHEDULE_RE = re.compile(
     r"^\s*(?P<title>.+?)\s*[-—–]?\s*(?:это\s+)?(?:на\s+)?(?P<date>сегодня|завтра|послезавтра|понедельник|вторник|среду|среда|четверг|пятницу|пятница|субботу|суббота|воскресенье)\s+(?:же\s+)?(?:перенесли|перенёс|перенес|перенести|перенесено|отложили|отложить)\s*[.!]*$",
@@ -491,6 +484,16 @@ async def _route_deterministic_intents(
         ]
         await _answer_and_remember(user_id, None, message, "\n".join(results))
         return MessageOutcome.COMPLETED
+
+    task_query = recognize_task_list_query(text)
+    if task_query and task_query.needs_clarification:
+        answer = (
+            "В запросе есть дополнительный фильтр — дата, проект, командировка "
+            "или категория. Я не буду молча его отбрасывать. Уточни, пожалуйста, "
+            "нужен список на дату или по какому контексту."
+        )
+        await _answer_and_remember(user_id, text, message, answer)
+        return MessageOutcome.REJECTED
 
     direct_intent = _extract_common_intent(_normalize_common_intent_text(text), user_tz)
     if direct_intent:
@@ -1482,99 +1485,6 @@ def _extract_explicit_delete(text: str) -> str | None:
         return None
     query = match.group("query").strip(" .!?:;«»\"'")
     return query or None
-
-
-def _extract_task_request(text: str, tz: str) -> Optional[dict]:
-    """Детерминированно распознать простую постановку задачи."""
-    stripped = text.strip()
-    if re.search(
-        r"\b(?:утром|дн[её]м|вечером|ночью|полчаса|через\s+час)\b|"
-        r"\b(?:в|к)\s+\d{1,2}(?::\d{2})?\b",
-        stripped,
-        re.IGNORECASE,
-    ):
-        # Быстрый путь не умеет сохранить эту точность; LLM должен построить
-        # due_time/remind_at, иначе пользовательская часть запроса потеряется.
-        return None
-    match = None
-    for pattern in _TASK_REQUEST_PATTERNS:
-        match = pattern.match(stripped)
-        if match:
-            break
-    if not match:
-        return None
-
-    body = match.group("body").strip(" .!?:;")
-    date_word = match.groupdict().get("date")
-    leading_date = _TASK_LEADING_DATE_RE.match(body)
-    if leading_date:
-        date_word = date_word or leading_date.group("date")
-        body = leading_date.group("body").strip(" .!?:;")
-
-    if not body or _looks_like_chronometry_activity(body):
-        return None
-
-    title = _normalize_task_title(body)
-    args = {
-        "title": title,
-        "category": _guess_task_category(title),
-        "priority": "normal",
-    }
-
-    lowered = stripped.lower()
-    if "приоритет средн" in lowered:
-        args["priority"] = "medium"
-    elif "приоритет высок" in lowered or "срочно" in lowered:
-        args["priority"] = "high"
-
-    import pendulum
-    today = pendulum.now(tz).date()
-    if date_word:
-        args["scheduled_date"] = str(today.add(days=1) if date_word.lower() == "завтра" else today)
-    elif "сегодня" in lowered:
-        args["scheduled_date"] = str(today)
-    elif "завтра" in lowered:
-        args["scheduled_date"] = str(today.add(days=1))
-
-    return args
-
-
-def _normalize_task_title(text: str) -> str:
-    """Привести текст после 'надо' к короткому названию задачи."""
-    title = re.sub(r"\s+", " ", text).strip(" «»\"'")
-    replacements = {
-        "купить": "Купить",
-        "настроить": "Настроить",
-        "написать": "Написать",
-        "решить": "Решить",
-        "записаться": "Записаться",
-        "сделать": "Сделать",
-        "разобраться": "Разобраться",
-        "позвонить": "Позвонить",
-        "отправить": "Отправить",
-    }
-    for src, dst in replacements.items():
-        if title.lower().startswith(src + " ") or title.lower() == src:
-            return dst + title[len(src):]
-    return title[:1].upper() + title[1:]
-
-
-def _guess_task_category(title: str) -> str:
-    lowered = title.lower()
-    personal_words = (
-        "смесител", "ауди", "машин", "авто", "врач", "дом", "квартир",
-        "купить", "магазин", "семь", "дет", "личн",
-    )
-    return "personal" if any(word in lowered for word in personal_words) else "work"
-
-
-def _looks_like_chronometry_activity(text: str) -> bool:
-    lowered = text.lower()
-    activity_prefixes = (
-        "обедаю", "еду", "разгружаю", "настраиваю", "занимаюсь", "доделываю",
-        "работаю", "пишу", "разбираюсь", "воюю", "переношу", "собираюсь",
-    )
-    return lowered.startswith(activity_prefixes)
 
 
 def _looks_like_fake_mutation(content: str) -> bool:

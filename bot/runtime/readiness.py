@@ -40,6 +40,7 @@ class RuntimeReadiness:
             "pid": os.getpid(),
             "ready": True,
             "heartbeat_epoch": time.time(),
+            "release_sha": os.environ.get("DAILYPLANNER_RELEASE_SHA", "unknown"),
         }
         temporary.write_text(json.dumps(payload), encoding="utf-8")
         temporary.replace(self.path)
@@ -50,7 +51,11 @@ class RuntimeReadiness:
             self._write()
 
 
-def validate_readiness_file(path: str | Path, max_age_seconds: float) -> dict:
+def validate_readiness_file(
+    path: str | Path,
+    max_age_seconds: float,
+    expected_release_sha: str | None = None,
+) -> dict:
     """Return the heartbeat payload or raise a diagnostic readiness error."""
     payload = json.loads(Path(path).read_text(encoding="utf-8"))
     if payload.get("ready") is not True:
@@ -68,4 +73,9 @@ def validate_readiness_file(path: str | Path, max_age_seconds: float) -> dict:
     age = time.time() - heartbeat
     if age < -5 or age > max_age_seconds:
         raise RuntimeError(f"runtime heartbeat is stale: age={age:.1f}s")
+    if expected_release_sha and payload.get("release_sha") != expected_release_sha:
+        raise RuntimeError(
+            "runtime release mismatch: "
+            f"expected={expected_release_sha} actual={payload.get('release_sha')}"
+        )
     return payload

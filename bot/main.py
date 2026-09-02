@@ -72,6 +72,9 @@ def _init_embedding_client():
     """Инициализация embedding-клиента на основе конфига."""
     yaml_cfg = settings.yaml_config
     provider = yaml_cfg.get("embedding", {}).get("provider", "ollama")
+    if provider == "disabled":
+        logger.info("Embedding отключён выбранным runtime-профилем")
+        return None
 
     try:
         client: EmbeddingClient
@@ -97,6 +100,9 @@ def _init_stt_client():
     """Инициализация STT-клиента на основе конфига."""
     yaml_cfg = settings.yaml_config
     provider = yaml_cfg.get("stt", {}).get("provider", "local_whisper")
+    if provider == "disabled":
+        logger.info("STT отключён выбранным runtime-профилем")
+        return None
 
     try:
         client: STTClient
@@ -399,9 +405,16 @@ async def main() -> None:  # noqa: C901, PLR0915 - REVIEW-20260829 legacy ratche
     conflict_handler = install_telegram_conflict_alert(bot, loop)
 
     try:
+        polling_task = asyncio.create_task(
+            dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types()),
+            name="telegram-polling",
+        )
+        await asyncio.sleep(2)
+        if polling_task.done():
+            await polling_task
         if readiness is not None:
             await readiness.start()
-        await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
+        await polling_task
     finally:
         if readiness is not None:
             await readiness.stop()

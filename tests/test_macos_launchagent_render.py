@@ -50,6 +50,18 @@ def test_explicit_proxy_profile_renders_only_requested_endpoints(tmp_path):
     assert environment["ALL_PROXY"] == "socks5://socks.example:1080"
 
 
+def test_release_profile_contains_readiness_contract(tmp_path):
+    readiness_file = tmp_path / "state/readiness.json"
+    payload = _render(
+        tmp_path,
+        readiness_file=readiness_file,
+        release_sha="abc123",
+    )
+    environment = payload["EnvironmentVariables"]
+    assert environment["READINESS_FILE"] == str(readiness_file.resolve())
+    assert environment["DAILYPLANNER_RELEASE_SHA"] == "abc123"
+
+
 @pytest.mark.parametrize(
     ("value", "kind"),
     [

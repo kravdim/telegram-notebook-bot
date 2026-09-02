@@ -1,0 +1,57 @@
+llm:
+  # Minimal profile: Telegram + one cloud LLM, without Ollama or Whisper.
+  total_timeout_sec: 50
+  main:
+    provider: minimax
+    model: MiniMax-M2.7
+    base_url: https://api.minimax.io/v1
+    timeout_sec: 25
+    max_retries: 2
+
+embedding:
+  provider: disabled
+
+stt:
+  provider: disabled
+
+export:
+  max_bytes: 47185920
+
+bot:
+  admin_telegram_ids: []
+  allowed_telegram_ids: []
+  default_timezone: Europe/Moscow
+
+testing:
+  e2e_user_ids: []
+
+scheduler:
+  healthcheck_interval_min: 5
+  sweep_interval_min: 5
+  backup_hour: 3
+  backup_retention_days: 30
+  llm_log_retention_days: 90
+
+slo:
+  reminder_lag_seconds: 120
+  backup_max_age_hours: 30
+  stt_latency_seconds: 30
+
+chronometry:
+  default_interval_min: 60
+  onboarding_week1_interval: 60
+  onboarding_week2_interval: 30
+  target_interval: 15
+  ignore_threshold: 3
+
+search:
+  semantic_weight: 0.6
+  text_weight: 0.4
+  top_k: 5
+
+context:
+  max_tokens: 3000
+  keep_recent_pairs: 5
+
+privacy:
+  store_llm_payloads: false

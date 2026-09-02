@@ -27,7 +27,11 @@ command -v uv >/dev/null 2>&1 || {
     echo "uv is required for the local test gate" >&2
     exit 1
 }
-uv sync --frozen --group dev --extra stt
+if [ "${DAILYPLANNER_SKIP_STT_EXTRA:-0}" = "1" ]; then
+    uv sync --frozen --group dev
+else
+    uv sync --frozen --group dev --extra stt
+fi
 DAILYPLANNER_DEV_DB_PORT="$QUALITY_PORT" "${compose[@]}" up -d --wait
 
 export DATABASE_URL="postgresql+asyncpg://notebook:password@127.0.0.1:${QUALITY_PORT}/notebook_bot"
@@ -40,5 +44,6 @@ export PYTHONPATH="."
 
 uv run alembic upgrade head
 uv run alembic check
-uv run pytest --cov --cov-report=term-missing
+uv run pytest --cov --cov-report=term-missing --cov-report=xml
 scripts/check_critical_coverage.sh
+scripts/check_risk_coverage.sh

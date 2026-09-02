@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+## 0.3.0 — 2026-09-02
+
+- Made task-list recognition fail closed when a date, project, trip, category,
+  priority or person qualifier cannot be represented by the supported scope.
+- Added versioned staged macOS deployment with credential/config/database/model
+  prechecks, release-identity readiness, an exclusive deploy lock, reports and
+  automatic rollback to the previous release.
+- Added minimal and full-local runtime profiles, application-layer recognizer
+  boundaries and strict typing across `bot.application`.
+- Unified the documented local PostgreSQL gate with CI and added job timeouts,
+  PR concurrency, ShellCheck, coverage artifacts and version consistency.
+- Expanded CODEOWNERS over real security/deployment surfaces and made tag builds
+  publish durable GitHub Releases with image, SBOM, checksums and provenance.
 - Made the macOS proxy profile explicit and validated, with direct networking
   as the portable default and secret-free LaunchAgent rendering tests.
 - Added reproducible Docker-backed developer bootstrap and local PostgreSQL

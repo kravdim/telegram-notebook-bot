@@ -75,8 +75,9 @@ RUN_STT_RESOURCE_TESTS=1 STT_RESOURCE_AUDIO=/absolute/path/to/fixture.ogg \
 ## Release checklist
 
 1. Start from a clean checkout and run `uv sync --frozen --dev --extra stt`.
-2. Run `uv run ruff check ...`, `uv run mypy ...`, `uv run pytest` and
-   `uv run alembic heads`; CI is the canonical command list.
+2. Run `scripts/run_local_test_gate.sh`; CI invokes this same disposable
+   PostgreSQL lifecycle in `canonical-local-gate`, in addition to focused
+   quality/security/container jobs.
 3. Create a pre-release backup and verify its `.sha256` sidecar.
 4. Run `uv run python scripts/restore_drill.py --backup BACKUP.sql.gz` with
    `OPERATOR_DATABASE_URL` supplied by the platform credential wrapper. It
@@ -84,7 +85,13 @@ RUN_STT_RESOURCE_TESTS=1 STT_RESOURCE_AUDIO=/absolute/path/to/fixture.ogg \
    it afterwards; it cannot select the production database as its restore target.
    When drilling a backup made before the release migration, pass the database's
    recorded revision as `--expected-revision REVISION`.
-5. For the official macOS target run its installer/preflight. For Docker run
+5. For the official macOS target run its staged installer. It refuses dirty
+   tracked files, creates a versioned release, validates config/DB/migrations,
+   Telegram credentials, STT warmup and candidate plist before switch, then
+   requires a fresh heartbeat carrying the exact release SHA. On failure it
+   restores the previous plist/revision and records the result under
+   `~/Library/Application Support/notebook-bot/state/last-deploy-report.txt`.
+   For Docker run
    the same two-file Compose E2E used by the `container-e2e` CI job. It must
    reach healthy from an empty PostgreSQL volume before a VPS release.
    Standalone systemd installation is not a supported target.
@@ -129,6 +136,11 @@ Never test this command against a production user; the PostgreSQL integration
 suite creates and deletes a disposable account in a disposable database.
 
 ## Rollback
+
+The macOS installer performs this code rollback automatically on load or
+bounded-readiness failure. Migrations must therefore remain expand/contract
+compatible with the previous release. A destructive schema rollback is never
+performed automatically.
 
 1. Stop the new process. Keep the pre-release backup and checksum immutable.
 2. If the migration is backward compatible, deploy the previous Git revision and

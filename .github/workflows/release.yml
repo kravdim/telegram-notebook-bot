@@ -5,15 +5,21 @@ on:
     tags: ["v*"]
 
 permissions:
-  contents: read
+  contents: write
   id-token: write
   attestations: write
 
 jobs:
   evidence:
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
+      - name: Validate tag, package version and changelog
+        run: uv run python scripts/check_version_consistency.py
       - name: Build release image
         run: docker build -f platform/linux/Dockerfile -t "dailyplanner:${GITHUB_REF_NAME}" .
       - name: Save release image
@@ -33,12 +39,18 @@ jobs:
           exit-code: "1"
           ignore-unfixed: true
           severity: CRITICAL,HIGH
-      - name: Create checksums
-        run: sha256sum dailyplanner-image.tar dailyplanner.sbom.cdx.json > SHA256SUMS
       - name: Attest image archive provenance
+        id: provenance
         uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3
         with:
           subject-path: dailyplanner-image.tar
+      - name: Create checksums
+        run: >-
+          sha256sum
+          dailyplanner-image.tar
+          dailyplanner.sbom.cdx.json
+          "${{ steps.provenance.outputs.bundle-path }}"
+          > SHA256SUMS
       - name: Upload immutable release evidence
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
@@ -46,5 +58,18 @@ jobs:
           path: |
             dailyplanner-image.tar
             dailyplanner.sbom.cdx.json
+            ${{ steps.provenance.outputs.bundle-path }}
             SHA256SUMS
           retention-days: 90
+      - name: Publish durable GitHub Release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          gh release create "$GITHUB_REF_NAME"
+          dailyplanner-image.tar
+          dailyplanner.sbom.cdx.json
+          "${{ steps.provenance.outputs.bundle-path }}"
+          SHA256SUMS
+          --verify-tag
+          --generate-notes
+          --title "DailyPlanner $GITHUB_REF_NAME"

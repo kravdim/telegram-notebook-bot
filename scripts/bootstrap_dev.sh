@@ -7,16 +7,29 @@ COMPOSE_FILE="$PROJECT_DIR/platform/dev/docker-compose.yml"
 DEV_PORT="${DAILYPLANNER_DEV_DB_PORT:-55432}"
 SMOKE_ONLY=0
 CREATED_CONFIG=0
+PROFILE="minimal"
 
 usage() {
-    echo "Usage: $0 [--smoke]"
+    echo "Usage: $0 [--smoke] [--profile minimal|local]"
 }
 
-if [ "${1:-}" = "--smoke" ]; then
-    SMOKE_ONLY=1
-    shift
-fi
-if [ "$#" -ne 0 ]; then
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --smoke)
+            SMOKE_ONLY=1
+            shift
+            ;;
+        --profile)
+            PROFILE="${2:-}"
+            shift 2
+            ;;
+        *)
+            usage >&2
+            exit 2
+            ;;
+    esac
+done
+if [ "$PROFILE" != "minimal" ] && [ "$PROFILE" != "local" ]; then
     usage >&2
     exit 2
 fi
@@ -47,12 +60,20 @@ trap cleanup EXIT
 
 cd "$PROJECT_DIR"
 if [ ! -f config.yaml ]; then
-    cp config.yaml.example config.yaml
+    if [ "$PROFILE" = "minimal" ]; then
+        cp config.minimal.yaml.example config.yaml
+    else
+        cp config.yaml.example config.yaml
+    fi
     if [ "$SMOKE_ONLY" -eq 1 ]; then
         CREATED_CONFIG=1
     fi
 fi
-uv sync --frozen --group dev --extra stt
+if [ "$SMOKE_ONLY" -eq 1 ] || [ "$PROFILE" = "minimal" ]; then
+    uv sync --frozen --group dev
+else
+    uv sync --frozen --group dev --extra stt
+fi
 DAILYPLANNER_DEV_DB_PORT="$DEV_PORT" "${compose[@]}" up -d --wait
 
 runtime_env=(
@@ -69,5 +90,6 @@ if [ "$SMOKE_ONLY" -eq 1 ]; then
     echo "developer bootstrap smoke ok"
 else
     echo "Developer PostgreSQL is ready on 127.0.0.1:${DEV_PORT}."
+    echo "Runtime profile: $PROFILE."
     echo "Stop it with: docker compose -p dailyplanner-dev -f platform/dev/docker-compose.yml down"
 fi

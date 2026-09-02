@@ -42,6 +42,14 @@ def test_runtime_validation_accepts_complete_config():
     assert validate_runtime_config(_valid_config(), {"minimax": "key"}) == []
 
 
+def test_runtime_validation_accepts_explicit_minimal_profile():
+    config = _valid_config()
+    config["embedding"] = {"provider": "disabled"}
+    config["stt"] = {"provider": "disabled"}
+
+    assert validate_runtime_config(config, {"minimax": "key"}) == []
+
+
 def test_runtime_validation_reports_all_unsafe_provider_settings():
     config = _valid_config()
     config["llm"]["fallback"] = {

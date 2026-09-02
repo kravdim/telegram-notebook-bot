@@ -63,7 +63,10 @@ handlers ──► IntentNormalizer / typed intents ◄── LLM adapter
 9. The inbound message adapter executes explicit phases: deterministic task
    shortcuts, durable interaction workflows, provider-independent recognizers,
    LLM request/mutation guard, metadata logging and Telegram presentation.
-   `application/task_query_recognizer.py` has no Telegram or provider objects.
+   `application/task_query_recognizer.py` and
+   `application/task_creation_recognizer.py` have no Telegram, persistence or
+   provider objects. An AST boundary test enforces this rule, and strict mypy
+   settings cover the complete `bot.application` package.
 
 New functions are capped by Ruff at complexity 15, 20 branches, 12 returns and
 80 statements. Eleven pre-existing hotspots carry an inline
@@ -78,7 +81,10 @@ Telegram objects. Handlers should remain thin adapters around that function.
 
 The macOS LaunchAgent is the primary production target and may use local Ollama
 and Whisper. The Docker target is cloud-only and has no host model dependency.
-Both targets run the same migrations and preflight. Docker additionally exposes
+Both targets run the same migrations and preflight. The macOS installer stages
+immutable Git revisions and publishes a release-identified heartbeat only after
+singleton acquisition and Telegram polling have remained alive; a bounded
+failure restores the previous plist and revision. Docker additionally exposes
 an out-of-process readiness contract backed by an atomic event-loop heartbeat;
 the probe combines that liveness evidence with config, PostgreSQL and Alembic
 head checks. Its hermetic CI E2E exercises image, entrypoint, extensions, schema
