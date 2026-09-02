@@ -1,7 +1,8 @@
 # Remediation финальной перепроверки 2 сентября 2026
 
-Статус документа будет дополнен release SHA и production evidence после
-публикации `v0.3.1`. Исходное независимое ревью сохранено без изменений в
+Remediation опубликован релизом `v0.3.1`. Tag, release и production указывают
+на `61d2dd457c067dbe36863845286a30359035f5db`; GitHub API подтверждает
+`immutable=true`. Исходное независимое ревью сохранено без изменений в
 [`REVIEW_2026-09-02_FINAL_VERIFICATION.md`](REVIEW_2026-09-02_FINAL_VERIFICATION.md).
 
 ## Результат по замечаниям
@@ -26,6 +27,25 @@
   ratchet: PASS;
 - complexity debt: 16 нарушений в 9 allowlisted функциях; новые и расширенные
   exceptions запрещены.
+
+## Release и production evidence
+
+- PR [#8](https://github.com/kravdim/telegram-notebook-bot/pull/8) прошёл все
+  пять required checks и был влит rebase-merge;
+- post-merge CI run `33653912307` и release workflow run `33660146451`: PASS;
+- immutable [GitHub Release
+  v0.3.1](https://github.com/kravdim/telegram-notebook-bot/releases/tag/v0.3.1)
+  содержит image tar, CycloneDX SBOM, checksums и attestation;
+- pre-deploy backup проверен; recovery drill восстановил 20 таблиц до migration
+  `a6c9d1e4f7b2` за 0,54 s;
+- staged production deploy завершён с `status=deployed`, `phase=complete`,
+  previous release сохранён, rollback не потребовался;
+- production heartbeat подтверждает SHA `61d2dd4`, process работает без
+  restart/exit, reminders и backup SLO имеют статус `ok`;
+- первый live E2E попал в ожидаемый fail-close conflict с плановым
+  memoir/chronometry interaction; повторный изолированный run
+  `DP-20260902T181030-4a57c7` завершился `85/85 PASS`, state oracle `12/12`,
+  cleanup residual `{}`.
 
 ## Оставшийся backlog
 
