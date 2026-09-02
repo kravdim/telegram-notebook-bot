@@ -24,6 +24,10 @@ def test_deploy_uses_versioned_release_and_bounded_readiness():
     script = _script()
     assert 'RELEASE_ROOT=' in script
     assert 'git archive "$revision"' in script
+    move_source = script.index('mv "$staging_dir" "$release_dir"')
+    create_venv = script.index('uv sync --project "$release_dir"')
+    mark_ready = script.index('touch "$ready_marker"')
+    assert move_source < create_venv < mark_ready
     assert '--expected-release "$CANDIDATE_SHA"' not in script
     assert 'wait_for_release "$CANDIDATE_DIR" "$CANDIDATE_SHA"' in script
     assert 'READINESS_TIMEOUT=90' in script

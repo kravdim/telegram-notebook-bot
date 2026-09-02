@@ -86,17 +86,30 @@ fi
 prepare_release() {
     local revision="$1"
     local release_dir="$RELEASE_ROOT/$revision"
-    if [ -x "$release_dir/.venv/bin/python" ]; then
+    local ready_marker="$release_dir/.dailyplanner-release-ready"
+    local failed_dir=""
+    if [ -f "$ready_marker" ] && [ -x "$release_dir/.venv/bin/python" ]; then
         echo "$release_dir"
         return
+    fi
+    if [ -e "$release_dir" ]; then
+        failed_dir="$RELEASE_ROOT/.incomplete-$revision-$(date +%s)"
+        mv "$release_dir" "$failed_dir"
+        echo "Moved incomplete release to: $failed_dir" >&2
     fi
     local staging_dir
     staging_dir="$(mktemp -d "$RELEASE_ROOT/.staging-$revision.XXXXXX")"
     git archive "$revision" | tar -x -C "$staging_dir"
     [ -f "$SOURCE_DIR/.env" ] && ln -s "$SOURCE_DIR/.env" "$staging_dir/.env"
     [ -f "$SOURCE_DIR/config.yaml" ] && ln -s "$SOURCE_DIR/config.yaml" "$staging_dir/config.yaml"
-    uv sync --project "$staging_dir" --frozen --no-dev --extra stt >&2
     mv "$staging_dir" "$release_dir"
+    if ! uv sync --project "$release_dir" --frozen --no-dev --extra stt >&2; then
+        failed_dir="$RELEASE_ROOT/.failed-deps-$revision-$(date +%s)"
+        mv "$release_dir" "$failed_dir"
+        echo "Release dependency preparation failed; preserved at: $failed_dir" >&2
+        return 1
+    fi
+    touch "$ready_marker"
     echo "$release_dir"
 }
 
