@@ -32,25 +32,10 @@ from bot.llm.context import clear_all as clear_context
 from bot.llm.queue import LLMQueue
 from bot.logging_safety import error_type
 from bot.middleware import PrivateChatMiddleware, RateLimitMiddleware, WhitelistMiddleware
-from bot.observability import (
-    alert_slo_violations,
-    evaluate_slos,
-    install_telegram_conflict_alert,
-    observe_job,
-)
+from bot.observability import install_telegram_conflict_alert
+from bot.runtime.background import start_background_tasks, stop_background_tasks
 from bot.runtime.readiness import RuntimeReadiness
 from bot.runtime.singleton import SingletonLease
-from bot.scheduler.backup import run_backup_if_due
-from bot.scheduler.chronometry import send_chronometry_prompts
-from bot.scheduler.digest import send_digests
-from bot.scheduler.healthcheck import check_llm_health
-from bot.scheduler.log_rotation import rotate_llm_logs
-from bot.scheduler.memoir import send_memoir_prompts
-from bot.scheduler.reindex import reindex_missing_embeddings
-from bot.scheduler.reminders import send_pending_reminders
-from bot.scheduler.sweep import sweep_missed_reminders
-from bot.scheduler.task_reminders import send_task_reminders
-from bot.scheduler.weekly_review import send_weekly_review
 from bot.stt.base import STTClient
 
 logging.basicConfig(
@@ -149,7 +134,7 @@ async def _cleanup_runtime_resources(
             )
 
 
-async def main() -> None:  # noqa: C901, PLR0915 - REVIEW-20260829 legacy ratchet
+async def main() -> None:
     """Запуск бота."""
     if _tmux_runtime_disallowed():
         logger.error(
@@ -249,131 +234,7 @@ async def main() -> None:  # noqa: C901, PLR0915 - REVIEW-20260829 legacy ratche
         await _cleanup_runtime_resources(singleton, bot, llm_queue, stt_client)
         raise
 
-    # --- Фоновые задачи ---
-
-    async def _reminders_loop():
-        """Основной контур: отправка напоминаний каждые 30 секунд."""
-        while True:
-            await asyncio.sleep(30)
-            try:
-                async with observe_job("reminders"):
-                    await send_pending_reminders(bot)
-            except Exception as e:
-                logger.error("Reminders loop error: error_type=%s", error_type(e))
-
-    async def _sweep_loop():
-        """Двойной контур: sweep пропущенных каждые 5 минут."""
-        while True:
-            await asyncio.sleep(300)
-            try:
-                async with observe_job("reminder_sweep"):
-                    await sweep_missed_reminders(bot)
-            except Exception as e:
-                logger.error("Sweep loop error: error_type=%s", error_type(e))
-
-    async def _health_loop():
-        """Health check main LLM каждые 5 минут."""
-        while True:
-            await asyncio.sleep(300)
-            try:
-                async with observe_job("health"):
-                    await check_llm_health(llm_client)
-                    slo_result = await evaluate_slos()
-                    await alert_slo_violations(bot, slo_result)
-            except Exception as e:
-                logger.error("Health check error: error_type=%s", error_type(e))
-
-    async def _digest_loop():
-        """Проверка и отправка дайджестов каждую минуту."""
-        while True:
-            await asyncio.sleep(60)
-            try:
-                async with observe_job("digest"):
-                    await send_digests(bot)
-            except Exception as e:
-                logger.error("Digest loop error: error_type=%s", error_type(e))
-
-    async def _memoir_loop():
-        """Проверка и отправка вопросов мемуарника каждую минуту."""
-        while True:
-            await asyncio.sleep(60)
-            try:
-                async with observe_job("memoir"):
-                    await send_memoir_prompts(bot)
-            except Exception as e:
-                logger.error("Memoir loop error: error_type=%s", error_type(e))
-
-    async def _chronometry_loop():
-        """Хронометраж: проверка каждую минуту."""
-        while True:
-            await asyncio.sleep(60)
-            try:
-                async with observe_job("chronometry"):
-                    await send_chronometry_prompts(bot)
-            except Exception as e:
-                logger.error("Chronometry loop error: error_type=%s", error_type(e))
-
-    async def _task_reminders_loop():
-        """Напоминание актуальных задач каждые 2 часа в рабочее время."""
-        while True:
-            await asyncio.sleep(60)
-            try:
-                async with observe_job("task_reminders"):
-                    await send_task_reminders(bot)
-            except Exception as e:
-                logger.error("Task reminders loop error: error_type=%s", error_type(e))
-
-    async def _weekly_review_loop():
-        """Еженедельный обзор: проверка каждую минуту (отправка в вс 21:00)."""
-        while True:
-            await asyncio.sleep(60)
-            try:
-                async with observe_job("weekly_review"):
-                    await send_weekly_review(bot)
-            except Exception as e:
-                logger.error("Weekly review loop error: error_type=%s", error_type(e))
-
-    async def _maintenance_loop():
-        """Обслуживание: бэкап, ротация логов, реиндекс — раз в час."""
-        while True:
-            try:
-                async with observe_job("maintenance"):
-                    await reindex_missing_embeddings()
-                    await rotate_llm_logs()
-                    await run_backup_if_due()
-            except Exception as e:
-                logger.error("Maintenance loop error: error_type=%s", error_type(e))
-            await asyncio.sleep(3600)
-
-    background_tasks = [
-        asyncio.create_task(loop_fn(), name=loop_fn.__name__)
-        for loop_fn in (
-            _reminders_loop, _sweep_loop, _health_loop, _digest_loop,
-            _memoir_loop, _chronometry_loop, _task_reminders_loop,
-            _weekly_review_loop, _maintenance_loop,
-        )
-    ]
-    if stt_client is not None:
-        async def _warmup_stt() -> None:
-            timeout_sec = int(
-                settings.yaml_config.get("stt", {}).get("warmup_timeout_sec", 120)
-            )
-            try:
-                ready = await asyncio.wait_for(
-                    stt_client.health_check(), timeout=timeout_sec
-                )
-                if ready:
-                    logger.info("STT-модель прогрета и готова")
-                else:
-                    logger.warning("STT-модель не прошла прогрев")
-            except asyncio.TimeoutError:
-                logger.warning("Прогрев STT превысил %s сек", timeout_sec)
-            except Exception as exc:
-                logger.warning("STT warmup failed: error_type=%s", error_type(exc))
-
-        background_tasks.append(
-            asyncio.create_task(_warmup_stt(), name="_warmup_stt")
-        )
+    background_tasks = start_background_tasks(bot, llm_client, stt_client)
 
     # Transport privacy is the outer fail-closed boundary for every handler.
     dp.message.middleware(PrivateChatMiddleware())
@@ -419,9 +280,7 @@ async def main() -> None:  # noqa: C901, PLR0915 - REVIEW-20260829 legacy ratche
         if readiness is not None:
             await readiness.stop()
         logging.getLogger("aiogram.dispatcher").removeHandler(conflict_handler)
-        for task in background_tasks:
-            task.cancel()
-        await asyncio.gather(*background_tasks, return_exceptions=True)
+        await stop_background_tasks(background_tasks)
         await _cleanup_runtime_resources(singleton, bot, llm_queue, stt_client)
         logger.info("Бот остановлен.")
 

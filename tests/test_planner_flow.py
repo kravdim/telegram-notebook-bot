@@ -60,6 +60,47 @@ def test_extract_task_request_common_forms():
     assert today_task["scheduled_date"]
 
 
+def test_extract_task_request_removes_recognized_qualifiers_from_title():
+    tomorrow = _extract_task_request("Надо купить молоко завтра", "Europe/Moscow")
+    assert tomorrow is not None
+    assert tomorrow["title"] == "Купить молоко"
+    assert tomorrow["scheduled_date"]
+
+    high = _extract_task_request(
+        "Надо отправить отчёт, приоритет высокий", "Europe/Moscow"
+    )
+    assert high == {
+        "title": "Отправить отчёт",
+        "category": "work",
+        "priority": "high",
+    }
+
+
+def test_extract_task_request_handles_leading_and_trailing_qualifier_matrix():
+    cases = (
+        ("Надо завтра купить молоко", "Купить молоко", "normal", True),
+        ("Завтра надо купить молоко", "Купить молоко", "normal", True),
+        ("Надо срочно отправить отчёт", "Отправить отчёт", "high", False),
+        ("Надо отправить отчёт срочно", "Отправить отчёт", "high", False),
+        ("Надо приоритет средний отправить отчёт", "Отправить отчёт", "medium", False),
+        ("Надо отправить отчёт, приоритет обычный", "Отправить отчёт", "normal", False),
+        ("Надо срочно отправить отчёт завтра", "Отправить отчёт", "high", True),
+    )
+    for text, title, priority, has_date in cases:
+        result = _extract_task_request(text, "Europe/Moscow")
+        assert result is not None
+        assert result["title"] == title
+        assert result["priority"] == priority
+        assert ("scheduled_date" in result) is has_date
+
+
+def test_extract_task_request_fails_closed_for_unknown_qualifiers():
+    assert _extract_task_request(
+        "Надо отправить отчёт, приоритет максимальный", "Europe/Moscow"
+    ) is None
+    assert _extract_task_request("Надо купить молоко послезавтра", "Europe/Moscow") is None
+
+
 def test_extract_task_request_ignores_activity():
     assert _extract_task_request("Настраиваю компьютер на Силикатном", "Europe/Moscow") is None
 

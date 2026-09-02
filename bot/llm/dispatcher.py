@@ -5,8 +5,7 @@ import json
 import logging
 import re
 from datetime import date, datetime, time
-from typing import Any, Awaitable, Callable, Dict, Optional, Tuple, TypedDict
-from uuid import UUID
+from typing import Any, Awaitable, Callable, Dict, Optional, Tuple
 
 import pendulum
 from json_repair import repair_json
@@ -14,6 +13,7 @@ from pydantic import ValidationError
 
 from bot.application.command_bus import CommandBus, CommandContext, CommandResult
 from bot.application.intents import ApplicationIntent, intent_from_parts
+from bot.application.task_creation import CreateTaskDependencies, execute_create_task
 from bot.db.crud.diary import create_diary_entry
 from bot.db.crud.notes import create_note
 from bot.db.crud.projects import (
@@ -36,6 +36,7 @@ from bot.db.crud.tasks import (
     get_user_tasks,
     normalize_task_identity,
     search_tasks,
+    set_frog,
     task_title_similarity,
 )
 from bot.db.crud.tasks import (
@@ -54,17 +55,6 @@ _OPAQUE_TASK_MARKER_RE = re.compile(
     r"\b(?:DP-\d{8}T\d{6}-[a-f0-9]{6}-[\w-]+|[А-ЯЁA-Z]\d{1,4}-[\w-]+)",
     re.IGNORECASE,
 )
-
-
-class _DuplicateTask(TypedDict):
-    id: UUID
-    title: str
-    scheduled_date: date | None
-    due_date: date | None
-    due_time: time | None
-    is_frog: bool
-    priority: str
-    repeat_rule: str | None
 
 
 def _select_confident_task(query: str, tasks: list) -> Any | None:
@@ -335,188 +325,31 @@ def _parse_datetime(dt_str: Optional[str], tz: str) -> Optional[datetime]:
         return None
 
 
-async def _handle_create_task(  # noqa: C901, PLR0912, PLR0915 - REVIEW-20260829 legacy ratchet
+async def _handle_create_task(
     user_id: int, args: Dict[str, Any], tz: str
 ) -> str:
-    title = _sanitize_title(args.get("title", ""))
-    err = _validate_title(title)
-    if err:
-        return err
-
-    scheduled_date = _parse_date(args.get("scheduled_date"), tz)
-    due_date = _parse_date(args.get("due_date"), tz)
-    due_time = _parse_time(args.get("due_time"))
-    remind_at = _parse_datetime(args.get("remind_at"), tz)
-
-    if args.get("scheduled_date") and scheduled_date is None:
-        return "Не удалось распознать дату планирования. Уточни дату."
-    if args.get("due_date") and due_date is None:
-        return "Не удалось распознать дедлайн. Уточни дату."
-    if args.get("due_time") and due_time is None:
-        return "Не удалось распознать время. Укажи его в формате ЧЧ:ММ."
-    if args.get("remind_at") and remind_at is None:
-        return "Не удалось распознать время напоминания. Уточни дату и время."
-
-    if scheduled_date and scheduled_date < pendulum.now(tz).date():
-        return "Дата планирования в прошлом. Уточни дату."
-    if due_date and due_date < pendulum.now(tz).date():
-        return "Дата дедлайна в прошлом. Уточни дату."
-
-    category = args.get("category", "work")
-    if category not in ("work", "personal"):
-        category = "work"
-
-    priority = args.get("priority", "normal")
-    if priority not in ("high", "medium", "normal"):
-        priority = "normal"
-
-    is_frog = args.get("is_frog", False)
-    current_trip_id = None
-    async with async_session() as session:
-        current_trip = await get_active_trip(
-            session, user_id, pendulum.now(tz).date()
-        )
-        if current_trip:
-            current_trip_id = current_trip.id
-
-    # Защита от дубликатов: если есть открытая задача с таким же названием — обновляем её
-    dup_info: _DuplicateTask | None = None
-    async with async_session() as session:
-        existing = await search_tasks(session, user_id, title, status="open")
-        for t in existing:
-            if normalize_task_identity(t.title) == normalize_task_identity(title):
-                dup_info = {
-                    "id": t.id, "title": t.title,
-                    "scheduled_date": t.scheduled_date, "due_date": t.due_date,
-                    "due_time": t.due_time, "is_frog": t.is_frog, "priority": t.priority,
-                    "repeat_rule": t.repeat_rule,
-                }
-                break
-
-    if dup_info:
-        # Обновляем существующую задачу вместо создания дубликата
-        updates: dict[str, Any] = {}
-        if scheduled_date and scheduled_date != dup_info["scheduled_date"]:
-            updates["scheduled_date"] = scheduled_date
-        if due_date and due_date != dup_info["due_date"]:
-            updates["due_date"] = due_date
-        if due_time and due_time != dup_info["due_time"]:
-            updates["due_time"] = due_time
-        if remind_at:
-            updates["remind_at"] = remind_at
-        if is_frog and not dup_info["is_frog"]:
-            updates["is_frog"] = is_frog
-        if priority != "normal" and priority != dup_info["priority"]:
-            updates["priority"] = priority
-        if args.get("repeat_rule") and args.get("repeat_rule") != dup_info["repeat_rule"]:
-            if not is_valid_repeat_rule(args["repeat_rule"]):
-                return "Не удалось распознать правило повторения. Уточни периодичность."
-            updates["repeat_rule"] = args["repeat_rule"]
-
-        if updates or remind_at:
-            frog_changed = False
-            async with async_session() as session:
-                from bot.db.crud.tasks import update_task as crud_update
-                if updates.pop("is_frog", False):
-                    from bot.db.crud.tasks import set_frog
-                    await set_frog(session, dup_info["id"], user_id, commit=False)
-                    frog_changed = True
-                if updates:
-                    await crud_update(
-                        session, dup_info["id"], user_id, commit=False, **updates
-                    )
-                if remind_at:
-                    await upsert_task_reminder(
-                        session,
-                        user_id,
-                        dup_info["id"],
-                        dup_info["title"],
-                        remind_at,
-                        None,
-                        commit=False,
-                    )
-                await session.commit()
-            changes = []
-            if "scheduled_date" in updates and scheduled_date is not None:
-                changes.append(f"📅 {scheduled_date.strftime('%d.%m.%Y')}")
-            if "due_date" in updates and due_date is not None:
-                changes.append(f"⏳ до {due_date.strftime('%d.%m.%Y')}")
-            if "due_time" in updates and due_time is not None:
-                changes.append(f"⏰ {due_time.strftime('%H:%M')}")
-            if remind_at:
-                changes.append(f"🔔 {remind_at.strftime('%d.%m %H:%M')}")
-            if frog_changed:
-                changes.append("🐸 лягушка")
-            return f"Задача «{dup_info['title']}» уже есть — обновил: {' '.join(changes)} ✅"
-        else:
-            return f"Задача «{dup_info['title']}» уже существует ✅"
-
-    repeat_rule = args.get("repeat_rule")
-    if not is_valid_repeat_rule(repeat_rule):
-        return "Не удалось распознать правило повторения. Уточни периодичность."
-    if repeat_rule and not scheduled_date and not due_date:
-        scheduled_date = pendulum.now(tz).date()
-
-    async with async_session() as session:
-        # Task и связанное напоминание фиксируются одной транзакцией. Scheduler
-        # читает таблицу reminders, поэтому одного Task.remind_at недостаточно.
-        if is_frog:
-            current_frog = await get_frog(session, user_id)
-            if current_frog:
-                current_frog.is_frog = False
-        task = await create_task(
-            session,
-            user_id=user_id,
-            title=title,
-            category=category,
-            priority=priority,
-            is_frog=is_frog,
-            scheduled_date=scheduled_date,
-            due_date=due_date,
-            due_time=due_time,
-            remind_at=remind_at,
-            remind_before_min=args.get("remind_before_min"),
-            repeat_rule=repeat_rule,
-            trip_id=current_trip_id,
-            commit=False,
-        )
-        if remind_at:
-            await create_reminder(
-                session,
-                user_id,
-                message=title,
-                remind_at=remind_at,
-                repeat_rule=None,
-                task_id=task.id,
-                commit=False,
-            )
-        await session.commit()
-        await session.refresh(task)
-
-        # Проверяем, повторяющаяся ли это задача
-        similar_count, last_at = await count_similar_completed(session, user_id, title)
-
-    parts = [f"Задача создана: {task.title}"]
-    if scheduled_date:
-        parts.append(f"📅 {scheduled_date.strftime('%d.%m.%Y')}")
-    if due_date:
-        parts.append(f"⏳ до {due_date.strftime('%d.%m.%Y')}")
-    if due_time:
-        parts.append(f"⏰ {due_time.strftime('%H:%M')}")
-    if remind_at:
-        parts.append(f"🔔 Напомню: {remind_at.strftime('%d.%m %H:%M')}")
-    if is_frog:
-        parts.append("🐸 Лягушка!")
-    if repeat_rule:
-        parts.append(f"🔄 {_format_repeat_rule(repeat_rule)}")
-
-    result = " ".join(parts) + " ✅"
-
-    # Комментарий для повторяющихся задач
-    if similar_count >= 2:
-        result += "\n" + _recurring_create_comment(title, similar_count, last_at, tz)
-
-    return result
+    dependencies = CreateTaskDependencies(
+        session_factory=async_session,
+        get_active_trip=get_active_trip,
+        search_tasks=search_tasks,
+        normalize_identity=normalize_task_identity,
+        valid_repeat_rule=is_valid_repeat_rule,
+        update_task=crud_update_task,
+        set_frog=set_frog,
+        upsert_task_reminder=upsert_task_reminder,
+        get_frog=get_frog,
+        create_task=create_task,
+        create_reminder=create_reminder,
+        count_similar_completed=count_similar_completed,
+        sanitize_title=_sanitize_title,
+        validate_title=_validate_title,
+        parse_date=_parse_date,
+        parse_time=_parse_time,
+        parse_datetime=_parse_datetime,
+        format_repeat_rule=_format_repeat_rule,
+        recurring_comment=_recurring_create_comment,
+    )
+    return await execute_create_task(user_id, args, tz, dependencies)
 
 
 async def _handle_complete_task(user_id: int, args: Dict[str, Any], tz: str) -> str:

@@ -1,6 +1,6 @@
 #!/bin/bash
 # Staged macOS deployment with versioned releases and automatic rollback.
-set -euo pipefail
+set -Eeuo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 SOURCE_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
@@ -63,7 +63,24 @@ if ! mkdir "$DEPLOY_LOCK" 2>/dev/null; then
 fi
 CANDIDATE_PLIST=""
 ROLLBACK_PLIST=""
+REPORT_WRITTEN=0
+DEPLOY_PHASE="initialization"
+
+write_report() {
+    local status="$1" reason="$2" active="${3:-${PREVIOUS_SHA:-none}}"
+    local report_tmp="$DEPLOY_REPORT.tmp.$$"
+    printf 'status=%s\ncandidate=%s\nprevious=%s\nactive=%s\nphase=%s\nreason=%s\n' \
+        "$status" "${CANDIDATE_SHA:-unknown}" "${PREVIOUS_SHA:-none}" "$active" \
+        "$DEPLOY_PHASE" "$reason" > "$report_tmp"
+    mv "$report_tmp" "$DEPLOY_REPORT"
+    REPORT_WRITTEN=1
+}
+
 cleanup() {
+    local exit_code=$?
+    if [ "$exit_code" -ne 0 ] && [ "$REPORT_WRITTEN" -eq 0 ]; then
+        write_report "failed" "unexpected failure (exit $exit_code)" || true
+    fi
     [ -z "$CANDIDATE_PLIST" ] || rm -f -- "$CANDIDATE_PLIST"
     [ -z "$ROLLBACK_PLIST" ] || rm -f -- "$ROLLBACK_PLIST"
     rmdir "$DEPLOY_LOCK" 2>/dev/null || true
@@ -123,7 +140,7 @@ read_installed_release() {
 }
 
 wait_for_release() {
-    local release_dir="$1" expected_sha="$2" timeout="$3" waited=0
+    local expected_sha="$1" timeout="$2" waited=0
     local readiness_args=(--file "$READINESS_FILE" --max-age-seconds 15)
     if [ -n "$expected_sha" ]; then
         readiness_args+=(--expected-release "$expected_sha")
@@ -132,8 +149,8 @@ wait_for_release() {
         if env "PYTHONPATH=$CANDIDATE_DIR" "$CANDIDATE_DIR/.venv/bin/python" \
             "$CANDIDATE_DIR/scripts/check_runtime_readiness.py" \
             "${readiness_args[@]}" >/dev/null 2>&1 && \
-           env "PYTHONPATH=$release_dir" "$release_dir/.venv/bin/python" \
-            "$release_dir/scripts/preflight.py" >/dev/null 2>&1; then
+           env "PYTHONPATH=$CANDIDATE_DIR" "$CANDIDATE_DIR/.venv/bin/python" \
+            "$CANDIDATE_DIR/scripts/preflight.py" >/dev/null 2>&1; then
             return 0
         fi
         sleep 2
@@ -153,77 +170,125 @@ echo "=== Staged DailyPlanner deploy ==="
 echo "candidate: $CANDIDATE_SHA"
 echo "previous: ${PREVIOUS_SHA:-none}"
 
-CANDIDATE_DIR="$(prepare_release "$CANDIDATE_SHA")"
+DEPLOY_PHASE="prepare_candidate"
+if ! CANDIDATE_DIR="$(prepare_release "$CANDIDATE_SHA")"; then
+    write_report "pre_switch_failed" "candidate preparation failed"
+    exit 1
+fi
 runtime_env[0]="PYTHONPATH=$CANDIDATE_DIR"
 runtime_env+=("DAILYPLANNER_STT_CACHE=$HOME/Library/Caches/notebook-bot/huggingface")
 
-echo "Running candidate config/database/migration preflight..."
-env "${runtime_env[@]}" "$CANDIDATE_DIR/.venv/bin/alembic" upgrade head
-env "${runtime_env[@]}" "$CANDIDATE_DIR/.venv/bin/python" "$CANDIDATE_DIR/scripts/preflight.py"
+echo "Running candidate config/database preflight..."
+DEPLOY_PHASE="database_preflight"
+if ! env "${runtime_env[@]}" "$CANDIDATE_DIR/.venv/bin/python" \
+    "$CANDIDATE_DIR/scripts/preflight.py" --allow-pending-migration; then
+    write_report "pre_switch_failed" "database preflight failed"
+    exit 1
+fi
 echo "Checking Telegram credentials with getMe..."
-env "${runtime_env[@]}" "$CANDIDATE_DIR/.venv/bin/python" \
-    "$CANDIDATE_DIR/scripts/check_telegram_credentials.py"
+DEPLOY_PHASE="telegram_credentials"
+if ! env "${runtime_env[@]}" "$CANDIDATE_DIR/.venv/bin/python" \
+    "$CANDIDATE_DIR/scripts/check_telegram_credentials.py"; then
+    write_report "pre_switch_failed" "Telegram credential check failed"
+    exit 1
+fi
 echo "Warming the configured STT model..."
-env "${runtime_env[@]}" "$CANDIDATE_DIR/.venv/bin/python" \
-    "$CANDIDATE_DIR/scripts/prefetch_stt_model.py"
+DEPLOY_PHASE="stt_warmup"
+if ! env "${runtime_env[@]}" "$CANDIDATE_DIR/.venv/bin/python" \
+    "$CANDIDATE_DIR/scripts/prefetch_stt_model.py"; then
+    write_report "pre_switch_failed" "STT warmup failed"
+    exit 1
+fi
 
-"$CANDIDATE_DIR/.venv/bin/python" "$CANDIDATE_DIR/platform/macos/render_launchagent.py" \
+DEPLOY_PHASE="render_candidate"
+if ! "$CANDIDATE_DIR/.venv/bin/python" "$CANDIDATE_DIR/platform/macos/render_launchagent.py" \
     --template "$CANDIDATE_DIR/platform/macos/com.notebook-bot.plist" \
     --output "$CANDIDATE_PLIST" --project "$CANDIDATE_DIR" --home "$HOME" \
     --readiness-file "$READINESS_FILE" --release-sha "$CANDIDATE_SHA" \
-    "${proxy_args[@]}"
-plutil -lint "$CANDIDATE_PLIST"
+    ${proxy_args[@]+"${proxy_args[@]}"}; then
+    write_report "pre_switch_failed" "candidate LaunchAgent render failed"
+    exit 1
+fi
+if ! plutil -lint "$CANDIDATE_PLIST"; then
+    write_report "pre_switch_failed" "candidate LaunchAgent validation failed"
+    exit 1
+fi
 
 PREVIOUS_DIR=""
 PREVIOUS_EXPECTED_SHA=""
 if [ -n "$PREVIOUS_SHA" ]; then
-    PREVIOUS_DIR="$(prepare_release "$PREVIOUS_SHA")"
+    DEPLOY_PHASE="prepare_rollback"
+    if ! PREVIOUS_DIR="$(prepare_release "$PREVIOUS_SHA")"; then
+        write_report "pre_switch_failed" "rollback release preparation failed"
+        exit 1
+    fi
     if grep -q 'release_sha' "$PREVIOUS_DIR/bot/runtime/readiness.py"; then
         PREVIOUS_EXPECTED_SHA="$PREVIOUS_SHA"
     fi
-    "$CANDIDATE_DIR/.venv/bin/python" "$CANDIDATE_DIR/platform/macos/render_launchagent.py" \
+    if ! "$CANDIDATE_DIR/.venv/bin/python" "$CANDIDATE_DIR/platform/macos/render_launchagent.py" \
         --template "$CANDIDATE_DIR/platform/macos/com.notebook-bot.plist" \
         --output "$ROLLBACK_PLIST" --project "$PREVIOUS_DIR" --home "$HOME" \
         --readiness-file "$READINESS_FILE" --release-sha "$PREVIOUS_SHA" \
-        "${proxy_args[@]}"
-    plutil -lint "$ROLLBACK_PLIST"
+        ${proxy_args[@]+"${proxy_args[@]}"}; then
+        write_report "pre_switch_failed" "rollback LaunchAgent render failed"
+        exit 1
+    fi
+    if ! plutil -lint "$ROLLBACK_PLIST"; then
+        write_report "pre_switch_failed" "rollback LaunchAgent validation failed"
+        exit 1
+    fi
+fi
+
+echo "Applying backward-compatible candidate migrations..."
+DEPLOY_PHASE="migration"
+if ! env "${runtime_env[@]}" "$CANDIDATE_DIR/.venv/bin/alembic" upgrade head; then
+    write_report "pre_switch_failed" "migration failed"
+    exit 1
+fi
+if ! env "${runtime_env[@]}" "$CANDIDATE_DIR/.venv/bin/python" \
+    "$CANDIDATE_DIR/scripts/preflight.py"; then
+    write_report "pre_switch_failed" "post-migration preflight failed"
+    exit 1
 fi
 
 rollback() {
     local reason="$1"
+    DEPLOY_PHASE="rollback"
     echo "Candidate readiness failed: $reason" >&2
     launchctl unload "$PLIST_DST" 2>/dev/null || true
     rm -f -- "$READINESS_FILE"
     if [ -n "$PREVIOUS_SHA" ]; then
-        cp "$ROLLBACK_PLIST" "$PLIST_DST"
-        launchctl load "$PLIST_DST"
-        if wait_for_release "$PREVIOUS_DIR" "$PREVIOUS_EXPECTED_SHA" "$READINESS_TIMEOUT"; then
-            printf 'status=rolled_back\ncandidate=%s\nactive=%s\nreason=%s\n' \
-                "$CANDIDATE_SHA" "$PREVIOUS_SHA" "$reason" > "$DEPLOY_REPORT"
+        if ! cp "$ROLLBACK_PLIST" "$PLIST_DST"; then
+            write_report "rollback_failed" "$reason; previous LaunchAgent install failed" "none"
+            echo "CRITICAL: rollback LaunchAgent install failed" >&2
+        elif ! launchctl load "$PLIST_DST"; then
+            write_report "rollback_failed" "$reason; previous LaunchAgent load failed" "none"
+            echo "CRITICAL: rollback LaunchAgent load failed" >&2
+        elif wait_for_release "$PREVIOUS_EXPECTED_SHA" "$READINESS_TIMEOUT"; then
+            write_report "rolled_back" "$reason" "$PREVIOUS_SHA"
             echo "$PREVIOUS_SHA" > "$CURRENT_RELEASE_FILE"
             echo "Rollback succeeded: $PREVIOUS_SHA" >&2
         else
-            printf 'status=rollback_failed\ncandidate=%s\nprevious=%s\nreason=%s\n' \
-                "$CANDIDATE_SHA" "$PREVIOUS_SHA" "$reason" > "$DEPLOY_REPORT"
+            write_report "rollback_failed" "$reason; previous release readiness failed" "unknown"
             echo "CRITICAL: rollback readiness failed" >&2
         fi
     else
-        printf 'status=failed_no_previous\ncandidate=%s\nreason=%s\n' \
-            "$CANDIDATE_SHA" "$reason" > "$DEPLOY_REPORT"
+        write_report "failed_no_previous" "$reason" "none"
     fi
     exit 1
 }
 
 echo "Switching LaunchAgent to candidate..."
+DEPLOY_PHASE="candidate_switch"
 launchctl unload "$PLIST_DST" 2>/dev/null || true
 rm -f -- "$READINESS_FILE"
-cp "$CANDIDATE_PLIST" "$PLIST_DST"
+cp "$CANDIDATE_PLIST" "$PLIST_DST" || rollback "candidate LaunchAgent install failed"
 launchctl load "$PLIST_DST" || rollback "launchctl load failed"
-wait_for_release "$CANDIDATE_DIR" "$CANDIDATE_SHA" "$READINESS_TIMEOUT" || \
+wait_for_release "$CANDIDATE_SHA" "$READINESS_TIMEOUT" || \
     rollback "bounded readiness timeout"
 
 echo "$CANDIDATE_SHA" > "$CURRENT_RELEASE_FILE"
-printf 'status=deployed\ncandidate=%s\nprevious=%s\nrollback=not_required\n' \
-    "$CANDIDATE_SHA" "${PREVIOUS_SHA:-none}" > "$DEPLOY_REPORT"
+DEPLOY_PHASE="complete"
+write_report "deployed" "none" "$CANDIDATE_SHA"
 echo "Deploy succeeded: $CANDIDATE_SHA"
 echo "Report: $DEPLOY_REPORT"

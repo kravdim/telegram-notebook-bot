@@ -64,12 +64,16 @@ jobs:
       - name: Publish durable GitHub Release assets
         env:
           GH_TOKEN: ${{ github.token }}
-        run: >-
-          gh release create "$GITHUB_REF_NAME"
-          dailyplanner-image.tar
-          dailyplanner.sbom.cdx.json
-          "${{ steps.provenance.outputs.bundle-path }}"
-          SHA256SUMS
-          --verify-tag
-          --generate-notes
-          --title "DailyPlanner $GITHUB_REF_NAME"
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            dailyplanner-image.tar \
+            dailyplanner.sbom.cdx.json \
+            "${{ steps.provenance.outputs.bundle-path }}" \
+            SHA256SUMS \
+            --draft \
+            --verify-tag \
+            --generate-notes \
+            --title "DailyPlanner $GITHUB_REF_NAME"
+          gh release edit "$GITHUB_REF_NAME" --draft=false
+          test "$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$GITHUB_REF_NAME" \
+            --jq .immutable)" = true

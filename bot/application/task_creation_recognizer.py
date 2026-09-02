@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
 
 import pendulum
 
@@ -16,20 +17,51 @@ _TASK_REQUEST_PATTERNS = (
         re.IGNORECASE,
     ),
 )
-_TASK_LEADING_DATE_RE = re.compile(
-    r"^\s*(?P<date>сегодня|завтра)\s+(?P<body>.+)$", re.IGNORECASE
-)
 _PRECISION_RE = re.compile(
     r"\b(?:утром|дн[её]м|вечером|ночью|полчаса|через\s+час)\b|"
     r"\b(?:в|к)\s+\d{1,2}(?::\d{2})?\b",
     re.IGNORECASE,
 )
+_UNSUPPORTED_DATE_RE = re.compile(
+    r"\b(?:послезавтра|понедельник|вторник|среду|среда|четверг|пятницу|пятница|"
+    r"субботу|суббота|воскресенье)\b|\b\d{1,2}[./-]\d{1,2}(?:[./-]\d{2,4})?\b",
+    re.IGNORECASE,
+)
+_QUALIFIER_PATTERNS = (
+    (re.compile(r"^\s*(?P<value>сегодня|завтра)\b[\s,;:—–-]*", re.IGNORECASE), "date"),
+    (re.compile(r"[\s,;:—–-]+(?P<value>сегодня|завтра)\s*$", re.IGNORECASE), "date"),
+    (
+        re.compile(
+            r"^\s*приоритет\s+(?P<value>высок(?:ий|ого)|средн(?:ий|его)|обычный)"
+            r"\b[\s,;:—–-]*",
+            re.IGNORECASE,
+        ),
+        "priority",
+    ),
+    (
+        re.compile(
+            r"[\s,;:—–-]+приоритет\s+(?P<value>высок(?:ий|ого)|средн(?:ий|его)|обычный)"
+            r"\s*$",
+            re.IGNORECASE,
+        ),
+        "priority",
+    ),
+    (re.compile(r"^\s*(?P<value>срочно)\b[\s,;:—–-]*", re.IGNORECASE), "urgency"),
+    (re.compile(r"[\s,;:—–-]+(?P<value>срочно)\s*$", re.IGNORECASE), "urgency"),
+)
+
+
+@dataclass(frozen=True)
+class _TaskQualifiers:
+    body: str
+    date_word: str | None = None
+    priority: str = "normal"
 
 
 def extract_task_request(text: str, timezone: str) -> dict[str, object] | None:
     """Recognize only fields this parser can preserve without guessing."""
     stripped = text.strip()
-    if _PRECISION_RE.search(stripped):
+    if _PRECISION_RE.search(stripped) or _UNSUPPORTED_DATE_RE.search(stripped):
         return None
 
     match = next((pattern.match(stripped) for pattern in _TASK_REQUEST_PATTERNS if pattern.match(stripped)), None)
@@ -37,11 +69,11 @@ def extract_task_request(text: str, timezone: str) -> dict[str, object] | None:
         return None
 
     body = match.group("body").strip(" .!?:;")
-    date_word = match.groupdict().get("date")
-    leading_date = _TASK_LEADING_DATE_RE.match(body)
-    if leading_date:
-        date_word = date_word or leading_date.group("date")
-        body = leading_date.group("body").strip(" .!?:;")
+    qualifiers = _extract_qualifiers(body, match.groupdict().get("date"))
+    if qualifiers is None:
+        return None
+    body = qualifiers.body
+    date_word = qualifiers.date_word
     if not body or looks_like_chronometry_activity(body):
         return None
 
@@ -49,24 +81,45 @@ def extract_task_request(text: str, timezone: str) -> dict[str, object] | None:
     arguments: dict[str, object] = {
         "title": title,
         "category": guess_task_category(title),
-        "priority": "normal",
+        "priority": qualifiers.priority,
     }
-    lowered = stripped.lower()
-    if "приоритет средн" in lowered:
-        arguments["priority"] = "medium"
-    elif "приоритет высок" in lowered or "срочно" in lowered:
-        arguments["priority"] = "high"
 
     today = pendulum.now(timezone).date()
     if date_word:
         arguments["scheduled_date"] = str(
             today.add(days=1) if date_word.lower() == "завтра" else today
         )
-    elif "сегодня" in lowered:
-        arguments["scheduled_date"] = str(today)
-    elif "завтра" in lowered:
-        arguments["scheduled_date"] = str(today.add(days=1))
     return arguments
+
+
+def _extract_qualifiers(body: str, initial_date: str | None) -> _TaskQualifiers | None:
+    """Remove only exact, boundary-positioned qualifiers understood by this parser."""
+    remaining = body
+    date_word = initial_date
+    priority = "normal"
+    changed = True
+    while changed:
+        changed = False
+        for pattern, kind in _QUALIFIER_PATTERNS:
+            match = pattern.search(remaining)
+            if match is None:
+                continue
+            value = match.group("value").casefold()
+            remaining = (remaining[: match.start()] + remaining[match.end() :]).strip(" .!?:;,—–-")
+            if kind == "date":
+                date_word = date_word or value
+            elif kind == "urgency" or value.startswith("высок"):
+                priority = "high"
+            elif value.startswith("средн"):
+                priority = "medium"
+            changed = True
+            break
+
+    # A qualifier-looking fragment that was not consumed is intentionally left
+    # to the full intent path instead of being guessed or silently truncated.
+    if re.search(r"\bприоритет\b", remaining, re.IGNORECASE):
+        return None
+    return _TaskQualifiers(body=remaining, date_word=date_word, priority=priority)
 
 
 def normalize_task_title(text: str) -> str:

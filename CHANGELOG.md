@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+## 0.3.1 — 2026-09-02
+
+- Removed recognized date, urgency and explicit priority qualifiers from fast-path
+  task titles while failing closed for unsupported qualifier variants.
+- Replaced static rollback assertions with an executable eleven-case failure
+  matrix and made every staged-deploy failure publish an atomic phase report.
+- Moved Telegram/STT checks ahead of expand/contract migrations and hardened
+  previous-LaunchAgent load and readiness failures during rollback.
+- Extracted owned background-job lifecycle from the composition root, removed
+  its complexity suppression and added a CI-enforced exception allowlist.
+- Raised overall and startup coverage ratchets after adding behavioral tests.
+
 ## 0.3.0 — 2026-09-02
 
 - Made task-list recognition fail closed when a date, project, trip, category,
