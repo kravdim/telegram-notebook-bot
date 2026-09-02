@@ -18,10 +18,21 @@ def _parse_args() -> argparse.Namespace:
         action="store_true",
         help="accept a deployed revision that is an ancestor of the candidate head",
     )
+    parser.add_argument(
+        "--compatible-database-head",
+        help=(
+            "accept this exact newer database head during an explicitly "
+            "declared backward-compatible code rollback"
+        ),
+    )
     return parser.parse_args()
 
 
-async def main(*, allow_pending_migration: bool = False) -> None:
+async def main(
+    *,
+    allow_pending_migration: bool = False,
+    compatible_database_head: str | None = None,
+) -> None:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
     from bot.config import BASE_DIR, settings
     from bot.db.engine import engine
@@ -41,15 +52,31 @@ async def main(*, allow_pending_migration: bool = False) -> None:
     await engine.dispose()
 
     migration_matches = current == expected
+    migration_is_declared_compatible = bool(
+        compatible_database_head and current == compatible_database_head
+    )
     migration_can_upgrade = False
     if allow_pending_migration and not migration_matches:
         known_revisions = {revision.revision for revision in migrations.walk_revisions()}
         migration_can_upgrade = current in known_revisions
-    if not expected or not (migration_matches or migration_can_upgrade):
+    if not expected or not (
+        migration_matches or migration_can_upgrade or migration_is_declared_compatible
+    ):
         raise SystemExit(f"Migration mismatch: database={current!r}, code={expected!r}")
-    state = "pending-compatible" if not migration_matches else "current"
+    if migration_matches:
+        state = "current"
+    elif migration_can_upgrade:
+        state = "pending-compatible"
+    else:
+        state = "newer-compatible"
     print(f"preflight ok: database reachable, migration={current}, state={state}")
 
 
 if __name__ == "__main__":
-    asyncio.run(main(allow_pending_migration=_parse_args().allow_pending_migration))
+    args = _parse_args()
+    asyncio.run(
+        main(
+            allow_pending_migration=args.allow_pending_migration,
+            compatible_database_head=args.compatible_database_head,
+        )
+    )

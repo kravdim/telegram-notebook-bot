@@ -593,12 +593,12 @@ async def _route_pending_memoir(
 
 
 def _is_memoir_answer(message: Message, interaction) -> bool:
-    """Accept the next text, but never steal an explicit reply to another message."""
+    """Accept only an explicit Telegram reply to the persisted memoir prompt."""
     expected_message_id = interaction.payload.get("message_id")
     if not expected_message_id:
         return False
     reply_to = message.reply_to_message
-    return reply_to is None or reply_to.message_id == expected_message_id
+    return reply_to is not None and reply_to.message_id == expected_message_id
 
 
 async def _process_text_message_unlocked(

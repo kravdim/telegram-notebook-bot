@@ -23,8 +23,14 @@ _PRECISION_RE = re.compile(
     re.IGNORECASE,
 )
 _UNSUPPORTED_DATE_RE = re.compile(
-    r"\b(?:послезавтра|понедельник|вторник|среду|среда|четверг|пятницу|пятница|"
-    r"субботу|суббота|воскресенье)\b|\b\d{1,2}[./-]\d{1,2}(?:[./-]\d{2,4})?\b",
+    r"\b(?:послезавтра|понедельник|понедельника|вторник|вторника|среду|среда|"
+    r"четверг|четверга|пятницу|пятница|субботу|суббота|воскресенье|воскресенья)\b|"
+    r"\b\d{1,2}[./-]\d{1,2}(?:[./-]\d{2,4})?\b|"
+    r"\b\d{1,2}\s+(?:январ[яь]|феврал[яь]|марта?|апрел[яь]|ма[яй]|июн[яь]|"
+    r"июл[яь]|августа?|сентябр[яь]|октябр[яь]|ноябр[яь]|декабр[яь])\b|"
+    r"\bчерез\s+(?:\d+|од(?:ин|ну)|дв[ае]|три|четыре|пять|шесть|семь|восемь|"
+    r"девять|десять)\s+(?:минут\w*|час\w*|дн\w*|день|дня|недел\w*|месяц\w*)\b|"
+    r"\b(?:на|в)\s+(?:следующ\w+|эт\w+)\s+(?:недел\w+|месяц\w+)\b",
     re.IGNORECASE,
 )
 _QUALIFIER_PATTERNS = (
@@ -96,7 +102,7 @@ def _extract_qualifiers(body: str, initial_date: str | None) -> _TaskQualifiers 
     """Remove only exact, boundary-positioned qualifiers understood by this parser."""
     remaining = body
     date_word = initial_date
-    priority = "normal"
+    priority: str | None = None
     changed = True
     while changed:
         changed = False
@@ -107,11 +113,18 @@ def _extract_qualifiers(body: str, initial_date: str | None) -> _TaskQualifiers 
             value = match.group("value").casefold()
             remaining = (remaining[: match.start()] + remaining[match.end() :]).strip(" .!?:;,—–-")
             if kind == "date":
-                date_word = date_word or value
-            elif kind == "urgency" or value.startswith("высок"):
-                priority = "high"
-            elif value.startswith("средн"):
-                priority = "medium"
+                if date_word is not None and date_word.casefold() != value:
+                    return None
+                date_word = value
+            else:
+                parsed_priority = "normal"
+                if kind == "urgency" or value.startswith("высок"):
+                    parsed_priority = "high"
+                elif value.startswith("средн"):
+                    parsed_priority = "medium"
+                if priority is not None and priority != parsed_priority:
+                    return None
+                priority = parsed_priority
             changed = True
             break
 
@@ -119,7 +132,11 @@ def _extract_qualifiers(body: str, initial_date: str | None) -> _TaskQualifiers 
     # to the full intent path instead of being guessed or silently truncated.
     if re.search(r"\bприоритет\b", remaining, re.IGNORECASE):
         return None
-    return _TaskQualifiers(body=remaining, date_word=date_word, priority=priority)
+    return _TaskQualifiers(
+        body=remaining,
+        date_word=date_word,
+        priority=priority or "normal",
+    )
 
 
 def normalize_task_title(text: str) -> str:

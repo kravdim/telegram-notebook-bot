@@ -5,6 +5,7 @@ import importlib
 import sys
 from datetime import date, datetime, timezone
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -362,6 +363,47 @@ def test_chronometry_and_digest_cover_populated_weekend_and_birthday_branches():
     assert "&lt;trip&gt;" in message and "&lt;Аня&gt; (26 лет)" in message
     assert "личное &lt;дело&gt;" in message and "work" in message
     assert "Лягушка дня" not in message and "Слоны:" not in message
+
+
+@pytest.mark.asyncio
+async def test_preflight_accepts_only_explicit_compatible_newer_head(monkeypatch, capsys):
+    preflight = importlib.import_module("scripts.preflight")
+    import bot.db.engine as db_engine
+    from bot.config import settings
+
+    class Result:
+        def scalar_one_or_none(self):
+            return "new-head"
+
+    class Connection:
+        async def execute(self, statement):
+            return Result()
+
+    class Connect:
+        async def __aenter__(self):
+            return Connection()
+
+        async def __aexit__(self, *args):
+            return None
+
+    fake_engine = SimpleNamespace(connect=lambda: Connect(), dispose=AsyncMock())
+    monkeypatch.setattr(db_engine, "engine", fake_engine)
+    monkeypatch.setattr(type(settings), "runtime_config_errors", lambda self: [])
+    monkeypatch.setattr(preflight, "Config", lambda *_: object())
+    monkeypatch.setattr(
+        preflight.ScriptDirectory,
+        "from_config",
+        lambda *_: SimpleNamespace(
+            get_current_head=lambda: "old-head",
+            walk_revisions=lambda: (),
+        ),
+    )
+
+    with pytest.raises(SystemExit, match="Migration mismatch"):
+        await preflight.main()
+    await preflight.main(compatible_database_head="new-head")
+
+    assert "state=newer-compatible" in capsys.readouterr().out
 
 
 @pytest.mark.asyncio

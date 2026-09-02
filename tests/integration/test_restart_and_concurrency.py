@@ -758,6 +758,83 @@ async def test_interaction_token_rejects_stale_clear_and_transition():
             current, user_id, "voice_confirm", "session-b"
         ) is True
 
+
+@pytest.mark.asyncio
+async def test_memoir_reply_is_restart_safe_ttl_bound_and_single_consumer():
+    user_id = 8_570_000_000 + int(uuid.uuid4().hex[:6], 16)
+    token = f"memoir-{uuid.uuid4().hex}"
+    today = pendulum.now("Europe/Moscow").date()
+    text_value = f"memoir-concurrency-{uuid.uuid4().hex}"
+
+    async with async_session() as setup:
+        setup.add(User(telegram_id=user_id, username="memoir-restart-test"))
+        await setup.commit()
+        claimed = await claim_state(
+            setup,
+            user_id,
+            "memoir",
+            {"message_id": 12345, "session_token": token},
+            ttl_minutes=60,
+        )
+        assert claimed is not None
+
+    # A fresh session models a process restart: prompt ownership remains durable.
+    async with async_session() as restarted:
+        state = await get_state(restarted, user_id)
+        assert state is not None
+        assert state.payload["message_id"] == 12345
+
+    results = await asyncio.gather(
+        message_handler._save_memoir_answer(
+            user_id, text_value, "Europe/Moscow", token
+        ),
+        message_handler._save_memoir_answer(
+            user_id, text_value, "Europe/Moscow", token
+        ),
+        return_exceptions=True,
+    )
+    assert sum(result is None for result in results) == 1
+    failures = [result for result in results if isinstance(result, BaseException)]
+    assert len(failures) == 1, results
+
+    async with async_session() as verify:
+        memoir_rows = list(
+            (
+                await verify.execute(
+                    select(MemoirEntry).where(
+                        MemoirEntry.user_id == user_id,
+                        MemoirEntry.event_date == today,
+                    )
+                )
+            ).scalars()
+        )
+        diary_rows = list(
+            (
+                await verify.execute(
+                    select(DiaryEntry).where(
+                        DiaryEntry.user_id == user_id,
+                        DiaryEntry.content == text_value,
+                    )
+                )
+            ).scalars()
+        )
+        assert len(memoir_rows) == len(diary_rows) == 1
+        assert await get_state(verify, user_id) is None
+
+        expired = await set_state(
+            verify,
+            user_id,
+            "memoir",
+            {"message_id": 54321, "session_token": "expired"},
+        )
+        expired.expires_at = pendulum.now("UTC").subtract(minutes=1)
+        await verify.commit()
+
+    async with async_session() as after_ttl:
+        assert await get_state(after_ttl, user_id) is None
+        await after_ttl.execute(delete(User).where(User.telegram_id == user_id))
+        await after_ttl.commit()
+
     async with async_session() as cleanup:
         await cleanup.execute(delete(User).where(User.telegram_id == user_id))
         await cleanup.commit()

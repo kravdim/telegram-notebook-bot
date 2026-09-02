@@ -99,8 +99,10 @@ RUN_STT_RESOURCE_TESTS=1 STT_RESOURCE_AUDIO=/absolute/path/to/fixture.ogg \
    instance exit before Telegram polling or scheduler startup.
 7. Check logs, `/status`, current Alembic revision and one non-mutating Telegram
    command. Confirm the next reminder sweep and backup marker.
-8. Run `scripts/run_live_e2e_gate.sh`; release only when every live case passes
-   and teardown reports success.
+8. Run `scripts/run_live_e2e_gate.sh` only after deployment. The wrapper refuses
+   to start unless repository `HEAD` exactly matches the production release
+   marker, rechecks that SHA after the run, and records start/finish timestamps.
+   Release acceptance requires every live case and teardown oracle to pass.
 
 ## LaunchAgent log maintenance
 
@@ -138,9 +140,15 @@ suite creates and deletes a disposable account in a disposable database.
 ## Rollback
 
 The macOS installer performs this code rollback automatically on load or
-bounded-readiness failure. Migrations must therefore remain expand/contract
-compatible with the previous release. A destructive schema rollback is never
-performed automatically.
+bounded-readiness failure. The restored release is checked with its own Python,
+readiness script and preflight. When candidate and previous Alembic heads differ,
+the candidate head must be listed in
+`bot/db/migrations/rollback_compatible_heads.txt`; the previous preflight then
+accepts only that exact newer head. Additive expand/contract migrations may be
+listed only after verifying that the immediately previous release can still
+read and write the schema. An unlisted or destructive migration is rejected
+before the process switch and requires a documented maintenance/restore plan.
+A destructive schema rollback is never performed automatically.
 
 Every attempt that reaches the deployment state directory atomically writes
 `last-deploy-report.txt`, including pre-switch failures and failures while
