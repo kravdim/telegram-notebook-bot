@@ -101,6 +101,27 @@ def test_extract_task_request_fails_closed_for_unknown_qualifiers():
     assert _extract_task_request("Надо купить молоко послезавтра", "Europe/Moscow") is None
 
 
+def test_extract_task_request_fails_closed_for_natural_temporal_qualifiers():
+    cases = (
+        "Надо купить молоко через два дня",
+        "Надо сделать отчёт через 2 дня",
+        "Надо сделать отчёт на следующей неделе",
+        "Надо сделать отчёт 10 сентября",
+        "Надо сделать отчёт в следующем месяце",
+    )
+    for text in cases:
+        assert _extract_task_request(text, "Europe/Moscow") is None
+
+
+def test_extract_task_request_fails_closed_for_conflicting_qualifiers():
+    assert _extract_task_request(
+        "Завтра надо купить молоко сегодня", "Europe/Moscow"
+    ) is None
+    assert _extract_task_request(
+        "Надо срочно купить молоко, приоритет средний", "Europe/Moscow"
+    ) is None
+
+
 def test_extract_task_request_ignores_activity():
     assert _extract_task_request("Настраиваю компьютер на Силикатном", "Europe/Moscow") is None
 

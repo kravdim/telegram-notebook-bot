@@ -1,4 +1,5 @@
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -348,30 +349,35 @@ async def test_reply_to_other_message_does_not_go_to_chronometry(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_pending_memoir_accepts_next_text_without_explicit_reply(monkeypatch):
-    saved = []
-
-    async def fake_get_user(session, user_id):
-        return SimpleNamespace(timezone="Europe/Moscow", privacy_notice_version=1, cloud_processing_enabled=True)
-
+@pytest.mark.parametrize(
+    "text",
+    (
+        "Это обычное сообщение",
+        "Напомни через 15 минут выпить воды",
+        "Надо купить молоко",
+        "Позвонить маме — сделал",
+    ),
+)
+async def test_pending_memoir_does_not_steal_plain_text(monkeypatch, text):
     async def memoir_state(user_id, state_type):
         if state_type == "memoir":
             return SimpleNamespace(state_type="memoir", payload={"message_id": 100})
         return None
 
-    async def fake_save(user_id, text, timezone):
-        saved.append((user_id, text, timezone))
-
-    monkeypatch.setattr(messages, "async_session", lambda: FakeSessionContext())
-    monkeypatch.setattr(messages, "get_user", fake_get_user)
     monkeypatch.setattr(messages, "_get_persisted_interaction", memoir_state)
-    monkeypatch.setattr(messages, "_save_memoir_answer", fake_save)
+    monkeypatch.setattr(
+        messages,
+        "_save_memoir_answer",
+        AsyncMock(side_effect=AssertionError("plain text must not become memoir")),
+    )
 
-    msg = FakeMessage("Это обычное сообщение", user_id=42)
-    await messages.process_text_message(42, msg.text, msg)
+    msg = FakeMessage(text, user_id=42)
+    outcome = await messages._route_pending_memoir(
+        42, text, msg, "Europe/Moscow"
+    )
 
-    assert saved == [(42, "Это обычное сообщение", "Europe/Moscow")]
-    assert "Записано в мемуарник" in msg.answers[-1][0]
+    assert outcome is None
+    assert msg.answers == []
 
 
 @pytest.mark.asyncio

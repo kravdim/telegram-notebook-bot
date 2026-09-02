@@ -37,7 +37,7 @@ def test_deploy_uses_versioned_release_and_bounded_readiness():
     mark_ready = script.index('touch "$ready_marker"')
     assert move_source < create_venv < mark_ready
     assert '--expected-release "$CANDIDATE_SHA"' not in script
-    assert 'wait_for_release "$CANDIDATE_SHA"' in script
+    assert 'wait_for_release "$CANDIDATE_DIR" "$CANDIDATE_SHA"' in script
     assert 'READINESS_TIMEOUT=90' in script
 
 
@@ -45,7 +45,9 @@ def test_failed_candidate_restores_previous_release_and_writes_report():
     script = _script()
     rollback = script[script.index("rollback() {") :]
     assert 'cp "$ROLLBACK_PLIST" "$PLIST_DST"' in rollback
-    assert 'wait_for_release "$PREVIOUS_EXPECTED_SHA"' in rollback
+    assert 'wait_for_release "$PREVIOUS_DIR" "$PREVIOUS_EXPECTED_SHA"' in rollback
+    assert '"$release_dir/scripts/preflight.py"' in script
+    assert '--compatible-database-head "$compatible_head"' in script
     assert 'write_report "rolled_back"' in rollback
     assert 'write_report "rollback_failed"' in rollback
 
@@ -81,8 +83,13 @@ def _build_installer_harness(tmp_path: Path) -> tuple[Path, dict[str, str], str,
         "scripts/check_telegram_credentials.py",
         "scripts/prefetch_stt_model.py",
         "scripts/check_runtime_readiness.py",
+        "scripts/get_migration_head.py",
     ):
         (repo / relative).write_text("fixture\n", encoding="utf-8")
+    (repo / "bot/db/migrations").mkdir(parents=True)
+    (repo / "bot/db/migrations/rollback_compatible_heads.txt").write_text(
+        "# test fixture\n", encoding="utf-8"
+    )
     (repo / "bot/runtime/readiness.py").write_text("release_sha = True\n", encoding="utf-8")
 
     subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
@@ -128,6 +135,17 @@ case "$target" in
     done
     if [ "${FAIL_PHASE:-}" = readiness ] && [ "$expected" = "$TEST_CANDIDATE_SHA" ]; then exit 1; fi
     if [ "${FAIL_PHASE:-}" = rollback_readiness ]; then exit 1; fi
+    ;;
+  *get_migration_head.py)
+    project=""
+    while [ "$#" -gt 0 ]; do
+      case "$1" in --project) project="$2"; shift 2 ;; *) shift ;; esac
+    done
+    if [ -f "$project/candidate.txt" ]; then
+      printf '%s\n' "${TEST_CANDIDATE_DB_HEAD:-test-db-head}"
+    else
+      printf '%s\n' "${TEST_PREVIOUS_DB_HEAD:-test-db-head}"
+    fi
     ;;
   *preflight.py)
     case " $* " in
@@ -199,6 +217,51 @@ if [ "${FAIL_PHASE:-}" = rollback_load ] && [ "$release" = "$TEST_PREVIOUS_SHA" 
         "TEST_PREVIOUS_SHA": previous_sha,
     }
     return repo, env, previous_sha, candidate_sha
+
+
+def test_migration_rollback_requires_explicit_compatibility_and_uses_previous_code(
+    tmp_path: Path,
+):
+    repo, env, previous_sha, candidate_sha = _build_installer_harness(tmp_path)
+    env["TEST_PREVIOUS_DB_HEAD"] = "old-head"
+    env["TEST_CANDIDATE_DB_HEAD"] = "new-head"
+    env["FAIL_PHASE"] = "readiness"
+
+    rejected = subprocess.run(
+        [str(repo / "platform/macos/install.sh"), "--readiness-timeout", "1"],
+        cwd=repo,
+        env=env,
+        text=True,
+        capture_output=True,
+    )
+    assert rejected.returncode == 1
+    assert "phase=migration_compatibility\n" in (
+        Path(env["DAILYPLANNER_STATE_DIR"]) / "last-deploy-report.txt"
+    ).read_text()
+
+    manifest = repo / "bot/db/migrations/rollback_compatible_heads.txt"
+    manifest.write_text("new-head\n", encoding="utf-8")
+    subprocess.run(["git", "add", str(manifest)], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-qm", "declare compatible migration"], cwd=repo, check=True)
+    compatible_sha = subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], cwd=repo, text=True
+    ).strip()
+    env["TEST_CANDIDATE_SHA"] = compatible_sha
+
+    rolled_back = subprocess.run(
+        [str(repo / "platform/macos/install.sh"), "--readiness-timeout", "1"],
+        cwd=repo,
+        env=env,
+        text=True,
+        capture_output=True,
+    )
+    assert rolled_back.returncode == 1
+    report = (
+        Path(env["DAILYPLANNER_STATE_DIR"]) / "last-deploy-report.txt"
+    ).read_text()
+    assert "status=rolled_back\n" in report
+    assert f"active={previous_sha}\n" in report
+    assert f"candidate={compatible_sha}\n" in report
 
 
 @pytest.mark.parametrize(

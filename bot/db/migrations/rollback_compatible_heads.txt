@@ -1,0 +1,3 @@
+# Add a new Alembic head here only when its upgrade remains readable and
+# writable by the immediately previous release. Destructive migrations require
+# a documented maintenance/restore plan and must not be listed.

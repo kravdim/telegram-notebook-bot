@@ -4,6 +4,9 @@ set -euo pipefail
 PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 USERBOT_DIR="${DAILYPLANNER_USERBOT_DIR:-/Users/moltbot/Projects/userbot}"
 RUNNER="$USERBOT_DIR/tests_dailyplanner/run_messy_human.py"
+CURRENT_RELEASE_FILE="${DAILYPLANNER_CURRENT_RELEASE_FILE:-$HOME/Library/Application Support/notebook-bot/state/current-release}"
+TESTED_SHA="$(git -C "$PROJECT_DIR" rev-parse HEAD)"
+STARTED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 RUN_TMP="$(mktemp -d /tmp/dailyplanner-live-e2e.XXXXXX)"
 chmod 700 "$RUN_TMP"
 LOG_FILE="$RUN_TMP/runner.log"
@@ -25,9 +28,20 @@ if [[ ! -f "$RUNNER" || ! -x "$USERBOT_DIR/.venv/bin/python" ]]; then
     echo "DailyPlanner live E2E runner or its virtualenv is missing" >&2
     exit 2
 fi
+if [[ ! -f "$CURRENT_RELEASE_FILE" ]]; then
+    echo "Production release marker is missing: $CURRENT_RELEASE_FILE" >&2
+    exit 2
+fi
+DEPLOYED_SHA="$(head -1 "$CURRENT_RELEASE_FILE")"
+if [[ "$DEPLOYED_SHA" != "$TESTED_SHA" ]]; then
+    echo "Live E2E SHA mismatch: checkout=$TESTED_SHA production=$DEPLOYED_SHA" >&2
+    exit 1
+fi
 
 cd "$PROJECT_DIR"
 "$PROJECT_DIR/.venv/bin/python" scripts/preflight.py
+"$PROJECT_DIR/.venv/bin/python" tests/live/run_memoir_gate.py \
+    --userbot-dir "$USERBOT_DIR"
 
 set +e
 (
@@ -69,6 +83,11 @@ if ! grep -q 'Cleanup oracle:.*"ok": true' "$LOG_FILE"; then
     echo "Live E2E gate failed: cleanup oracle evidence missing" >&2
     exit 1
 fi
+if [[ "$(head -1 "$CURRENT_RELEASE_FILE")" != "$TESTED_SHA" ]]; then
+    echo "Production SHA changed during live E2E" >&2
+    exit 1
+fi
 
 echo "Live E2E gate passed: $summary"
+echo "Evidence: tested_sha=$TESTED_SHA started_at=$STARTED_AT finished_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 echo "Runner report is stored under $USERBOT_DIR/tests_dailyplanner/results"

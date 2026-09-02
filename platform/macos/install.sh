@@ -140,18 +140,25 @@ read_installed_release() {
 }
 
 wait_for_release() {
-    local expected_sha="$1" timeout="$2" waited=0
+    local release_dir="$1" expected_sha="$2" timeout="$3" compatible_head="${4:-}" waited=0
     local readiness_args=(--file "$READINESS_FILE" --max-age-seconds 15)
     if [ -n "$expected_sha" ]; then
         readiness_args+=(--expected-release "$expected_sha")
     fi
     while [ "$waited" -lt "$timeout" ]; do
-        if env "PYTHONPATH=$CANDIDATE_DIR" "$CANDIDATE_DIR/.venv/bin/python" \
-            "$CANDIDATE_DIR/scripts/check_runtime_readiness.py" \
-            "${readiness_args[@]}" >/dev/null 2>&1 && \
-           env "PYTHONPATH=$CANDIDATE_DIR" "$CANDIDATE_DIR/.venv/bin/python" \
-            "$CANDIDATE_DIR/scripts/preflight.py" >/dev/null 2>&1; then
-            return 0
+        if env "PYTHONPATH=$release_dir" "$release_dir/.venv/bin/python" \
+            "$release_dir/scripts/check_runtime_readiness.py" \
+            "${readiness_args[@]}" >/dev/null 2>&1; then
+            if [ -n "$compatible_head" ]; then
+                if env "PYTHONPATH=$release_dir" "$release_dir/.venv/bin/python" \
+                    "$release_dir/scripts/preflight.py" \
+                    --compatible-database-head "$compatible_head" >/dev/null 2>&1; then
+                    return 0
+                fi
+            elif env "PYTHONPATH=$release_dir" "$release_dir/.venv/bin/python" \
+                "$release_dir/scripts/preflight.py" >/dev/null 2>&1; then
+                return 0
+            fi
         fi
         sleep 2
         waited=$((waited + 2))
@@ -216,6 +223,12 @@ fi
 
 PREVIOUS_DIR=""
 PREVIOUS_EXPECTED_SHA=""
+PREVIOUS_DB_HEAD=""
+CANDIDATE_DB_HEAD="$(
+    "$CANDIDATE_DIR/.venv/bin/python" "$CANDIDATE_DIR/scripts/get_migration_head.py" \
+        --project "$CANDIDATE_DIR"
+)"
+ROLLBACK_COMPATIBLE_HEAD=""
 if [ -n "$PREVIOUS_SHA" ]; then
     DEPLOY_PHASE="prepare_rollback"
     if ! PREVIOUS_DIR="$(prepare_release "$PREVIOUS_SHA")"; then
@@ -224,6 +237,22 @@ if [ -n "$PREVIOUS_SHA" ]; then
     fi
     if grep -q 'release_sha' "$PREVIOUS_DIR/bot/runtime/readiness.py"; then
         PREVIOUS_EXPECTED_SHA="$PREVIOUS_SHA"
+    fi
+    PREVIOUS_DB_HEAD="$(
+        "$CANDIDATE_DIR/.venv/bin/python" "$CANDIDATE_DIR/scripts/get_migration_head.py" \
+            --project "$PREVIOUS_DIR"
+    )"
+    if [ "$PREVIOUS_DB_HEAD" != "$CANDIDATE_DB_HEAD" ]; then
+        if grep -Eq "^[[:space:]]*$CANDIDATE_DB_HEAD[[:space:]]*$" \
+            "$CANDIDATE_DIR/bot/db/migrations/rollback_compatible_heads.txt"; then
+            ROLLBACK_COMPATIBLE_HEAD="$CANDIDATE_DB_HEAD"
+        else
+            DEPLOY_PHASE="migration_compatibility"
+            write_report "pre_switch_failed" \
+                "migration is not declared compatible with previous release"
+            echo "Candidate migration requires a maintenance/restore plan" >&2
+            exit 1
+        fi
     fi
     if ! "$CANDIDATE_DIR/.venv/bin/python" "$CANDIDATE_DIR/platform/macos/render_launchagent.py" \
         --template "$CANDIDATE_DIR/platform/macos/com.notebook-bot.plist" \
@@ -264,7 +293,8 @@ rollback() {
         elif ! launchctl load "$PLIST_DST"; then
             write_report "rollback_failed" "$reason; previous LaunchAgent load failed" "none"
             echo "CRITICAL: rollback LaunchAgent load failed" >&2
-        elif wait_for_release "$PREVIOUS_EXPECTED_SHA" "$READINESS_TIMEOUT"; then
+        elif wait_for_release "$PREVIOUS_DIR" "$PREVIOUS_EXPECTED_SHA" \
+            "$READINESS_TIMEOUT" "$ROLLBACK_COMPATIBLE_HEAD"; then
             write_report "rolled_back" "$reason" "$PREVIOUS_SHA"
             echo "$PREVIOUS_SHA" > "$CURRENT_RELEASE_FILE"
             echo "Rollback succeeded: $PREVIOUS_SHA" >&2
@@ -284,7 +314,7 @@ launchctl unload "$PLIST_DST" 2>/dev/null || true
 rm -f -- "$READINESS_FILE"
 cp "$CANDIDATE_PLIST" "$PLIST_DST" || rollback "candidate LaunchAgent install failed"
 launchctl load "$PLIST_DST" || rollback "launchctl load failed"
-wait_for_release "$CANDIDATE_SHA" "$READINESS_TIMEOUT" || \
+wait_for_release "$CANDIDATE_DIR" "$CANDIDATE_SHA" "$READINESS_TIMEOUT" || \
     rollback "bounded readiness timeout"
 
 echo "$CANDIDATE_SHA" > "$CURRENT_RELEASE_FILE"

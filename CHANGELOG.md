@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+## 0.3.3 — 2026-09-03
+
+- Restricted memoir capture to an explicit Telegram Reply to the persisted
+  prompt, preventing pending memoir state from stealing tasks, reminders or
+  completion commands.
+- Made deterministic task creation fail closed for natural-language dates and
+  conflicting date/priority qualifiers so the full parser retains ownership.
+- Bound live E2E evidence to the exact deployed Git SHA before and after each
+  run.
+- Made rollback health checks execute from the restored release and introduced
+  an explicit allowlist for newer database heads compatible with that release.
+- Replaced the suppression-count complexity check with per-function numerical
+  ceilings for complexity, branches, returns and statements.
+
 ## 0.3.2 — 2026-09-02
 
 - Gave an active memoir prompt ownership of the next text before task shortcuts

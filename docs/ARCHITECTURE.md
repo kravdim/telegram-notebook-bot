@@ -71,8 +71,10 @@ handlers ──► IntentNormalizer / typed intents ◄── LLM adapter
 New functions are capped by Ruff at complexity 15, 20 branches, 12 returns and
 80 statements. Nine pre-existing hotspots carry 16 inline complexity exceptions
 across product and operational code (15 under `bot/`).
-`scripts/check_complexity_ratchet.py` contains the explicit allowlist, rejects
-new or widened exceptions, and permits only reductions. Removing those
+`scripts/check_complexity_ratchet.py` stores a numerical ceiling for every
+allowlisted function and Ruff metric (complexity, branches, returns and
+statements), rejects any increase, and requires a retired suppression and its
+baseline to disappear together. Removing those
 exceptions is incremental architecture work; widening the global limits is not
 an accepted shortcut.
 
