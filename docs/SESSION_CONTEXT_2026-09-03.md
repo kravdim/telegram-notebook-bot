@@ -3,8 +3,9 @@
 ## Текущее состояние
 
 Замечания из `REVIEW_2026-09-02_V032_INDEPENDENT.md` закрыты в production.
-Финальный релиз — `v0.3.6`, tag/main/production указывают на один SHA:
-`365d0a7e8c8754c306b10b4f97411219e04689ea`.
+Финальный релиз — `v0.3.6`; release tag и production указывают на один code
+SHA: `365d0a7e8c8754c306b10b4f97411219e04689ea`. После релиза в `main` добавлен
+только этот documentation handoff; runtime tree релиза не менялся.
 
 Production LaunchAgent работает из versioned release directory. Финальный
 deploy report: `status=deployed`, `phase=complete`, `reason=none`; previous
