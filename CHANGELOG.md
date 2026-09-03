@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## 0.3.6 — 2026-09-03
+
+- Corrected the targeted memoir live gate to assert the task domain's actual
+  completion pair: `status=done` and `resolution=completed`.
+
 ## 0.3.5 — 2026-09-03
 
 - Added a date-specific visible marker to each memoir prompt and persisted it

@@ -248,13 +248,15 @@ async def _orchestrate(args: argparse.Namespace) -> None:
         oracle = {
             "ok": (
                 len(tasks) == 1
-                and tasks[0].status == "completed"
+                and tasks[0].status == "done"
+                and tasks[0].resolution == "completed"
                 and len(reminders) == 1
                 and len(memoirs) == 1
                 and len(diaries) == 1
                 and await interaction_service.get(user_id, "memoir") is None
             ),
             "task_status": tasks[0].status if len(tasks) == 1 else None,
+            "task_resolution": tasks[0].resolution if len(tasks) == 1 else None,
             "reminders": len(reminders),
             "memoirs": len(memoirs),
             "diaries": len(diaries),
