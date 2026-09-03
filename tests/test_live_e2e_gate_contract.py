@@ -20,3 +20,10 @@ def test_live_gate_requires_state_and_cleanup_oracles():
 
     assert "State oracle:" in source
     assert "Cleanup oracle:" in source
+
+
+def test_memoir_gate_uses_the_task_domain_completion_contract():
+    source = (ROOT / "tests/live/run_memoir_gate.py").read_text(encoding="utf-8")
+
+    assert 'tasks[0].status == "done"' in source
+    assert 'tasks[0].resolution == "completed"' in source
