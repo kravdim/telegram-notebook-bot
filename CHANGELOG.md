@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## 0.3.4 — 2026-09-03
+
+- Made explicit memoir Reply ownership robust across Telegram Bot API and
+  MTProto message-ID spaces by verifying the prompt's unique callback token.
+- Corrected the targeted production memoir gate to locate and Reply to the
+  prompt using the test user's own Telegram message-ID space.
+
 ## 0.3.3 — 2026-09-03
 
 - Restricted memoir capture to an explicit Telegram Reply to the persisted

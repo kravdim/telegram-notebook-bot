@@ -593,12 +593,27 @@ async def _route_pending_memoir(
 
 
 def _is_memoir_answer(message: Message, interaction) -> bool:
-    """Accept only an explicit Telegram reply to the persisted memoir prompt."""
+    """Accept only an explicit Telegram reply owned by the persisted prompt."""
     expected_message_id = interaction.payload.get("message_id")
-    if not expected_message_id:
-        return False
     reply_to = message.reply_to_message
-    return reply_to is not None and reply_to.message_id == expected_message_id
+    if reply_to is None:
+        return False
+    if expected_message_id and reply_to.message_id == expected_message_id:
+        return True
+
+    # MTProto clients and the Bot API can expose different numeric IDs for the
+    # same private-chat message. The prompt's unique callback token survives
+    # that boundary and still proves that the Reply targets the active prompt.
+    session_token = interaction.payload.get("session_token")
+    reply_markup = getattr(reply_to, "reply_markup", None)
+    if not session_token or reply_markup is None:
+        return False
+    expected_callback = f"memoir_skip:{session_token}"
+    return any(
+        getattr(button, "callback_data", None) == expected_callback
+        for row in getattr(reply_markup, "inline_keyboard", [])
+        for button in row
+    )
 
 
 async def _process_text_message_unlocked(
