@@ -1,5 +1,6 @@
 """Форматирование мемуарника и аналитики ценностей."""
 
+from datetime import date
 from html import escape
 from typing import List
 
@@ -16,10 +17,11 @@ _VALUE_EMOJI = {
 }
 
 
-def format_memoir_question() -> str:
+def format_memoir_question(day: date | None = None) -> str:
     """Вопрос мемуарника на вечер."""
+    heading = "Мемуарник" if day is None else f"Мемуарник · {day:%d.%m.%Y}"
     return (
-        "📔 <b>Мемуарник</b>\n\n"
+        f"📔 <b>{heading}</b>\n\n"
         "Что сегодня было самым ярким, значимым событием дня?\n"
         "Опиши коротко — одно-два предложения. Ответь через Reply на это сообщение."
     )

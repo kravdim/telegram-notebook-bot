@@ -602,18 +602,13 @@ def _is_memoir_answer(message: Message, interaction) -> bool:
         return True
 
     # MTProto clients and the Bot API can expose different numeric IDs for the
-    # same private-chat message. The prompt's unique callback token survives
-    # that boundary and still proves that the Reply targets the active prompt.
-    session_token = interaction.payload.get("session_token")
-    reply_markup = getattr(reply_to, "reply_markup", None)
-    if not session_token or reply_markup is None:
+    # same private-chat message. A unique visible marker in the active prompt
+    # survives that boundary and still proves which message owns the Reply.
+    reply_marker = interaction.payload.get("reply_marker")
+    reply_text = getattr(reply_to, "text", None) or getattr(reply_to, "caption", None)
+    if not reply_marker or not reply_text:
         return False
-    expected_callback = f"memoir_skip:{session_token}"
-    return any(
-        getattr(button, "callback_data", None) == expected_callback
-        for row in getattr(reply_markup, "inline_keyboard", [])
-        for button in row
-    )
+    return str(reply_marker) in reply_text
 
 
 async def _process_text_message_unlocked(

@@ -72,7 +72,10 @@ async def send_memoir_prompts(bot: Bot) -> None:
                     await _clear_memoir_state(user.telegram_id, session_token)
                     continue
                 if not await _persist_memoir_state(
-                    user.telegram_id, prompt.message_ids[-1], session_token
+                    user.telegram_id,
+                    prompt.message_ids[-1],
+                    session_token,
+                    _memoir_reply_marker(today),
                 ):
                     await _clear_memoir_state(user.telegram_id, session_token)
                     continue
@@ -114,6 +117,7 @@ async def _send_weekly_review(
     async with async_session() as session:
         entries = await get_memoir_entries(session, user.telegram_id, limit=7)
 
+    today = today or pendulum.now(tz).date()
     text = format_weekly_review(entries)
     parts = [
         DeliveryPartSpec(user.telegram_id, part, parse_mode="HTML")
@@ -122,12 +126,11 @@ async def _send_weekly_review(
     parts.append(
         DeliveryPartSpec(
             user.telegram_id,
-            format_memoir_question(),
+            format_memoir_question(today),
             parse_mode="HTML",
             reply_markup=build_memoir_keyboard(session_token),
         )
     )
-    today = today or pendulum.now(tz).date()
     return await deliver_batch(
         bot,
         delivery_key=f"memoir:weekly:{user.telegram_id}:{today.isoformat()}",
@@ -146,7 +149,7 @@ async def _send_prompt(bot: Bot, user, today, session_token: str) -> DeliveryRes
         parts=[
             DeliveryPartSpec(
                 user.telegram_id,
-                format_memoir_question(),
+                format_memoir_question(today),
                 parse_mode="HTML",
                 reply_markup=build_memoir_keyboard(session_token),
             )
@@ -157,6 +160,11 @@ async def _send_prompt(bot: Bot, user, today, session_token: str) -> DeliveryRes
 def _memoir_session_token(user_id: int, day) -> str:
     raw = f"memoir:{user_id}:{day.isoformat()}".encode()
     return hashlib.sha256(raw).hexdigest()[:16]
+
+
+def _memoir_reply_marker(day) -> str:
+    """Return the visible prompt marker persisted for strict Reply ownership."""
+    return f"Мемуарник · {day:%d.%m.%Y}"
 
 
 async def _claim_memoir_state(user_id: int, session_token: str) -> bool:
@@ -178,7 +186,10 @@ async def _claim_memoir_state(user_id: int, session_token: str) -> bool:
 
 
 async def _persist_memoir_state(
-    user_id: int, message_id: int, session_token: str
+    user_id: int,
+    message_id: int,
+    session_token: str,
+    reply_marker: str | None = None,
 ) -> bool:
     """Attach the sent Telegram message to the reserved memoir state."""
     try:
@@ -190,6 +201,7 @@ async def _persist_memoir_state(
                 "message_id": message_id,
                 "session_token": session_token,
                 "phase": "pending",
+                **({"reply_marker": reply_marker} if reply_marker else {}),
             },
             60,
             session_token,
