@@ -22,9 +22,11 @@
   исходное независимое ревью предыдущего цикла;
 - [`REVIEW_2026-08-29_INDEPENDENT_REMEDIATION.md`](REVIEW_2026-08-29_INDEPENDENT_REMEDIATION.md)
   — состояние закрытия замечаний и оставшиеся внешние gates;
-- [`SESSION_CONTEXT_2026-09-02.md`](SESSION_CONTEXT_2026-09-02.md) — текущий
-  handoff релиза `v0.3.3`; immutable release, deployed revision и live evidence
-  зафиксированы явно;
+- [`SESSION_CONTEXT_2026-09-03.md`](SESSION_CONTEXT_2026-09-03.md) — текущий
+  handoff релиза `v0.3.6`; remediation, immutable release, deployed revision и
+  полный live evidence зафиксированы явно;
+- [`SESSION_CONTEXT_2026-09-02.md`](SESSION_CONTEXT_2026-09-02.md) — предыдущий
+  handoff релизов `v0.3.1`–`v0.3.2`;
 - [`SESSION_CONTEXT_2026-08-30.md`](SESSION_CONTEXT_2026-08-30.md) — предыдущий
   handoff цикла от 29 августа.
 
