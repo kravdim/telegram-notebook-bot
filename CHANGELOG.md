@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 0.3.5 — 2026-09-03
+
+- Added a date-specific visible marker to each memoir prompt and persisted it
+  as a strict cross-API Reply ownership fallback.
+- Kept plain text and replies to any other prompt excluded from memoir capture.
+
 ## 0.3.4 — 2026-09-03
 
 - Made explicit memoir Reply ownership robust across Telegram Bot API and

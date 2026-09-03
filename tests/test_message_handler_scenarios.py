@@ -457,29 +457,35 @@ async def test_task_like_reply_is_owned_by_pending_memoir(monkeypatch):
     assert "Записано в мемуарник" in msg.answers[-1][0]
 
 
-def test_memoir_reply_accepts_matching_prompt_token_across_message_id_spaces():
-    button = SimpleNamespace(callback_data="memoir_skip:memoir-token")
+def test_memoir_reply_accepts_matching_prompt_marker_across_message_id_spaces():
     reply = SimpleNamespace(
         message_id=5993,
-        reply_markup=SimpleNamespace(inline_keyboard=[[button]]),
+        text="📔 Мемуарник · 03.09.2026\n\nЧто сегодня было самым ярким?",
     )
     message = FakeMessage("Сегодня был хороший день", reply_to_message=reply)
     interaction = SimpleNamespace(
-        payload={"message_id": 9707, "session_token": "memoir-token"}
+        payload={
+            "message_id": 9707,
+            "session_token": "memoir-token",
+            "reply_marker": "Мемуарник · 03.09.2026",
+        }
     )
 
     assert messages._is_memoir_answer(message, interaction)
 
 
-def test_memoir_reply_rejects_a_different_prompt_token():
-    button = SimpleNamespace(callback_data="memoir_skip:old-token")
+def test_memoir_reply_rejects_a_different_prompt_marker():
     reply = SimpleNamespace(
         message_id=5993,
-        reply_markup=SimpleNamespace(inline_keyboard=[[button]]),
+        text="📔 Мемуарник · 02.09.2026\n\nЧто сегодня было самым ярким?",
     )
     message = FakeMessage("Это ответ в другой ветке", reply_to_message=reply)
     interaction = SimpleNamespace(
-        payload={"message_id": 9707, "session_token": "memoir-token"}
+        payload={
+            "message_id": 9707,
+            "session_token": "memoir-token",
+            "reply_marker": "Мемуарник · 03.09.2026",
+        }
     )
 
     assert not messages._is_memoir_answer(message, interaction)

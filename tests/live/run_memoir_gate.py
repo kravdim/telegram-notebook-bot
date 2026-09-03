@@ -171,7 +171,12 @@ async def _orchestrate(args: argparse.Namespace) -> None:
             user_id,
             "memoir",
             "memoir",
-            {"session_token": token, "message_id": prompt_id, "run_id": run_id},
+            {
+                "session_token": token,
+                "message_id": prompt_id,
+                "reply_marker": run_id,
+                "run_id": run_id,
+            },
             60,
             token,
         )
