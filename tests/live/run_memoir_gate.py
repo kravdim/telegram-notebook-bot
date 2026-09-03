@@ -28,11 +28,18 @@ async def _client(args: argparse.Namespace) -> None:
         chat = await app.get_chat(BOT_USERNAME)
         bot_user = await app.get_users(BOT_USERNAME)
 
+        last_sent_details: dict[str, int | None] = {}
+
         async def send_and_wait(text: str, *, reply_to: int | None = None) -> str:
             sent = await app.send_message(
                 chat.id,
                 text,
                 reply_to_message_id=reply_to,
+            )
+            last_sent_details.update(
+                sent_id=sent.id,
+                requested_reply_to=reply_to,
+                actual_reply_to=(sent.reply_to_message.id if sent.reply_to_message else None),
             )
             for _ in range(90):
                 replies = []
@@ -45,6 +52,16 @@ async def _client(args: argparse.Namespace) -> None:
                     return (first.text or first.caption or "").strip()
                 await asyncio.sleep(1)
             raise RuntimeError(f"Bot response timeout for marker {args.run_id}")
+
+        async def find_user_visible_prompt_id() -> int:
+            for _ in range(30):
+                async for message in app.get_chat_history(chat.id, limit=50):
+                    sender = getattr(message, "from_user", None)
+                    content = message.text or message.caption or ""
+                    if sender and sender.id == bot_user.id and args.run_id in content:
+                        return message.id
+                await asyncio.sleep(1)
+            raise RuntimeError(f"Live memoir prompt not visible for marker {args.run_id}")
 
         task_response = await send_and_wait(f"Надо купить {args.run_id} молоко")
         if "мемуар" in task_response.casefold() or "задач" not in task_response.casefold():
@@ -62,12 +79,16 @@ async def _client(args: argparse.Namespace) -> None:
         if "мемуар" in reminder_response.casefold() or "напомин" not in reminder_response.casefold():
             raise RuntimeError(f"plain reminder was misrouted: {reminder_response!r}")
 
+        user_visible_prompt_id = await find_user_visible_prompt_id()
         memoir_response = await send_and_wait(
             f"Сегодня самым ярким событием был live gate {args.run_id}",
-            reply_to=args.prompt_id,
+            reply_to=user_visible_prompt_id,
         )
         if "записано в мемуарник" not in memoir_response.casefold():
-            raise RuntimeError(f"explicit memoir reply was not saved: {memoir_response!r}")
+            raise RuntimeError(
+                "explicit memoir reply was not saved: "
+                f"response={memoir_response!r} sent={last_sent_details!r}"
+            )
 
         print(
             json.dumps(
@@ -97,6 +118,7 @@ async def _orchestrate(args: argparse.Namespace) -> None:
         Reminder,
         Task,
     )
+    from bot.scheduler.memoir import build_memoir_keyboard  # noqa: PLC0415
     tested_sha = subprocess.check_output(
         ["git", "rev-parse", "HEAD"], cwd=ROOT, text=True
     ).strip()
@@ -140,7 +162,9 @@ async def _orchestrate(args: argparse.Namespace) -> None:
         async with Bot(settings.bot_token) as bot:
             prompt = await bot.send_message(
                 user_id,
-                "📔 Live memoir gate. Ответь через Reply после проверочных команд.",
+                "📔 Live memoir gate "
+                f"{run_id}. Ответь через Reply после проверочных команд.",
+                reply_markup=build_memoir_keyboard(token),
             )
             prompt_id = prompt.message_id
         transitioned = await interaction_service.transition(
@@ -165,8 +189,6 @@ async def _orchestrate(args: argparse.Namespace) -> None:
                 str(user_id),
                 "--run-id",
                 run_id,
-                "--prompt-id",
-                str(prompt_id),
             ],
             text=True,
             capture_output=True,
@@ -247,6 +269,21 @@ async def _orchestrate(args: argparse.Namespace) -> None:
                 sort_keys=True,
             ),
         )
+    except Exception:
+        diagnostic_state = await interaction_service.get(user_id)
+        print(
+            "Live memoir diagnostic:",
+            json.dumps(
+                {
+                    "state_type": diagnostic_state.state_type if diagnostic_state else None,
+                    "payload": diagnostic_state.payload if diagnostic_state else None,
+                    "expected_prompt_id": prompt_id,
+                },
+                ensure_ascii=False,
+                sort_keys=True,
+            ),
+        )
+        raise
     finally:
         await interaction_service.clear(user_id, "memoir", token)
         await engine.dispose()
@@ -286,15 +323,14 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--userbot-dir", type=Path, default=Path("/Users/moltbot/Projects/userbot"))
     parser.add_argument("--user-id", type=int)
     parser.add_argument("--run-id")
-    parser.add_argument("--prompt-id", type=int)
     return parser.parse_args()
 
 
 def main() -> None:
     args = _parse_args()
     if args.client:
-        if not args.user_id or not args.run_id or not args.prompt_id:
-            raise SystemExit("client mode requires user-id, run-id and prompt-id")
+        if not args.user_id or not args.run_id:
+            raise SystemExit("client mode requires user-id and run-id")
         asyncio.run(_client(args))
     else:
         asyncio.run(_orchestrate(args))
