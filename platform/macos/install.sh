@@ -243,7 +243,7 @@ if [ -n "$PREVIOUS_SHA" ]; then
             --project "$PREVIOUS_DIR"
     )"
     if [ "$PREVIOUS_DB_HEAD" != "$CANDIDATE_DB_HEAD" ]; then
-        if grep -Eq "^[[:space:]]*$CANDIDATE_DB_HEAD[[:space:]]*$" \
+        if grep -Eq "^[[:space:]]*${CANDIDATE_DB_HEAD}[[:space:]]*$" \
             "$CANDIDATE_DIR/bot/db/migrations/rollback_compatible_heads.txt"; then
             ROLLBACK_COMPATIBLE_HEAD="$CANDIDATE_DB_HEAD"
         else
