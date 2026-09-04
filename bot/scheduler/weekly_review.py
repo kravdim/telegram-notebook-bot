@@ -10,9 +10,11 @@ from bot.db.crud.chronometry import get_week_stats
 from bot.db.crud.memoir import get_value_stats
 from bot.db.crud.projects import get_project_progress, get_user_projects
 from bot.db.crud.tasks import get_completed_in_range, get_frogs_in_range
-from bot.db.crud.users import claim_date_marker, get_all_users, release_date_marker
+from bot.db.crud.users import claim_date_marker, get_all_users
 from bot.db.engine import async_session
+from bot.formatters import split_html_message
 from bot.logging_safety import error_type
+from bot.services.delivery import DeliveryPartSpec, deliver_batch
 
 logger = logging.getLogger(__name__)
 
@@ -42,21 +44,12 @@ async def send_weekly_review_now(bot: Bot, user) -> bool:
     """Атомарно отправить ручной weekly review для локальной даты пользователя."""
     tz = user.timezone or "Europe/Moscow"
     today = pendulum.now(tz).date()
-    async with async_session() as session:
-        claimed = await claim_date_marker(
-            session, user.telegram_id, "weekly_review_sent_date", today
-        )
-    if not claimed:
+    if getattr(user, "weekly_review_sent_date", None) == today:
         return False
-
-    try:
-        await _send_review(bot, user, tz)
-    except Exception:
-        async with async_session() as session:
-            await release_date_marker(
-                session, user.telegram_id, "weekly_review_sent_date", today
-            )
-        raise
+    if not await _send_review(bot, user, tz):
+        return False
+    async with async_session() as session:
+        await claim_date_marker(session, user.telegram_id, "weekly_review_sent_date", today)
     return True
 
 
@@ -85,28 +78,13 @@ async def send_weekly_review(bot: Bot) -> None:
             if user.weekly_review_sent_date == now.date():
                 continue
 
-            # Write-ahead marker с откатом при ошибке защищает от дублей после
-            # рестарта и допускает повторную попытку при ошибке Telegram.
-            async with async_session() as session:
-                claimed = await claim_date_marker(
-                    session, user.telegram_id, "weekly_review_sent_date", now.date()
-                )
-            if not claimed:
-                continue
-            try:
-                await _send_review(bot, user, tz)
-            except Exception:
-                async with async_session() as session:
-                    await release_date_marker(
-                        session, user.telegram_id, "weekly_review_sent_date", now.date()
-                    )
-                raise
+            await send_weekly_review_now(bot, user)
 
         except Exception as e:
             logger.error("Ошибка weekly review: error_type=%s", error_type(e))
 
 
-async def _send_review(bot: Bot, user, tz: str) -> None:
+async def _send_review(bot: Bot, user, tz: str) -> bool:
     """Сформировать и отправить еженедельный обзор."""
     now = pendulum.now(tz)
     week_start = now.start_of("week")
@@ -150,8 +128,13 @@ async def _send_review(bot: Bot, user, tz: str) -> None:
         project_progress=project_progress,
     )
 
-    await bot.send_message(chat_id=user.telegram_id, text=text, parse_mode="HTML")
-    logger.info("Weekly review отправлен")
+    result = await deliver_batch(
+        bot, delivery_key=f"weekly:{user.telegram_id}:{now.date().isoformat()}",
+        user_id=user.telegram_id, kind="weekly_review",
+        parts=[DeliveryPartSpec(user.telegram_id, part, parse_mode="HTML")
+               for part in split_html_message(text)],
+    )
+    return result.completed
 
 
 def _append_time_review(parts: list[str], chrono_stats: dict) -> None:

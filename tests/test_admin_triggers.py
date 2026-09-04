@@ -97,6 +97,9 @@ async def test_manual_digest_does_not_mark_date_when_delivery_fails(monkeypatch)
 @pytest.mark.asyncio
 async def test_manual_review_skips_already_claimed_slot(monkeypatch):
     user = SimpleNamespace(telegram_id=42, timezone="Europe/Moscow")
+    import pendulum
+
+    user.weekly_review_sent_date = pendulum.now(user.timezone).date()
 
     async def no_claim(*args):
         return False

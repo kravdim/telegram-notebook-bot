@@ -496,7 +496,7 @@ def test_script_mains_evaluate_and_verify_e2e_emit_success_and_failure(monkeypat
         evaluator, "evaluate_cases", lambda cases, parser, functions: (len(cases), 0)
     )
     evaluator.main()
-    assert "invalid_tool_rate=0.000" in capsys.readouterr().out
+    assert "invalid_saved_response_rate=0.000" in capsys.readouterr().out
     monkeypatch.setattr(evaluator, "evaluate_cases", lambda *args: (0, 1))
     with pytest.raises(SystemExit, match="LLM contract regression"):
         evaluator.main()

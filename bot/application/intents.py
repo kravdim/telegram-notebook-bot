@@ -4,7 +4,7 @@ from typing import Any, Literal, TypeAlias
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from bot.llm.contracts import Action, ToolName
+from bot.application.contracts import Action, ToolName
 
 
 class _Intent(BaseModel):
@@ -46,6 +46,12 @@ class UpdateTaskIntent(_Intent):
     name: Literal["update_task"] = "update_task"
     search_query: str = Field(min_length=1)
     updates: TaskUpdates
+
+    def arguments(self) -> dict[str, Any]:
+        return {
+            "search_query": self.search_query,
+            "updates": self.updates.model_dump(exclude_unset=True),
+        }
 
 
 class _TaskQueryIntent(_Intent):

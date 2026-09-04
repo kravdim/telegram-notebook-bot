@@ -44,7 +44,17 @@ def reset_message_globals(monkeypatch):
     clear_all()
 
     async def no_claim(*args, **kwargs):
+        return True
+
+    async def no_plan(user_id):
         return None
+
+    async def memory_plan(user_id, plan):
+        return plan
+
+    async def memory_action(user_id, position, execute, **kwargs):
+        result = await execute()
+        return result if isinstance(result, CommandResult) else CommandResult(result)
 
     async def no_finish(*args, **kwargs):
         return None
@@ -77,6 +87,9 @@ def reset_message_globals(monkeypatch):
         return True
 
     monkeypatch.setattr(messages, "_claim_request", no_claim)
+    monkeypatch.setattr(messages, "saved_plan", no_plan)
+    monkeypatch.setattr(messages, "persist_plan", memory_plan)
+    monkeypatch.setattr(messages, "execute_action", memory_action)
     monkeypatch.setattr(messages, "_finish_request", no_finish)
     monkeypatch.setattr(messages, "_get_persisted_interaction", no_state)
     monkeypatch.setattr(messages, "_clear_persisted_interaction", no_clear)
@@ -106,7 +119,7 @@ async def test_done_message_routes_directly_to_dispatch(monkeypatch):
 
     monkeypatch.setattr(messages, "async_session", lambda: FakeSessionContext())
     monkeypatch.setattr(messages, "get_user", fake_get_user)
-    monkeypatch.setattr(messages, "dispatch", fake_dispatch)
+    monkeypatch.setattr(messages, "dispatch_result", fake_dispatch)
 
     msg = FakeMessage("Подключить онлайн-кассу - сделал", user_id=42)
     await messages.process_text_message(42, msg.text, msg)
@@ -148,7 +161,7 @@ async def test_followup_task_list_question_bypasses_llm(monkeypatch):
 
     monkeypatch.setattr(messages, "async_session", lambda: FakeSessionContext())
     monkeypatch.setattr(messages, "get_user", fake_get_user)
-    monkeypatch.setattr(messages, "dispatch", fake_dispatch)
+    monkeypatch.setattr(messages, "dispatch_result", fake_dispatch)
 
     msg = FakeMessage("А какие еще задачи есть?", user_id=42)
     await messages.process_text_message(42, msg.text, msg)
@@ -178,7 +191,7 @@ async def test_qualified_task_list_question_fails_closed_before_llm(monkeypatch)
 
     monkeypatch.setattr(messages, "async_session", lambda: FakeSessionContext())
     monkeypatch.setattr(messages, "get_user", fake_get_user)
-    monkeypatch.setattr(messages, "dispatch", forbidden_dispatch)
+    monkeypatch.setattr(messages, "dispatch_result", forbidden_dispatch)
 
     msg = FakeMessage("Покажи задачи на завтра", user_id=42)
     outcome = await messages.process_text_message(42, msg.text, msg)
@@ -204,7 +217,7 @@ async def test_conversational_done_bypasses_pending_chronometry(monkeypatch):
 
     monkeypatch.setattr(messages, "async_session", lambda: FakeSessionContext())
     monkeypatch.setattr(messages, "get_user", fake_get_user)
-    monkeypatch.setattr(messages, "dispatch", fake_dispatch)
+    monkeypatch.setattr(messages, "dispatch_result", fake_dispatch)
     monkeypatch.setattr(chronometry_scheduler, "is_awaiting_response", lambda user_id: True)
     monkeypatch.setattr(chronometry_scheduler, "get_chrono_message_id", lambda user_id: 100)
     monkeypatch.setattr(chronometry_handler, "process_chronometry_response", forbidden_chrono)
@@ -237,7 +250,7 @@ async def test_reschedule_bypasses_pending_chronometry(monkeypatch):
 
     monkeypatch.setattr(messages, "async_session", lambda: FakeSessionContext())
     monkeypatch.setattr(messages, "get_user", fake_get_user)
-    monkeypatch.setattr(messages, "dispatch", fake_dispatch)
+    monkeypatch.setattr(messages, "dispatch_result", fake_dispatch)
     monkeypatch.setattr(chronometry_scheduler, "is_awaiting_response", lambda user_id: True)
     monkeypatch.setattr(chronometry_scheduler, "get_chrono_message_id", lambda user_id: 100)
     monkeypatch.setattr(chronometry_handler, "process_chronometry_response", forbidden_chrono)
@@ -267,7 +280,7 @@ async def test_cancel_bypasses_pending_chronometry(monkeypatch):
 
     monkeypatch.setattr(messages, "async_session", lambda: FakeSessionContext())
     monkeypatch.setattr(messages, "get_user", fake_get_user)
-    monkeypatch.setattr(messages, "dispatch", fake_dispatch)
+    monkeypatch.setattr(messages, "dispatch_result", fake_dispatch)
     monkeypatch.setattr(chronometry_scheduler, "is_awaiting_response", lambda user_id: True)
     monkeypatch.setattr(chronometry_scheduler, "get_chrono_message_id", lambda user_id: 100)
     monkeypatch.setattr(chronometry_handler, "process_chronometry_response", forbidden_chrono)
@@ -441,7 +454,7 @@ async def test_task_like_reply_is_owned_by_pending_memoir(monkeypatch):
     monkeypatch.setattr(messages, "get_user", fake_get_user)
     monkeypatch.setattr(messages, "_get_persisted_interaction", memoir_state)
     monkeypatch.setattr(messages, "_save_memoir_answer", fake_save)
-    monkeypatch.setattr(messages, "dispatch", forbidden_dispatch)
+    monkeypatch.setattr(messages, "dispatch_result", forbidden_dispatch)
 
     reply = SimpleNamespace(message_id=100)
     msg = FakeMessage(
@@ -602,7 +615,7 @@ async def test_task_request_bypasses_pending_chronometry(monkeypatch):
 
     monkeypatch.setattr(messages, "async_session", lambda: FakeSessionContext())
     monkeypatch.setattr(messages, "get_user", fake_get_user)
-    monkeypatch.setattr(messages, "dispatch", fake_dispatch)
+    monkeypatch.setattr(messages, "dispatch_result", fake_dispatch)
     monkeypatch.setattr(chronometry_scheduler, "is_awaiting_response", lambda user_id: True)
     monkeypatch.setattr(chronometry_scheduler, "get_chrono_message_id", lambda user_id: 100)
     monkeypatch.setattr(chronometry_handler, "process_chronometry_response", forbidden_chrono)
@@ -734,7 +747,7 @@ async def test_failed_mutation_is_closed_in_history_before_next_turn(monkeypatch
     monkeypatch.setattr(messages, "async_session", lambda: FakeSessionContext())
     monkeypatch.setattr(messages, "get_user", fake_get_user)
     monkeypatch.setattr(messages, "get_prompt", fake_get_prompt)
-    monkeypatch.setattr(messages, "dispatch", fake_dispatch)
+    monkeypatch.setattr(messages, "dispatch_result", fake_dispatch)
     monkeypatch.setattr(messages, "llm_client", Client())
     monkeypatch.setattr(messages, "llm_queue", Queue())
     monkeypatch.setattr("bot.db.crud.llm_logs.log_llm_request", fake_log)

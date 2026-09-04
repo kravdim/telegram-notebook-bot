@@ -1,6 +1,8 @@
 """Async SQLAlchemy engine и session factory."""
 
 from collections.abc import AsyncGenerator
+from contextlib import asynccontextmanager
+from contextvars import ContextVar
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
@@ -14,11 +16,55 @@ engine = create_async_engine(
     pool_pre_ping=True,
 )
 
-async_session = async_sessionmaker(
+_command_session: ContextVar["CommandSession | None"] = ContextVar("command_session", default=None)
+
+
+class CommandSession(AsyncSession):
+    """Legacy repositories flush inside an explicitly owned command transaction."""
+
+    rollback_only = False
+
+    async def commit(self) -> None:
+        if _command_session.get() is self:
+            await self.flush()
+        else:
+            await super().commit()
+
+    async def rollback(self) -> None:
+        if _command_session.get() is self:
+            self.rollback_only = True
+        await super().rollback()
+
+
+session_factory = async_sessionmaker(
     engine,
-    class_=AsyncSession,
+    class_=CommandSession,
     expire_on_commit=False,
 )
+
+
+@asynccontextmanager
+async def async_session() -> AsyncGenerator[CommandSession, None]:
+    borrowed = _command_session.get()
+    if borrowed is not None:
+        yield borrowed
+    else:
+        async with session_factory() as session:
+            yield session
+
+
+@asynccontextmanager
+async def command_transaction(session: CommandSession) -> AsyncGenerator[None, None]:
+    """Bind nested repositories to one transaction; caller owns durable commit."""
+    if _command_session.get() is not None:
+        raise RuntimeError("Nested command transaction")
+    token = _command_session.set(session)
+    try:
+        yield
+        if session.rollback_only:
+            raise RuntimeError("Command rolled back its transaction")
+    finally:
+        _command_session.reset(token)
 
 
 async def get_session() -> AsyncGenerator[AsyncSession, None]:

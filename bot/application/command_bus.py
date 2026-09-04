@@ -1,12 +1,11 @@
 """Small typed command bus independent of Telegram and LLM providers."""
 
-import json
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any, Literal
 
+from bot.application.contracts import ToolName
 from bot.application.intents import ApplicationIntent
-from bot.llm.contracts import ToolName
 
 
 @dataclass(frozen=True, slots=True)
@@ -33,28 +32,6 @@ class CommandResult:
 
     def list_payload(self) -> list[dict[str, Any]]:
         return self.payload if isinstance(self.payload, list) else []
-
-    @classmethod
-    def from_legacy_text(cls, text: str) -> "CommandResult":
-        """Contain legacy handler protocols at one application boundary."""
-        if text.startswith("CONFIRM_DELETE:"):
-            _, task_id, title = text.split(":", 2)
-            return cls(text, "confirm_delete", {"task_id": task_id, "title": title})
-        if text.startswith("CHOOSE_DELETE:"):
-            choices = json.loads(text.split(":", 1)[1])
-            return cls(text, "choose_delete", choices)
-        if text.startswith("CONFIRM_PROJECT_COMPLETE:"):
-            _, project_id, title, open_count = text.split(":", 3)
-            return cls(
-                text,
-                "confirm_project_complete",
-                {"project_id": project_id, "title": title, "open_count": open_count},
-            )
-        if text.startswith("PROJECT_CREATED:"):
-            _, project_id, title = text.split(":", 2)
-            return cls(text, "project_created", {"project_id": project_id, "title": title})
-        return cls(text)
-
 
 CommandHandler = Callable[[CommandContext, ApplicationIntent], Awaitable[CommandResult]]
 

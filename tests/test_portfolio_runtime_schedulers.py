@@ -190,49 +190,33 @@ async def test_weekly_review_claims_then_releases_if_delivery_fails(monkeypatch)
     async def release(_, *args):
         released.append(args)
 
-    monkeypatch.setattr(weekly_review, "release_date_marker", release)
     await weekly_review.send_weekly_review(object())
-    assert released == [(7, "weekly_review_sent_date", now.date())]
+    assert released == []
+    weekly_review.claim_date_marker.assert_not_awaited()
 
 
 @pytest.mark.asyncio
 async def test_sweep_marks_success_and_records_terminal_delivery_failure(monkeypatch):
-    now = pendulum.datetime(2026, 8, 3, 12, tz="UTC")
-    reminders = [
-        SimpleNamespace(id=1, user_id=7, message="<safe>", remind_at=now.subtract(minutes=2)),
-        SimpleNamespace(id=2, user_id=8, message="bad", remind_at=now),
-    ]
-    session = RecordingSession()
-    monkeypatch.setattr(sweep, "async_session", lambda: FakeSessionContext(session))
-    monkeypatch.setattr(sweep, "get_pending_reminders", AsyncMock(return_value=reminders))
-    monkeypatch.setattr(sweep.pendulum, "now", lambda _: now)
-    monkeypatch.setattr(sweep, "build_snooze_keyboard", lambda _: SimpleNamespace(as_markup=lambda: "kb"))
-    monkeypatch.setattr(sweep, "mark_sent", AsyncMock())
-    failures = []
-
-    async def failure(_, *args, **kwargs):
-        failures.append((args, kwargs))
-
-    monkeypatch.setattr(sweep, "record_delivery_failure", failure)
-    bot = SimpleNamespace(send_message=AsyncMock(side_effect=[None, sweep.TelegramForbiddenError(Mock(), "blocked")]))
+    sender = AsyncMock()
+    monkeypatch.setattr(sweep, "send_pending_reminders", sender)
+    bot = object()
     await sweep.sweep_missed_reminders(bot)
-    sweep.mark_sent.assert_awaited_once_with(session, 1)
-    assert failures == [((2, "TelegramForbiddenError"), {"terminal": True})]
-    session.rollback.assert_awaited_once()
+    sender.assert_awaited_once_with(bot)
 
 
 @pytest.mark.asyncio
 async def test_pending_reminders_deliver_and_record_terminal_failure(monkeypatch):
     now = pendulum.datetime(2026, 8, 3, 12, tz="UTC")
     pending = [
-        SimpleNamespace(id=1, user_id=7, message="<safe>", remind_at=now.subtract(minutes=3)),
-        SimpleNamespace(id=2, user_id=8, message="blocked", remind_at=now),
+        SimpleNamespace(id=1, token="one", user_id=7, message="<safe>", remind_at=now.subtract(minutes=3)),
+        SimpleNamespace(id=2, token="two", user_id=8, message="blocked", remind_at=now),
     ]
     session = RecordingSession()
     metrics = observability.MetricsRegistry()
     failures = []
     monkeypatch.setattr(reminders, "async_session", lambda: FakeSessionContext(session))
-    monkeypatch.setattr(reminders, "get_pending_reminders", AsyncMock(return_value=pending))
+    monkeypatch.setattr(reminders, "claim_due_reminders", AsyncMock(return_value=pending))
+    monkeypatch.setattr(reminders, "claim_is_active", AsyncMock(return_value=True))
     monkeypatch.setattr(reminders.pendulum, "now", lambda _: now)
     monkeypatch.setattr(reminders, "build_snooze_keyboard", lambda _: SimpleNamespace(as_markup=lambda: "kb"))
     monkeypatch.setattr(reminders, "mark_sent", AsyncMock())
@@ -250,19 +234,21 @@ async def test_pending_reminders_deliver_and_record_terminal_failure(monkeypatch
 
     await reminders.send_pending_reminders(bot)
 
-    reminders.mark_sent.assert_awaited_once_with(session, 1)
-    assert failures == [((2, "TelegramForbiddenError"), {"terminal": True})]
+    reminders.mark_sent.assert_awaited_once_with(session, 1, lease_token="one")
+    assert failures == [((2, "TelegramForbiddenError"), {
+        "terminal": True, "lease_token": "two", "retry_after": None,
+    })]
     assert metrics.snapshot()["counters"] == {
         "reminders.delivered": 1,
         "reminders.delivery_error": 1,
     }
-    session.rollback.assert_awaited_once()
+    session.rollback.assert_not_awaited()
 
 
 @pytest.mark.asyncio
 async def test_pending_reminders_empty_list_never_contacts_telegram(monkeypatch):
     monkeypatch.setattr(reminders, "async_session", lambda: FakeSessionContext())
-    monkeypatch.setattr(reminders, "get_pending_reminders", AsyncMock(return_value=[]))
+    monkeypatch.setattr(reminders, "claim_due_reminders", AsyncMock(return_value=[]))
     bot = SimpleNamespace(send_message=AsyncMock())
 
     await reminders.send_pending_reminders(bot)
@@ -560,12 +546,15 @@ async def test_weekly_review_collects_stats_formats_and_sends(monkeypatch):
     monkeypatch.setattr(weekly_review, "get_value_stats", AsyncMock(return_value=[]))
     monkeypatch.setattr(weekly_review, "get_user_projects", AsyncMock(return_value=[project]))
     monkeypatch.setattr(weekly_review, "get_project_progress", AsyncMock(return_value={"percent": 50, "done": 1, "total": 2}))
+    delivery = AsyncMock(return_value=SimpleNamespace(completed=True))
+    monkeypatch.setattr(weekly_review, "deliver_batch", delivery)
 
     await weekly_review._send_review(bot, user, "Europe/Moscow")
 
-    bot.send_message.assert_awaited_once()
-    assert bot.send_message.await_args.kwargs["chat_id"] == 7
-    assert "Выполнено задач:</b> 1" in bot.send_message.await_args.kwargs["text"]
+    delivery.assert_awaited_once()
+    parts = delivery.await_args.kwargs["parts"]
+    assert parts[0].chat_id == 7
+    assert "Выполнено задач:</b> 1" in parts[0].text
 
 
 @pytest.mark.asyncio

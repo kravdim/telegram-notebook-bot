@@ -7,7 +7,6 @@ import pendulum
 from aiogram import Bot
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
-from bot.application.interactions import interaction_service
 from bot.db.crud.chronometry import get_today_entries
 from bot.db.crud.memoir import get_memoir_entries
 from bot.db.crud.users import claim_date_marker, get_all_users
@@ -17,6 +16,7 @@ from bot.formatters.chronometry import format_day_timeline
 from bot.formatters.memoir import format_memoir_question, format_weekly_review
 from bot.logging_safety import error_type
 from bot.services.delivery import DeliveryPartSpec, DeliveryResult, deliver_batch
+from bot.services.interactions import interaction_service
 
 logger = logging.getLogger(__name__)
 

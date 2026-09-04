@@ -238,6 +238,8 @@ class ProcessedRequest(Base):
         BigInteger, ForeignKey("users.telegram_id", ondelete="CASCADE"), nullable=False
     )
     status: Mapped[str] = mapped_column(Text, nullable=False, default="processing")
+    action_plan: Mapped[Optional[list]] = mapped_column(JSONB)
+    action_results: Mapped[dict] = mapped_column(JSONB, nullable=False, server_default="{}")
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default="now()"
     )
@@ -487,13 +489,19 @@ class Reminder(Base):
     snooze_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     delivery_attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     last_error: Mapped[Optional[str]] = mapped_column(Text)
+    series_timezone: Mapped[str] = mapped_column(
+        Text, nullable=False, server_default="Europe/Moscow"
+    )
+    lease_token: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True))
+    lease_expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    next_attempt_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default="now()"
     )
 
     __table_args__ = (
         CheckConstraint(
-            "status IN ('pending', 'delivered', 'snoozed', 'resolved', 'cancelled')",
+            "status IN ('pending', 'delivered', 'snoozed', 'resolved', 'cancelled', 'failed')",
             name="ck_reminders_status",
         ),
         CheckConstraint("snooze_count >= 0", name="ck_reminders_snooze_count"),

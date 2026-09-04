@@ -1,0 +1,17 @@
+{
+  "manifest_version": 1,
+  "repository_commit": "05a82b795b9df67fc1d439f51668d91e4c1f848c",
+  "expected_cases": 85,
+  "files": {
+    "userbot/__init__.py": "b22d5ffef97663b1f0f57c6c91f46689e81e88970ed0356a584fd9fd916dc76f",
+    "userbot/client.py": "0631872790a6de927c3de8c782493172c894a7c43f180c51d14b4317dcc424d4",
+    "userbot/config.py": "27f37a3f5de0859f53693f5d576bf0601b14afca43688bd88c7d5053ca0c1e99",
+    "userbot/actions.py": "9cd7843715a7f29fe7338dc9c0f739b651ce0e878370369a1e88f31d2ad67f68",
+    "userbot/safety.py": "5cb5b8d4d480edaf51a34f936ece808962d2042f52608a1e003b83dc910dfc27",
+    "tests_dailyplanner/run_messy_human.py": "5e83c55007fd77a10b86c97bd38b69d8575287b3dd6f924198b9db05eaea129e",
+    "tests_dailyplanner/run_dp_test.py": "f19b7ccabc2d531e8595c1859469a0e4250ff6341a516aa4cab889342fd654e8",
+    "tests_dailyplanner/isolation.py": "7eb0f2bc6a74a39b7ea4dc4f9e1727cb87e90d4556c0de20b488f4a2a8b96f07",
+    "uv.lock": "acce6a90fa5e5f1498f6f97acad7bd7d23f8aef186890d01ff2984a181a0f2b7",
+    "pyproject.toml": "3aaeb8e85a65415ebca06ca703607ce034c3f12ce619bd047ceba77cb8c9d03c"
+  }
+}

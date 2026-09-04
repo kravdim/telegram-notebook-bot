@@ -8,10 +8,10 @@ import secrets
 import pendulum
 from aiogram import Bot
 
-from bot.application.interactions import interaction_service
 from bot.db.crud.users import get_all_users, update_user_settings
 from bot.db.engine import async_session
 from bot.logging_safety import error_type
+from bot.services.interactions import interaction_service
 
 logger = logging.getLogger(__name__)
 

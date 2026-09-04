@@ -64,8 +64,8 @@ async def test_command_bus_routes_typed_intent_without_provider_payload():
     assert result.text == "42:отчёт"
 
 
-def test_legacy_ui_protocol_is_contained_in_typed_result():
-    result = CommandResult.from_legacy_text("CONFIRM_DELETE:abc:Старый отчёт")
+def test_typed_result_preserves_title():
+    result = CommandResult("Удалить?", "confirm_delete", {"task_id": "abc", "title": "Старый отчёт"})
     assert result.kind == "confirm_delete"
     assert result.payload == {"task_id": "abc", "title": "Старый отчёт"}
 
