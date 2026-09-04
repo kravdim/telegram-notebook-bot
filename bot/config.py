@@ -28,16 +28,18 @@ def _is_positive(value: Any) -> bool:
     return isinstance(value, (int, float)) and not isinstance(value, bool) and value > 0
 
 
-def validate_runtime_config(  # noqa: C901, PLR0912 - REVIEW-20260829 legacy ratchet
-    config: dict[str, Any], provider_keys: dict[str, str]
-) -> list[str]:
-    """Validate provider and operational settings before starting workers."""
+def _mapping_section(config: dict[str, Any], name: str, errors: list[str]) -> dict:
+    section = config.get(name, {})
+    if isinstance(section, dict):
+        return section
+    errors.append(f"{name} config must be a mapping")
+    return {}
+
+
+def _validate_llm(config: dict[str, Any], provider_keys: dict[str, str]) -> list[str]:
     errors: list[str] = []
     supported_llm = {"gemini", "minimax", "zhipu", "openai"}
-    llm = config.get("llm", {})
-    if not isinstance(llm, dict):
-        errors.append("llm config must be a mapping")
-        llm = {}
+    llm = _mapping_section(config, "llm", errors)
     if not _is_positive(llm.get("total_timeout_sec", 45)):
         errors.append("LLM total_timeout_sec must be positive")
     for role in ("main", "fallback"):
@@ -59,11 +61,12 @@ def validate_runtime_config(  # noqa: C901, PLR0912 - REVIEW-20260829 legacy rat
         retries = provider_cfg.get("max_retries", 2 if role == "main" else 1)
         if not isinstance(retries, int) or isinstance(retries, bool) or retries < 0:
             errors.append(f"LLM {role} max_retries must be a non-negative integer")
+    return errors
 
-    embedding = config.get("embedding", {})
-    if not isinstance(embedding, dict):
-        errors.append("embedding config must be a mapping")
-        embedding = {}
+
+def _validate_embedding(config: dict[str, Any], provider_keys: dict[str, str]) -> list[str]:
+    errors: list[str] = []
+    embedding = _mapping_section(config, "embedding", errors)
     embed_provider = embedding.get("provider", "ollama")
     if embed_provider not in {"disabled", "ollama", "cloud"}:
         errors.append(f"unsupported embedding provider: {embed_provider}")
@@ -75,11 +78,12 @@ def validate_runtime_config(  # noqa: C901, PLR0912 - REVIEW-20260829 legacy rat
         errors.append("embedding dimensions must match Vector(768)")
     if embed_provider == "cloud" and not provider_keys.get("embedding"):
         errors.append("API key is missing for cloud embedding provider")
+    return errors
 
-    stt = config.get("stt", {})
-    if not isinstance(stt, dict):
-        errors.append("stt config must be a mapping")
-        stt = {}
+
+def _validate_stt(config: dict[str, Any], provider_keys: dict[str, str]) -> list[str]:
+    errors: list[str] = []
+    stt = _mapping_section(config, "stt", errors)
     stt_provider = stt.get("provider", "local_whisper")
     if stt_provider not in {"disabled", "local_whisper", "groq", "openai"}:
         errors.append(f"unsupported STT provider: {stt_provider}")
@@ -91,11 +95,12 @@ def validate_runtime_config(  # noqa: C901, PLR0912 - REVIEW-20260829 legacy rat
         errors.append("STT warmup_timeout_sec must be positive")
     if stt_provider in {"groq", "openai"} and not provider_keys.get(stt_provider):
         errors.append(f"API key is missing for STT provider: {stt_provider}")
+    return errors
 
-    scheduler = config.get("scheduler", {})
-    if not isinstance(scheduler, dict):
-        errors.append("scheduler config must be a mapping")
-        scheduler = {}
+
+def _validate_scheduler(config: dict[str, Any]) -> list[str]:
+    errors: list[str] = []
+    scheduler = _mapping_section(config, "scheduler", errors)
     backup_hour = scheduler.get("backup_hour", 3)
     if not isinstance(backup_hour, int) or isinstance(backup_hour, bool) or not 0 <= backup_hour <= 23:
         errors.append("scheduler backup_hour must be an integer from 0 to 23")
@@ -107,11 +112,12 @@ def validate_runtime_config(  # noqa: C901, PLR0912 - REVIEW-20260829 legacy rat
     ):
         if not _is_positive(scheduler.get(key, 1)):
             errors.append(f"scheduler {key} must be positive")
+    return errors
 
-    slo = config.get("slo", {})
-    if not isinstance(slo, dict):
-        errors.append("slo config must be a mapping")
-        slo = {}
+
+def _validate_slo_and_export(config: dict[str, Any]) -> list[str]:
+    errors: list[str] = []
+    slo = _mapping_section(config, "slo", errors)
     for key, default in (
         ("reminder_lag_seconds", 120),
         ("backup_max_age_hours", 30),
@@ -119,13 +125,27 @@ def validate_runtime_config(  # noqa: C901, PLR0912 - REVIEW-20260829 legacy rat
     ):
         if not _is_positive(slo.get(key, default)):
             errors.append(f"slo {key} must be positive")
-    export = config.get("export", {})
-    if not isinstance(export, dict):
-        errors.append("export config must be a mapping")
-        export = {}
+    export = _mapping_section(config, "export", errors)
     if not _is_positive(export.get("max_bytes", 45 * 1024 * 1024)):
         errors.append("export max_bytes must be positive")
     return errors
+
+
+def validate_runtime_config(
+    config: dict[str, Any], provider_keys: dict[str, str]
+) -> list[str]:
+    """Validate provider and operational settings before starting workers."""
+    return [
+        error
+        for validator_errors in (
+            _validate_llm(config, provider_keys),
+            _validate_embedding(config, provider_keys),
+            _validate_stt(config, provider_keys),
+            _validate_scheduler(config),
+            _validate_slo_and_export(config),
+        )
+        for error in validator_errors
+    ]
 
 
 class Settings(BaseSettings):

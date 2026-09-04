@@ -24,17 +24,8 @@ _BACKUP_DIR = Path(
 )
 
 
-async def run_backup() -> Path | None:  # noqa: C901, PLR0915 - REVIEW-20260829 legacy ratchet
-    """Выполнить pg_dump и удалить старые бэкапы."""
-    yaml_cfg = settings.yaml_config
-    retention_days = yaml_cfg.get("scheduler", {}).get("backup_retention_days", 30)
-
-    _BACKUP_DIR.mkdir(parents=True, exist_ok=True)
-
-    now = pendulum.now()
-    filename = f"notebook_bot_{now.format('YYYY-MM-DD_HHmmss')}.sql.gz"
-    filepath = _BACKUP_DIR / filename
-
+def _dump_command_and_env() -> tuple[list[str], dict[str, str]] | None:
+    """Build a secret-safe pg_dump invocation from the configured database URL."""
     try:
         db_url = make_url(settings.database_url)
         user = db_url.username or ""
@@ -50,7 +41,6 @@ async def run_backup() -> Path | None:  # noqa: C901, PLR0915 - REVIEW-20260829 
         )
         metrics.increment("backup.error")
         return None
-
     pg_dump_bin = _find_pg_dump()
     if not pg_dump_bin:
         logger.error(
@@ -58,18 +48,40 @@ async def run_backup() -> Path | None:  # noqa: C901, PLR0915 - REVIEW-20260829 
         )
         metrics.increment("backup.error")
         return None
-
     env = os.environ.copy()
     env["PGPASSWORD"] = password
+    command = [
+        pg_dump_bin,
+        "-h", host,
+        "-p", port,
+        "-U", user,
+        "-d", dbname,
+        "--no-owner",
+        "--no-acl",
+    ]
+    return command, env
 
-    pg_dump = None
-    gzip_proc = None
-    pg_stderr_task = None
-    gzip_stderr_task = None
+
+async def _stop_pipeline(processes: tuple, stderr_tasks: tuple) -> None:
+    for process in processes:
+        if process and process.returncode is None:
+            process.kill()
+    await asyncio.gather(
+        *(process.wait() for process in processes if process),
+        return_exceptions=True,
+    )
+    await asyncio.gather(
+        *(task for task in stderr_tasks if task),
+        return_exceptions=True,
+    )
+
+
+async def _stream_backup(filepath: Path, command: list[str], env: dict[str, str]):
+    """Pipe a portable pg_dump stream through gzip and return process evidence."""
+    pg_dump = gzip_proc = pg_stderr_task = gzip_stderr_task = None
     try:
         pg_dump = await asyncio.create_subprocess_exec(
-            pg_dump_bin, "-h", host, "-p", port, "-U", user, "-d", dbname,
-            "--no-owner", "--no-acl",
+            *command,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             env=env,
@@ -89,99 +101,91 @@ async def run_backup() -> Path | None:  # noqa: C901, PLR0915 - REVIEW-20260829 
             gzip_stderr_task = asyncio.create_task(gzip_proc.stderr.read())
             async with asyncio.timeout(300):
                 while line := await pg_dump.stdout.readline():
-                    # pg_dump 17 emits this setting even when dumping an older
-                    # server; PostgreSQL <=16 rejects it during restore.
-                    if not _is_portable_dump_line(line):
-                        continue
-                    gzip_proc.stdin.write(line)
-                    await gzip_proc.stdin.drain()
+                    if _is_portable_dump_line(line):
+                        gzip_proc.stdin.write(line)
+                        await gzip_proc.stdin.drain()
                 gzip_proc.stdin.close()
                 await gzip_proc.stdin.wait_closed()
-
                 await asyncio.gather(pg_dump.wait(), gzip_proc.wait())
                 pg_stderr, gzip_stderr = await asyncio.gather(
                     pg_stderr_task, gzip_stderr_task
                 )
+        return pg_dump.returncode, gzip_proc.returncode, pg_stderr, gzip_stderr
+    except BaseException:
+        await _stop_pipeline(
+            (pg_dump, gzip_proc), (pg_stderr_task, gzip_stderr_task)
+        )
+        raise
 
-        if pg_dump.returncode != 0:
-            logger.error(
-                "pg_dump failed: rc=%d stderr_bytes=%d",
-                pg_dump.returncode,
-                len(pg_stderr),
+
+async def _record_backup_success(filepath: Path) -> None:
+    digest = hashlib.sha256()
+    with open(filepath, "rb") as source:
+        for chunk in iter(lambda: source.read(1024 * 1024), b""):
+            digest.update(chunk)
+    checksum_path = filepath.with_suffix(filepath.suffix + ".sha256")
+    checksum_path.write_text(
+        f"{digest.hexdigest()}  {filepath.name}\n", encoding="ascii"
+    )
+    try:
+        async with async_session() as session:
+            await set_operational_state(
+                session,
+                "backup.last_success",
+                {
+                    "file": filepath.name,
+                    "bytes": filepath.stat().st_size,
+                    "sha256": digest.hexdigest(),
+                    "checksum_verified_at": pendulum.now("UTC").to_iso8601_string(),
+                },
             )
-            filepath.unlink(missing_ok=True)
-            metrics.increment("backup.error")
-        elif gzip_proc.returncode != 0:
-            logger.error(
-                "gzip failed: rc=%d stderr_bytes=%d",
-                gzip_proc.returncode,
-                len(gzip_stderr),
-            )
-            filepath.unlink(missing_ok=True)
-            metrics.increment("backup.error")
-        else:
-            size_mb = filepath.stat().st_size / (1024 * 1024)
-            digest = hashlib.sha256()
-            with open(filepath, "rb") as source:
-                for chunk in iter(lambda: source.read(1024 * 1024), b""):
-                    digest.update(chunk)
-            checksum_path = filepath.with_suffix(filepath.suffix + ".sha256")
-            checksum_path.write_text(
-                f"{digest.hexdigest()}  {filepath.name}\n", encoding="ascii"
-            )
-            try:
-                async with async_session() as session:
-                    await set_operational_state(
-                        session,
-                        "backup.last_success",
-                        {
-                            "file": filepath.name,
-                            "bytes": filepath.stat().st_size,
-                            "sha256": digest.hexdigest(),
-                            "checksum_verified_at": pendulum.now("UTC").to_iso8601_string(),
-                        },
-                    )
-            except Exception as state_error:
-                # The archive is still valid. Do not delete it merely because the
-                # observability marker could not be persisted.
-                logger.error(
-                    "Бэкап создан, но SLO-маркер не сохранён: error_type=%s",
-                    error_type(state_error),
-                )
-            metrics.increment("backup.success")
-            logger.info("Бэкап создан: %s (%.1f MB)", filename, size_mb)
+    except Exception as state_error:
+        logger.error(
+            "Бэкап создан, но SLO-маркер не сохранён: error_type=%s",
+            error_type(state_error),
+        )
+    metrics.increment("backup.success")
+    size_mb = filepath.stat().st_size / (1024 * 1024)
+    logger.info("Бэкап создан: %s (%.1f MB)", filepath.name, size_mb)
+
+
+async def _finalize_backup(filepath: Path, evidence) -> bool:
+    pg_returncode, gzip_returncode, pg_stderr, gzip_stderr = evidence
+    if pg_returncode != 0:
+        logger.error("pg_dump failed: rc=%d stderr_bytes=%d", pg_returncode, len(pg_stderr))
+    elif gzip_returncode != 0:
+        logger.error("gzip failed: rc=%d stderr_bytes=%d", gzip_returncode, len(gzip_stderr))
+    else:
+        await _record_backup_success(filepath)
+        return True
+    filepath.unlink(missing_ok=True)
+    metrics.increment("backup.error")
+    return False
+
+
+async def run_backup() -> Path | None:
+    """Выполнить pg_dump и удалить старые бэкапы."""
+    retention_days = settings.yaml_config.get("scheduler", {}).get(
+        "backup_retention_days", 30
+    )
+    _BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+    filename = f"notebook_bot_{pendulum.now().format('YYYY-MM-DD_HHmmss')}.sql.gz"
+    filepath = _BACKUP_DIR / filename
+    invocation = _dump_command_and_env()
+    if invocation is None:
+        return None
+
+    try:
+        evidence = await _stream_backup(filepath, *invocation)
+        await _finalize_backup(filepath, evidence)
     except asyncio.TimeoutError:
         logger.error("Таймаут бэкапа")
-        for process in (pg_dump, gzip_proc):
-            if process and process.returncode is None:
-                process.kill()
-        await asyncio.gather(
-            *(process.wait() for process in (pg_dump, gzip_proc) if process),
-            return_exceptions=True,
-        )
-        await asyncio.gather(
-            *(task for task in (pg_stderr_task, gzip_stderr_task) if task),
-            return_exceptions=True,
-        )
         filepath.unlink(missing_ok=True)
         metrics.increment("backup.error")
     except Exception as e:
         logger.error("Ошибка бэкапа: error_type=%s", error_type(e))
-        for process in (pg_dump, gzip_proc):
-            if process and process.returncode is None:
-                process.kill()
-        await asyncio.gather(
-            *(process.wait() for process in (pg_dump, gzip_proc) if process),
-            return_exceptions=True,
-        )
-        await asyncio.gather(
-            *(task for task in (pg_stderr_task, gzip_stderr_task) if task),
-            return_exceptions=True,
-        )
         filepath.unlink(missing_ok=True)
         metrics.increment("backup.error")
-
-    # Ротация
     _rotate_backups(retention_days)
     return filepath if filepath.exists() else None
 

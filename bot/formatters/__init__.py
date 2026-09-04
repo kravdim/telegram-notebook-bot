@@ -1,6 +1,7 @@
 """Форматирование сообщений для Telegram."""
 
 import re
+from dataclasses import dataclass, field
 from typing import List
 
 MAX_MESSAGE_LEN = 4096
@@ -35,68 +36,72 @@ _HTML_TAG_RE = re.compile(
 )
 
 
-def split_html_message(  # noqa: C901 - REVIEW-20260829 legacy ratchet
-    text: str, max_len: int = MAX_MESSAGE_LEN
-) -> List[str]:
-    """Разбить Telegram HTML, не разрывая entity и балансируя теги."""
-    if len(text) <= max_len:
-        return [text]
+@dataclass
+class _HtmlChunker:
+    max_len: int
+    chunks: list[str] = field(default_factory=list)
+    current: str = ""
+    stack: list[tuple[str, str]] = field(default_factory=list)
 
-    chunks: list[str] = []
-    current = ""
-    stack: list[tuple[str, str]] = []
+    def closing_tags(self) -> str:
+        return "".join(f"</{name}>" for name, _ in reversed(self.stack))
 
-    def closing_tags() -> str:
-        return "".join(f"</{name}>" for name, _ in reversed(stack))
+    def flush(self) -> None:
+        if self.current:
+            self.chunks.append(self.current + self.closing_tags())
+            self.current = "".join(open_tag for _, open_tag in self.stack)
 
-    def flush() -> None:
-        nonlocal current
-        if current:
-            chunks.append(current + closing_tags())
-            current = "".join(open_tag for _, open_tag in stack)
+    def add_tag(self, token: str, is_close: bool, name: str) -> None:
+        if len(self.current) + len(token) + len(self.closing_tags()) > self.max_len:
+            self.flush()
+        self.current += token
+        if not is_close:
+            self.stack.append((name, token))
+            return
+        for index in range(len(self.stack) - 1, -1, -1):
+            if self.stack[index][0] == name:
+                self.stack.pop(index)
+                return
 
-    for token in _HTML_TOKEN_RE.split(text):
-        if not token:
-            continue
-        tag = _HTML_TAG_RE.match(token)
-        if tag:
-            is_close, name = bool(tag.group(1)), tag.group(2).lower()
-            if len(current) + len(token) + len(closing_tags()) > max_len:
-                flush()
-            current += token
-            if is_close:
-                for index in range(len(stack) - 1, -1, -1):
-                    if stack[index][0] == name:
-                        stack.pop(index)
-                        break
-            else:
-                stack.append((name, token))
-            continue
-
-        # Entity — атомарный token; обычный текст режем с учётом закрывающих тегов.
+    def add_text(self, token: str) -> None:
         is_entity = token.startswith("&") and token.endswith(";")
         remaining = token
         while remaining:
-            reserve = len(closing_tags())
-            available = max_len - len(current) - reserve
+            available = self.max_len - len(self.current) - len(self.closing_tags())
             if len(remaining) <= available:
-                current += remaining
-                break
+                self.current += remaining
+                return
             if is_entity:
-                flush()
-                current += remaining
-                break
+                self.flush()
+                self.current += remaining
+                return
             if available <= 0:
-                flush()
+                self.flush()
                 continue
             cut = max(1, available)
-            preferred = max(remaining.rfind("\n", 0, cut + 1), remaining.rfind(" ", 0, cut + 1))
-            if preferred > 0:
-                cut = preferred + 1
-            current += remaining[:cut]
+            preferred = max(
+                remaining.rfind("\n", 0, cut + 1),
+                remaining.rfind(" ", 0, cut + 1),
+            )
+            cut = preferred + 1 if preferred > 0 else cut
+            self.current += remaining[:cut]
             remaining = remaining[cut:]
-            flush()
+            self.flush()
 
-    if current:
-        chunks.append(current + closing_tags())
-    return chunks
+    def finish(self) -> list[str]:
+        if self.current:
+            self.chunks.append(self.current + self.closing_tags())
+        return self.chunks
+
+
+def split_html_message(text: str, max_len: int = MAX_MESSAGE_LEN) -> List[str]:
+    """Разбить Telegram HTML, не разрывая entity и балансируя теги."""
+    if len(text) <= max_len:
+        return [text]
+    chunker = _HtmlChunker(max_len)
+    for token in filter(None, _HTML_TOKEN_RE.split(text)):
+        if tag := _HTML_TAG_RE.match(token):
+            chunker.add_tag(token, bool(tag.group(1)), tag.group(2).lower())
+        else:
+            chunker.add_text(token)
+    return chunker.finish()
