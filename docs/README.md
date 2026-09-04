@@ -5,9 +5,14 @@
 - [`ARCHITECTURE.md`](ARCHITECTURE.md) — компоненты и контракты;
 - [`OPERATIONS.md`](OPERATIONS.md) — эксплуатация, release gate и recovery;
 - [`PRIVACY.md`](PRIVACY.md) — хранение, экспорт и удаление данных;
+- [`REMEDIATION_PLAN_2026-09-04.md`](REMEDIATION_PLAN_2026-09-04.md)
+  — рабочий план исполнения комплексного ревью: этапы, зависимости, проверки,
+  выпуск и таблица закрытия R01–R16;
+- [`REVIEW_2026-09-04_COMPREHENSIVE_INDEPENDENT.md`](REVIEW_2026-09-04_COMPREHENSIVE_INDEPENDENT.md)
+  — актуальное комплексное ревью `v0.5.0`: архитектура, корректность, UX,
+  безопасность, тестирование, выпуск и документация; рекомендации и критерии приёмки;
 - [`REVIEW_2026-09-02_V032_INDEPENDENT.md`](REVIEW_2026-09-02_V032_INDEPENDENT.md)
-  — актуальная независимая перепроверка `v0.3.2`, release blockers и критерии
-  следующей приёмки;
+  — историческая независимая перепроверка `v0.3.2` и условия приёмки того релиза;
 - [`REVIEW_2026-09-02_INDEPENDENT.md`](REVIEW_2026-09-02_INDEPENDENT.md) —
   предыдущее повторное приёмочное ревью и backlog до образцового релиза;
 - [`REVIEW_2026-09-02_INDEPENDENT_REMEDIATION.md`](REVIEW_2026-09-02_INDEPENDENT_REMEDIATION.md)
