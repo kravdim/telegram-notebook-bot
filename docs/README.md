@@ -23,8 +23,10 @@
 - [`REVIEW_2026-08-29_INDEPENDENT_REMEDIATION.md`](REVIEW_2026-08-29_INDEPENDENT_REMEDIATION.md)
   — состояние закрытия замечаний и оставшиеся внешние gates;
 - [`SESSION_CONTEXT_2026-09-03.md`](SESSION_CONTEXT_2026-09-03.md) — текущий
-  handoff релиза `v0.3.6`; remediation, immutable release, deployed revision и
-  полный live evidence зафиксированы явно;
+  предыдущий handoff релиза `v0.3.6`;
+- [`SESSION_CONTEXT_2026-09-04.md`](SESSION_CONTEXT_2026-09-04.md) — текущий
+  handoff релиза `v0.5.0`; milestones #4/#5, zero complexity debt, immutable
+  release, backup/restore, deployed revision и полный live evidence;
 - [`SESSION_CONTEXT_2026-09-02.md`](SESSION_CONTEXT_2026-09-02.md) — предыдущий
   handoff релизов `v0.3.1`–`v0.3.2`;
 - [`SESSION_CONTEXT_2026-08-30.md`](SESSION_CONTEXT_2026-08-30.md) — предыдущий
