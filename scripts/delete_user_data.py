@@ -7,8 +7,10 @@ import argparse
 import asyncio
 import json
 import uuid
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 from bot.config import BASE_DIR, settings
 from bot.db.crud.operational import get_operational_state, set_operational_state
@@ -35,141 +37,184 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-async def run(  # noqa: C901 - REVIEW-20260829 legacy ratchet
-    args: argparse.Namespace,
-) -> dict[str, object]:
-    user_id = args.telegram_id
-    expected = confirmation_phrase(user_id)
-    if args.execute and args.confirm != expected:
+@dataclass(frozen=True)
+class PreparedDeletion:
+    operation_key: str
+    operation: dict[str, Any]
+    original_whitelist: list[int]
+
+    @property
+    def whitelist_changed(self) -> bool:
+        return bool(self.operation.get("whitelist_changed"))
+
+
+def _validate_execution_request(
+    args: argparse.Namespace, user_id: int, expected: str
+) -> None:
+    if not args.execute:
+        return
+    if args.confirm != expected:
         raise ValueError(f"--execute requires --confirm {expected}")
-    if args.execute and user_id in settings.admin_telegram_ids:
+    if user_id in settings.admin_telegram_ids:
         raise ValueError("refusing to delete an administrator account")
-    if args.execute and settings.allow_all_users:
+    if settings.allow_all_users:
         raise ValueError("refusing deletion while ALLOW_ALL_USERS is enabled")
-    if args.execute and read_allowed_telegram_ids(args.config) != settings.allowed_telegram_ids:
+    if read_allowed_telegram_ids(args.config) != settings.allowed_telegram_ids:
         raise ValueError(
             "runtime whitelist differs from config.yaml; remove the environment override first"
         )
 
-    if not args.execute:
+
+async def _dry_run(user_id: int, expected: str) -> dict[str, object]:
+    async with async_session() as session:
+        counts = await user_data_counts(session, user_id)
+        await session.rollback()
+    return {
+        "mode": "dry-run",
+        "telegram_id": user_id,
+        "counts": counts,
+        "required_confirmation": expected,
+    }
+
+
+async def _completed_result(
+    user_id: int, config: Path
+) -> dict[str, object] | None:
+    async with async_session() as session:
+        current_counts = await user_data_counts(session, user_id)
+        await session.rollback()
+    current_whitelist = read_allowed_telegram_ids(config)
+    if any(current_counts.values()) or user_id in current_whitelist:
+        return None
+    return {
+        "mode": "already-completed",
+        "telegram_id": user_id,
+        "deleted_counts": {},
+        "verification": "all-user-data-zero",
+        "verification_counts": current_counts,
+        "whitelist_changed": False,
+    }
+
+
+async def _prepare_deletion(
+    user_id: int, config: Path
+) -> tuple[PreparedDeletion | None, dict[str, object] | None]:
+    operation_key = f"privacy.deletion.{user_id}"
+    async with async_session() as session:
+        existing = await get_operational_state(session, operation_key)
+        operation = dict(existing.value) if existing and existing.value else {}
+    if operation.get("phase") == "completed":
+        if result := await _completed_result(user_id, config):
+            return None, result
+        operation = {}
+    if not operation or operation.get("phase") == "rolled_back":
+        original_whitelist = read_allowed_telegram_ids(config)
+        operation = {
+            "operation_id": str(uuid.uuid4()),
+            "phase": "prepared",
+            "telegram_id": user_id,
+            "original_whitelist": original_whitelist,
+            "whitelist_changed": user_id in original_whitelist,
+        }
         async with async_session() as session:
-            counts = await user_data_counts(session, user_id)
-            await session.rollback()
-            return {
-                "mode": "dry-run",
+            await set_operational_state(session, operation_key, operation)
+    else:
+        original_whitelist = list(operation.get("original_whitelist", []))
+    return PreparedDeletion(operation_key, operation, original_whitelist), None
+
+
+async def _revoke_access(prepared: PreparedDeletion, user_id: int, config: Path) -> None:
+    current = read_allowed_telegram_ids(config)
+    revoked = [value for value in prepared.original_whitelist if value != user_id]
+    if current not in (prepared.original_whitelist, revoked):
+        raise RuntimeError(
+            "whitelist changed after deletion journal was prepared; operator reconciliation required"
+        )
+    if user_id in current:
+        remove_allowed_telegram_id(config, user_id)
+    async with async_session() as session:
+        await set_operational_state(
+            session,
+            prepared.operation_key,
+            {**prepared.operation, "phase": "access_revoked"},
+        )
+
+
+async def _mark_rollback(prepared: PreparedDeletion, user_id: int) -> None:
+    async with async_session() as session:
+        await set_operational_state(
+            session,
+            prepared.operation_key,
+            {
+                "operation_id": prepared.operation.get("operation_id"),
+                "phase": "rolled_back",
                 "telegram_id": user_id,
-                "counts": counts,
-                "required_confirmation": expected,
-            }
+                "whitelist_changed": prepared.whitelist_changed,
+            },
+        )
+
+
+async def _delete_data(
+    prepared: PreparedDeletion, user_id: int, config: Path
+) -> dict[str, int]:
+    async with async_session() as session:
+        try:
+            counts = await delete_user_data(session, user_id)
+            await set_operational_state(
+                session,
+                prepared.operation_key,
+                {
+                    "operation_id": prepared.operation.get("operation_id"),
+                    "phase": "completed",
+                    "telegram_id": user_id,
+                    "deleted_counts": counts,
+                    "whitelist_changed": prepared.whitelist_changed,
+                },
+                commit=False,
+            )
+            await session.commit()
+            return counts
+        except Exception as database_error:
+            await session.rollback()
+            if prepared.whitelist_changed:
+                try:
+                    write_allowed_telegram_ids(config, prepared.original_whitelist)
+                except Exception as config_error:
+                    raise RuntimeError(
+                        "database deletion failed and whitelist rollback failed"
+                    ) from config_error
+            await _mark_rollback(prepared, user_id)
+            raise database_error
+
+
+async def _verification_counts(user_id: int) -> dict[str, int]:
+    async with async_session() as session:
+        counts = await user_data_counts(session, user_id)
+        await session.rollback()
+    if remaining := {name: count for name, count in counts.items() if count}:
+        raise RuntimeError(f"post-delete verification failed: {remaining}")
+    return counts
+
+
+async def run(args: argparse.Namespace) -> dict[str, object]:
+    user_id = args.telegram_id
+    expected = confirmation_phrase(user_id)
+    _validate_execution_request(args, user_id, expected)
+    if not args.execute:
+        return await _dry_run(user_id, expected)
 
     lease = SingletonLease(engine)
     if not await lease.acquire():
         raise RuntimeError("stop the bot runtime before executing privacy deletion")
     try:
-        operation_key = f"privacy.deletion.{user_id}"
-        async with async_session() as session:
-            existing = await get_operational_state(session, operation_key)
-            operation = existing.value if existing else None
-            if operation and operation.get("phase") == "completed":
-                current_counts = await user_data_counts(session, user_id)
-                await session.rollback()
-                current_whitelist = read_allowed_telegram_ids(args.config)
-                if not any(current_counts.values()) and user_id not in current_whitelist:
-                    return {
-                        "mode": "already-completed",
-                        "telegram_id": user_id,
-                        "deleted_counts": {},
-                        "verification": "all-user-data-zero",
-                        "verification_counts": current_counts,
-                        "whitelist_changed": False,
-                    }
-                # The same Telegram ID can legally onboard again. A completed
-                # journal describes one operation, not every future generation.
-                operation = None
-            if not operation or operation.get("phase") == "rolled_back":
-                original_whitelist = read_allowed_telegram_ids(args.config)
-                operation = {
-                    "operation_id": str(uuid.uuid4()),
-                    "phase": "prepared",
-                    "telegram_id": user_id,
-                    "original_whitelist": original_whitelist,
-                    "whitelist_changed": user_id in original_whitelist,
-                }
-                await set_operational_state(session, operation_key, operation)
-            else:
-                original_whitelist = list(operation.get("original_whitelist", []))
-
-        current_whitelist = read_allowed_telegram_ids(args.config)
-        revoked_whitelist = [value for value in original_whitelist if value != user_id]
-        if current_whitelist not in (original_whitelist, revoked_whitelist):
-            raise RuntimeError(
-                "whitelist changed after deletion journal was prepared; operator reconciliation required"
-            )
-        operation_whitelist_changed = bool(operation.get("whitelist_changed"))
-        if user_id in current_whitelist:
-            remove_allowed_telegram_id(args.config, user_id)
-
-        async with async_session() as session:
-            await set_operational_state(
-                session,
-                operation_key,
-                {
-                    **operation,
-                    "phase": "access_revoked",
-                    "whitelist_changed": bool(operation.get("whitelist_changed")),
-                },
-            )
-
-        async with async_session() as session:
-            try:
-                counts = await delete_user_data(session, user_id)
-                await set_operational_state(
-                    session,
-                    operation_key,
-                    {
-                        "operation_id": operation.get("operation_id"),
-                        "phase": "completed",
-                        "telegram_id": user_id,
-                        "deleted_counts": counts,
-                        "whitelist_changed": bool(
-                            operation.get("whitelist_changed")
-                        ),
-                    },
-                    commit=False,
-                )
-                await session.commit()
-            except Exception as database_error:
-                await session.rollback()
-                if operation_whitelist_changed:
-                    try:
-                        write_allowed_telegram_ids(args.config, original_whitelist)
-                    except Exception as config_error:
-                        raise RuntimeError(
-                            "database deletion failed and whitelist rollback failed"
-                        ) from config_error
-                async with async_session() as journal_session:
-                    await set_operational_state(
-                        journal_session,
-                        operation_key,
-                        {
-                            "operation_id": operation.get("operation_id"),
-                            "phase": "rolled_back",
-                            "telegram_id": user_id,
-                            "whitelist_changed": operation_whitelist_changed,
-                        },
-                    )
-                raise database_error
-
-        async with async_session() as verification_session:
-            verification_counts = await user_data_counts(
-                verification_session, user_id
-            )
-            await verification_session.rollback()
-        remaining = {
-            name: count for name, count in verification_counts.items() if count
-        }
-        if remaining:
-            raise RuntimeError(f"post-delete verification failed: {remaining}")
+        prepared, completed = await _prepare_deletion(user_id, args.config)
+        if completed is not None:
+            return completed
+        if prepared is None:
+            raise RuntimeError("deletion journal preparation returned no operation")
+        await _revoke_access(prepared, user_id, args.config)
+        counts = await _delete_data(prepared, user_id, args.config)
+        verification_counts = await _verification_counts(user_id)
     finally:
         await lease.release()
 
@@ -179,7 +224,7 @@ async def run(  # noqa: C901 - REVIEW-20260829 legacy ratchet
         "deleted_counts": counts,
         "verification": "all-user-data-zero",
         "verification_counts": verification_counts,
-        "whitelist_changed": operation_whitelist_changed,
+        "whitelist_changed": prepared.whitelist_changed,
     }
 
 

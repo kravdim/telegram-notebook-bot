@@ -605,7 +605,61 @@ async def _handle_create_reminder(
     return f"Напоминание установлено: {message}\n🔔 {remind_at.strftime('%d.%m.%Y %H:%M')}"
 
 
-async def _handle_list_tasks(  # noqa: C901 - REVIEW-20260829 legacy ratchet
+def _task_icon(task: Any) -> str:
+    return "🐸" if task.is_frog else ("🔴" if task.priority == "high" else "📌")
+
+
+def _format_today_tasks(tasks: list, today: date) -> str:
+    if not tasks:
+        return "На сегодня задач нет. Свободный день! 🎉"
+    lines = ["📋 Задачи на сегодня:\n"]
+    for task in tasks:
+        time_text = f" ⏰ {task.due_time.strftime('%H:%M')}" if task.due_time else ""
+        plan_date = getattr(task, "scheduled_date", None) or task.due_date
+        overdue = f" ⚠️ с {plan_date.strftime('%d.%m')}" if plan_date and plan_date < today else ""
+        lines.append(f"{_task_icon(task)} {task.title}{time_text}{overdue}")
+    return "\n".join(lines)
+
+
+def _format_completed_today(tasks: list) -> str:
+    if not tasks:
+        return "Сегодня пока ничего не выполнено."
+    return "\n".join(
+        [f"✅ Выполнено сегодня: {len(tasks)}\n", *(f"  • {task.title}" for task in tasks)]
+    )
+
+
+def _overdue_tasks(tasks: list, today: date) -> list:
+    return [
+        task
+        for task in tasks
+        if (getattr(task, "scheduled_date", None) or task.due_date) is not None
+        and (getattr(task, "scheduled_date", None) or task.due_date) < today
+    ]
+
+
+def _format_overdue_tasks(tasks: list) -> str:
+    if not tasks:
+        return "Просроченных задач нет 👍"
+    lines = ["⚠️ Просроченные задачи:\n"]
+    for task in tasks:
+        plan_date = getattr(task, "scheduled_date", None) or task.due_date
+        lines.append(f"📌 {task.title} ({plan_date.strftime('%d.%m')})")
+    return "\n".join(lines)
+
+
+def _format_all_tasks(tasks: list) -> str:
+    if not tasks:
+        return "Открытых задач нет. Всё сделано! 🎉"
+    lines = ["📋 Все открытые задачи:\n"]
+    for task in tasks:
+        plan_date = getattr(task, "scheduled_date", None) or task.due_date
+        date_text = f" 📅 {plan_date.strftime('%d.%m')}" if plan_date else ""
+        lines.append(f"{_task_icon(task)} {task.title}{date_text}")
+    return "\n".join(lines)
+
+
+async def _handle_list_tasks(
     user_id: int, args: Dict[str, Any], tz: str
 ) -> str:
     scope = args.get("scope", "today")
@@ -614,57 +668,16 @@ async def _handle_list_tasks(  # noqa: C901 - REVIEW-20260829 legacy ratchet
     async with async_session() as session:
         if scope == "today":
             tasks = await get_today_tasks(session, user_id, today)
-            if not tasks:
-                return "На сегодня задач нет. Свободный день! 🎉"
-
-            lines = ["📋 Задачи на сегодня:\n"]
-            for t in tasks:
-                icon = "🐸" if t.is_frog else ("🔴" if t.priority == "high" else "📌")
-                time_str = f" ⏰ {t.due_time.strftime('%H:%M')}" if t.due_time else ""
-                date_str = ""
-                plan_date = getattr(t, "scheduled_date", None) or t.due_date
-                if plan_date and plan_date < today:
-                    date_str = f" ⚠️ с {plan_date.strftime('%d.%m')}"
-                lines.append(f"{icon} {t.title}{time_str}{date_str}")
-            return "\n".join(lines)
-
-        elif scope == "done_today":
+            return _format_today_tasks(tasks, today)
+        if scope == "done_today":
             from bot.db.crud.tasks import get_completed_today
             completed = await get_completed_today(session, user_id, today, tz)
-            if not completed:
-                return "Сегодня пока ничего не выполнено."
-            lines = [f"✅ Выполнено сегодня: {len(completed)}\n"]
-            for t in completed:
-                lines.append(f"  • {t.title}")
-            return "\n".join(lines)
-
-        elif scope == "overdue":
+            return _format_completed_today(completed)
+        if scope == "overdue":
             all_tasks = await get_user_tasks(session, user_id, status="open")
-            overdue = []
-            for task in all_tasks:
-                plan_date = getattr(task, "scheduled_date", None) or task.due_date
-                if plan_date is not None and plan_date < today:
-                    overdue.append(task)
-            if not overdue:
-                return "Просроченных задач нет 👍"
-            lines = ["⚠️ Просроченные задачи:\n"]
-            for t in overdue:
-                plan_date = getattr(t, "scheduled_date", None) or t.due_date
-                if plan_date is not None:
-                    lines.append(f"📌 {t.title} ({plan_date.strftime('%d.%m')})")
-            return "\n".join(lines)
-
-        else:  # all
-            tasks = await get_user_tasks(session, user_id, status="open")
-            if not tasks:
-                return "Открытых задач нет. Всё сделано! 🎉"
-            lines = ["📋 Все открытые задачи:\n"]
-            for t in tasks:
-                icon = "🐸" if t.is_frog else ("🔴" if t.priority == "high" else "📌")
-                plan_date = getattr(t, "scheduled_date", None) or t.due_date
-                date_str = f" 📅 {plan_date.strftime('%d.%m')}" if plan_date else ""
-                lines.append(f"{icon} {t.title}{date_str}")
-            return "\n".join(lines)
+            return _format_overdue_tasks(_overdue_tasks(all_tasks, today))
+        tasks = await get_user_tasks(session, user_id, status="open")
+        return _format_all_tasks(tasks)
 
 
 async def _handle_search(user_id: int, args: Dict[str, Any]) -> str:
@@ -728,7 +741,62 @@ async def _handle_search(user_id: int, args: Dict[str, Any]) -> str:
     return f"По запросу «{query}» ничего не найдено."
 
 
-async def _handle_update_task(  # noqa: C901, PLR0911, PLR0912 - REVIEW-20260829 legacy ratchet
+def _task_match_failure(query: str, tasks: list) -> str:
+    if _OPAQUE_TASK_MARKER_RE.search(query):
+        return f"Не нашёл задачу «{query}»."
+    lines = [f"Несколько задач похожи на «{query}». Уточни:"]
+    lines.extend(f"  {index}. {task.title}" for index, task in enumerate(tasks[:3], 1))
+    return "\n".join(lines)
+
+
+def _parse_task_update_value(field: str, value: Any, tz: str) -> tuple[Any, str | None]:
+    if field in {"scheduled_date", "due_date"} and isinstance(value, str):
+        parsed = _parse_date(value, tz)
+        if parsed is None:
+            label = "дату планирования" if field == "scheduled_date" else "дедлайн"
+            return value, f"Не удалось распознать {label}. Уточни дату."
+        return parsed, None
+    if field == "due_time" and isinstance(value, str):
+        parsed_time = _parse_time(value)
+        if parsed_time is None:
+            return value, "Не удалось распознать время. Укажи его в формате ЧЧ:ММ."
+        return parsed_time, None
+    return value, None
+
+
+def _prepare_task_updates(updates: dict, tz: str) -> tuple[dict, str | None]:
+    allowed = {"title", "priority", "is_frog", "scheduled_date", "due_date", "due_time", "status"}
+    clean_updates = {key: value for key, value in updates.items() if key in allowed}
+    if not clean_updates:
+        return {}, "Нет допустимых полей для обновления."
+    for field, value in tuple(clean_updates.items()):
+        clean_updates[field], error = _parse_task_update_value(field, value, tz)
+        if error:
+            return {}, error
+    if "title" in clean_updates:
+        clean_updates["title"] = _sanitize_title(str(clean_updates["title"]))
+        if error := _validate_title(str(clean_updates["title"])):
+            return {}, error
+    if clean_updates.get("status") not in (None, "open", "done", "cancelled"):
+        return {}, "Недопустимый статус задачи."
+    return clean_updates, None
+
+
+def _format_updated_task(updated: Any, updates: dict) -> str:
+    if updates.get("status") == "cancelled":
+        return f"Задача «{updated.title}» отменена ✅"
+    if updates.get("status") == "done":
+        return f"Задача «{updated.title}» выполнена ✅"
+    details = []
+    if "scheduled_date" in updates and updated.scheduled_date:
+        details.append(f"📅 {updated.scheduled_date.strftime('%d.%m.%Y')}")
+    if "due_date" in updates and updated.due_date:
+        details.append(f"⏳ до {updated.due_date.strftime('%d.%m.%Y')}")
+    suffix = " " + " ".join(details) if details else ""
+    return f"Задача «{updated.title}» обновлена{suffix} ✅"
+
+
+async def _handle_update_task(
     user_id: int, args: Dict[str, Any], tz: str = "Europe/Moscow"
 ) -> str:
     query = args.get("search_query", "")
@@ -746,61 +814,14 @@ async def _handle_update_task(  # noqa: C901, PLR0911, PLR0912 - REVIEW-20260829
 
         confident = _select_confident_task(query, tasks)
         if confident is None:
-            if _OPAQUE_TASK_MARKER_RE.search(query):
-                return f"Не нашёл задачу «{query}»."
-            top3 = tasks[:3]
-            lines = [f"Несколько задач похожи на «{query}». Уточни:"]
-            for i, task in enumerate(top3, 1):
-                lines.append(f"  {i}. {task.title}")
-            return "\n".join(lines)
-
-        task = confident
-        # Фильтруем допустимые поля
-        allowed = {"title", "priority", "is_frog", "scheduled_date", "due_date", "due_time", "status"}
-        clean_updates = {k: v for k, v in updates.items() if k in allowed}
-
-        if not clean_updates:
-            return "Нет допустимых полей для обновления."
-
-        # Парсим даты/время из строк
-        if "scheduled_date" in clean_updates and isinstance(clean_updates["scheduled_date"], str):
-            parsed = _parse_date(clean_updates["scheduled_date"], tz)
-            if parsed is None:
-                return "Не удалось распознать дату планирования. Уточни дату."
-            clean_updates["scheduled_date"] = parsed
-        if "due_date" in clean_updates and isinstance(clean_updates["due_date"], str):
-            parsed = _parse_date(clean_updates["due_date"], tz)
-            if parsed is None:
-                return "Не удалось распознать дедлайн. Уточни дату."
-            clean_updates["due_date"] = parsed
-        if "due_time" in clean_updates and isinstance(clean_updates["due_time"], str):
-            parsed_time = _parse_time(clean_updates["due_time"])
-            if parsed_time is None:
-                return "Не удалось распознать время. Укажи его в формате ЧЧ:ММ."
-            clean_updates["due_time"] = parsed_time
-
-        if "title" in clean_updates:
-            clean_updates["title"] = _sanitize_title(str(clean_updates["title"]))
-            err = _validate_title(str(clean_updates["title"]))
-            if err:
-                return err
-        if clean_updates.get("status") not in (None, "open", "done", "cancelled"):
-            return "Недопустимый статус задачи."
-
-        updated = await crud_update_task(session, task.id, user_id, **clean_updates)
+            return _task_match_failure(query, tasks)
+        clean_updates, error = _prepare_task_updates(updates, tz)
+        if error:
+            return error
+        updated = await crud_update_task(session, confident.id, user_id, **clean_updates)
 
     if updated:
-        if clean_updates.get("status") == "cancelled":
-            return f"Задача «{updated.title}» отменена ✅"
-        if clean_updates.get("status") == "done":
-            return f"Задача «{updated.title}» выполнена ✅"
-        details = []
-        if "scheduled_date" in clean_updates and updated.scheduled_date:
-            details.append(f"📅 {updated.scheduled_date.strftime('%d.%m.%Y')}")
-        if "due_date" in clean_updates and updated.due_date:
-            details.append(f"⏳ до {updated.due_date.strftime('%d.%m.%Y')}")
-        suffix = " " + " ".join(details) if details else ""
-        return f"Задача «{updated.title}» обновлена{suffix} ✅"
+        return _format_updated_task(updated, clean_updates)
     return "Не удалось обновить задачу."
 
 

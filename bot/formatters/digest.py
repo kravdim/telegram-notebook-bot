@@ -13,7 +13,65 @@ _WEEKDAYS_RU = {
 }
 
 
-def format_morning_digest(  # noqa: C901 - REVIEW-20260829 legacy ratchet
+def _append_birthdays(parts: list[str], today: date, birthdays: list) -> None:
+    if not birthdays:
+        return
+    parts.append("\n🎂 <b>Сегодня день рождения:</b>")
+    for birthday in birthdays:
+        age = ""
+        if getattr(birthday, "year_known", birthday.birth_date.year > 1900):
+            age = f" ({today.year - birthday.birth_date.year} лет)"
+        note = f" — {escape(birthday.note)}" if birthday.note else ""
+        parts.append(f"  🎁 {escape(birthday.name)}{age}{note}")
+    parts.append("  Не забудь поздравить!")
+
+
+def _append_tasks(parts: list[str], tasks: List[Task]) -> None:
+    if not tasks:
+        return
+    parts.append("\n📋 <b>Задачи на сегодня:</b>")
+    for task in tasks:
+        emoji = _PRIORITY_EMOJI.get(task.priority, "⚪")
+        time_text = f" ⏰ {task.due_time.strftime('%H:%M')}" if task.due_time else ""
+        parts.append(f"  {emoji} {escape(task.title)}{time_text}")
+
+
+def _overdue_count(today: date, tasks: List[Task]) -> int:
+    count = 0
+    for task in tasks:
+        scheduled_date = getattr(task, "scheduled_date", None) or task.due_date
+        if scheduled_date is not None and scheduled_date < today and task.status == "open":
+            count += 1
+    return count
+
+
+def _append_projects(
+    parts: list[str], projects: List[Project], project_progress: dict
+) -> None:
+    if not projects:
+        return
+    parts.append("\n🐘 <b>Слоны:</b>")
+    for project in projects[:3]:
+        percent = project_progress.get(str(project.id), {}).get("percent", 0)
+        parts.append(
+            f"  {escape(project.title)} {_progress_bar(percent)} {percent}%"
+        )
+
+
+def _append_empty_day(
+    parts: list[str], *, tasks: list, frog, projects: list, has_context: bool
+) -> None:
+    if tasks or frog:
+        return
+    if projects:
+        parts.append("\n📋 Задач на сегодня нет. Можно взять один маленький шаг по слону.")
+    elif has_context:
+        parts.append("\n📋 Задач на сегодня нет.")
+    else:
+        parts.append("\n🎉 Сегодня свободный день! Отдыхай или запланируй что-нибудь.")
+
+
+def format_morning_digest(
     today: date,
     tasks: List[Task],
     frog: Optional[Task],
@@ -34,55 +92,22 @@ def format_morning_digest(  # noqa: C901 - REVIEW-20260829 legacy ratchet
 
     parts = [header]
 
-    # Дни рождения
-    if birthdays:
-        parts.append("\n🎂 <b>Сегодня день рождения:</b>")
-        for b in birthdays:
-            age = ""
-            if getattr(b, "year_known", b.birth_date.year > 1900):
-                years = today.year - b.birth_date.year
-                age = f" ({years} лет)"
-            note = f" — {escape(b.note)}" if b.note else ""
-            parts.append(f"  🎁 {escape(b.name)}{age}{note}")
-        parts.append("  Не забудь поздравить!")
-
-    # Лягушка
+    _append_birthdays(parts, today, birthdays or [])
     if visible_frog:
         parts.append(f"\n🐸 <b>Лягушка дня:</b> {escape(visible_frog.title)}")
         parts.append("Съешь её первой!")
-
-    if tasks:
-        parts.append("\n📋 <b>Задачи на сегодня:</b>")
-        for t in tasks:
-            emoji = _PRIORITY_EMOJI.get(t.priority, "⚪")
-            time_str = f" ⏰ {t.due_time.strftime('%H:%M')}" if t.due_time else ""
-            parts.append(f"  {emoji} {escape(t.title)}{time_str}")
-
+    _append_tasks(parts, tasks)
     if not is_weekend:
-        overdue = []
-        for task in tasks:
-            plan_date = getattr(task, "scheduled_date", None) or task.due_date
-            if plan_date is not None and plan_date < today and task.status == "open":
-                overdue.append(task)
-        if overdue:
-            parts.append(f"\n⚠️ Просроченных: {len(overdue)}")
-
-    # Слоны
-    if visible_projects:
-        parts.append("\n🐘 <b>Слоны:</b>")
-        for p in visible_projects[:3]:
-            progress = project_progress.get(str(p.id), {})
-            pct = progress.get("percent", 0)
-            bar = _progress_bar(pct)
-            parts.append(f"  {escape(p.title)} {bar} {pct}%")
-
-    if not tasks and not visible_frog and not visible_projects:
-        if active_trip or birthdays:
-            parts.append("\n📋 Задач на сегодня нет.")
-        else:
-            parts.append("\n🎉 Сегодня свободный день! Отдыхай или запланируй что-нибудь.")
-    elif not tasks and not visible_frog and visible_projects:
-        parts.append("\n📋 Задач на сегодня нет. Можно взять один маленький шаг по слону.")
+        if overdue := _overdue_count(today, tasks):
+            parts.append(f"\n⚠️ Просроченных: {overdue}")
+    _append_projects(parts, visible_projects, project_progress)
+    _append_empty_day(
+        parts,
+        tasks=tasks,
+        frog=visible_frog,
+        projects=visible_projects,
+        has_context=bool(active_trip or birthdays),
+    )
 
     return "\n".join(parts)
 

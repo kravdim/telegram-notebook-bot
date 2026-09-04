@@ -154,7 +154,81 @@ async def _send_review(bot: Bot, user, tz: str) -> None:
     logger.info("Weekly review отправлен")
 
 
-def _format_review(  # noqa: C901 - REVIEW-20260829 legacy ratchet
+def _append_time_review(parts: list[str], chrono_stats: dict) -> None:
+    categories = chrono_stats.get("categories", {})
+    total_minutes = sum(categories.values())
+    if chrono_stats.get("entries_count", 0) <= 0:
+        return
+    parts.append("⏱ <b>Распределение времени:</b>")
+    for category in ("work", "focus", "personal", "rest", "waste", "unknown"):
+        minutes = categories.get(category, 0)
+        if minutes <= 0:
+            continue
+        percent = int(minutes / total_minutes * 100) if total_minutes else 0
+        bar_length = max(1, percent // 5)
+        bar = "▓" * bar_length + "░" * (20 - bar_length)
+        hours, mins = divmod(minutes, 60)
+        time_text = f"{hours}ч {mins}м" if hours else f"{mins}м"
+        parts.append(
+            f"  {_CATEGORY_EMOJI.get(category, '')} "
+            f"{_CATEGORY_RU.get(category, category)}: {bar} {time_text} ({percent}%)"
+        )
+    if average := chrono_stats.get("avg_productivity", 0):
+        parts.append(f"  📈 Средняя продуктивность: {average}/5")
+    parts.append("")
+
+
+def _append_completed_tasks(parts: list[str], completed_tasks: list) -> None:
+    parts.append(f"✅ <b>Выполнено задач:</b> {len(completed_tasks)}")
+    shown = completed_tasks if len(completed_tasks) <= 15 else completed_tasks[:10]
+    parts.extend(f"  • {escape(task.title)}" for task in shown)
+    if len(completed_tasks) > 15:
+        parts.append(f"  ... и ещё {len(completed_tasks) - 10}")
+    parts.append("")
+
+
+def _append_frog_review(parts: list[str], frogs_total: int, frogs_eaten: int) -> None:
+    if frogs_total <= 0:
+        parts.extend(("🐸 Лягушек на этой неделе не было.", ""))
+        return
+    percent = int(frogs_eaten / frogs_total * 100)
+    bar_length = max(1, percent // 5)
+    parts.append(
+        f"🐸 <b>Лягушки:</b> {frogs_eaten}/{frogs_total} съедено ({percent}%)"
+    )
+    parts.append(f"  {'▓' * bar_length + '░' * (20 - bar_length)}")
+    if percent == 100:
+        parts.append("  🏆 Все лягушки съедены! Отличная неделя!")
+    elif percent >= 70:
+        parts.append("  👍 Хороший результат!")
+    elif percent < 50:
+        parts.append("  💪 На следующей неделе можно лучше!")
+    parts.append("")
+
+
+def _append_values_review(parts: list[str], value_stats: list) -> None:
+    if not value_stats:
+        return
+    parts.append("📔 <b>Ценности недели</b> (из мемуарника):")
+    for value in value_stats[:5]:
+        emoji = _VALUE_EMOJI.get(value["value"], "🔹")
+        parts.append(f"  {emoji} {escape(str(value['value']))}: {value['count']} раз")
+    parts.append("")
+
+
+def _append_projects_review(parts: list[str], project_progress: dict) -> None:
+    if not project_progress:
+        return
+    parts.append("🐘 <b>Слоны:</b>")
+    for title, progress in project_progress.items():
+        percent = progress.get("percent", 0)
+        done, total = progress.get("done", 0), progress.get("total", 0)
+        bar_length = max(1, percent // 5) if percent > 0 else 0
+        bar = "▓" * bar_length + "░" * (20 - bar_length) if total > 0 else "░" * 20
+        parts.append(f"  {escape(title)}: {bar} {percent}% ({done}/{total})")
+
+
+def _format_review(
     week_start,
     chrono_stats: dict,
     completed_tasks: list,
@@ -171,81 +245,11 @@ def _format_review(  # noqa: C901 - REVIEW-20260829 legacy ratchet
     )
     parts = [header]
 
-    # --- Хронометраж ---
-    cats = chrono_stats.get("categories", {})
-    total_min = sum(cats.values())
-    entries = chrono_stats.get("entries_count", 0)
-
-    if entries > 0:
-        parts.append("⏱ <b>Распределение времени:</b>")
-        for cat in ("work", "focus", "personal", "rest", "waste", "unknown"):
-            minutes = cats.get(cat, 0)
-            if minutes > 0:
-                emoji = _CATEGORY_EMOJI.get(cat, "")
-                name = _CATEGORY_RU.get(cat, cat)
-                hours = minutes // 60
-                mins = minutes % 60
-                time_str = f"{hours}ч {mins}м" if hours else f"{mins}м"
-                pct = int(minutes / total_min * 100) if total_min else 0
-                bar_len = max(1, pct // 5)
-                bar = "▓" * bar_len + "░" * (20 - bar_len)
-                parts.append(f"  {emoji} {name}: {bar} {time_str} ({pct}%)")
-
-        avg_prod = chrono_stats.get("avg_productivity", 0)
-        if avg_prod:
-            parts.append(f"  📈 Средняя продуктивность: {avg_prod}/5")
-        parts.append("")
-
-    # --- Задачи ---
-    parts.append(f"✅ <b>Выполнено задач:</b> {len(completed_tasks)}")
-    if completed_tasks and len(completed_tasks) <= 15:
-        for t in completed_tasks:
-            parts.append(f"  • {escape(t.title)}")
-    elif len(completed_tasks) > 15:
-        for t in completed_tasks[:10]:
-            parts.append(f"  • {escape(t.title)}")
-        parts.append(f"  ... и ещё {len(completed_tasks) - 10}")
-    parts.append("")
-
-    # --- Лягушки ---
-    if frogs_total > 0:
-        frog_pct = int(frogs_eaten / frogs_total * 100)
-        bar_len = max(1, frog_pct // 5)
-        bar = "▓" * bar_len + "░" * (20 - bar_len)
-        parts.append(
-            f"🐸 <b>Лягушки:</b> {frogs_eaten}/{frogs_total} съедено ({frog_pct}%)"
-        )
-        parts.append(f"  {bar}")
-        if frog_pct == 100:
-            parts.append("  🏆 Все лягушки съедены! Отличная неделя!")
-        elif frog_pct >= 70:
-            parts.append("  👍 Хороший результат!")
-        elif frog_pct < 50:
-            parts.append("  💪 На следующей неделе можно лучше!")
-    else:
-        parts.append("🐸 Лягушек на этой неделе не было.")
-    parts.append("")
-
-    # --- Ценности из мемуарника ---
-    if value_stats:
-        parts.append("📔 <b>Ценности недели</b> (из мемуарника):")
-        for vs in value_stats[:5]:
-            emoji = _VALUE_EMOJI.get(vs["value"], "🔹")
-            parts.append(f"  {emoji} {escape(str(vs['value']))}: {vs['count']} раз")
-        parts.append("")
-
-    # --- Прогресс по слонам ---
-    if project_progress:
-        parts.append("🐘 <b>Слоны:</b>")
-        for title, progress in project_progress.items():
-            pct = progress.get("percent", 0)
-            done = progress.get("done", 0)
-            total = progress.get("total", 0)
-            bar_len = max(1, pct // 5) if pct > 0 else 0
-            bar = "▓" * bar_len + "░" * (20 - bar_len) if total > 0 else "░" * 20
-            parts.append(f"  {escape(title)}: {bar} {pct}% ({done}/{total})")
-
-    # Подпись
+    _append_time_review(parts, chrono_stats)
+    _append_completed_tasks(parts, completed_tasks)
+    _append_frog_review(parts, frogs_total, frogs_eaten)
+    _append_values_review(parts, value_stats)
+    _append_projects_review(parts, project_progress)
     parts.append("\n🔄 Новая неделя — новые возможности!")
 
     return "\n".join(parts)

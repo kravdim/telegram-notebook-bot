@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+## 0.5.0 — 2026-09-04
+
+- Decomposed the remaining configuration, intent routing, task listing and
+  updating, backup, privacy-deletion, message splitting, digest and weekly
+  review hotspots into focused helpers without changing their public contracts.
+- Removed all 16 legacy Ruff complexity exceptions across the nine remaining
+  allowlisted functions and made CI reject every future complexity suppression.
+- Added parameterized behavioral coverage for intent routing and presentation
+  branches preserved by the decomposition.
+
 ## 0.3.6 — 2026-09-03
 
 - Corrected the targeted memoir live gate to assert the task domain's actual

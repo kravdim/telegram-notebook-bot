@@ -1129,10 +1129,10 @@ _RU_MONTHS = {
 }
 
 
-def _extract_common_intent(  # noqa: C901, PLR0911, PLR0912, PLR0915 - REVIEW-20260829 legacy ratchet
+def _extract_list_and_guard_intent(
     text: str, tz: str
 ) -> Optional[tuple[str, dict]]:
-    """Надёжный узкий путь для частых фраз, на которых LLM может отказаться."""
+    """Extract list/journal intents and deterministic invalid-date responses."""
     import pendulum
 
     stripped = " ".join(text.strip().split())
@@ -1220,6 +1220,17 @@ def _extract_common_intent(  # noqa: C901, PLR0911, PLR0912, PLR0915 - REVIEW-20
                 },
             )
 
+    return None
+
+
+def _extract_note_or_routine_intent(
+    text: str, tz: str
+) -> Optional[tuple[str, dict]]:
+    """Extract explicit notes and time-bound recurring task phrases."""
+    import pendulum
+
+    stripped = text
+
     explicit_note = re.match(
         r"^сделай\s+заметку\s+(?P<title>.+?)\s*:\s*(?P<content>.+)$",
         stripped,
@@ -1278,6 +1289,17 @@ def _extract_common_intent(  # noqa: C901, PLR0911, PLR0912, PLR0915 - REVIEW-20
                     "due_time": f"{hour:02d}:00",
                 },
             )
+
+    return None
+
+
+def _extract_project_or_explicit_task_intent(
+    text: str, tz: str
+) -> Optional[tuple[str, dict]]:
+    """Extract frog, project and explicit single-task phrases."""
+    import pendulum
+
+    stripped = text
 
     frog_task = re.match(
         r"^самое\s+противное\s+на\s+сегодня\s*[-—:]\s*"
@@ -1356,6 +1378,17 @@ def _extract_common_intent(  # noqa: C901, PLR0911, PLR0912, PLR0915 - REVIEW-20
                 },
             )
 
+    return None
+
+
+def _extract_reminder_or_evening_intent(
+    text: str, tz: str
+) -> Optional[tuple[str, dict]]:
+    """Extract relative reminders and informal evening tasks."""
+    import pendulum
+
+    stripped = text
+
     reminder = re.match(
         r"^(?:слушай,?\s*)?напомни\s+через\s+(?:(?P<half>пол\s*часа)|"
         r"(?P<minutes>\d+)\s*минут(?:у|ы)?)\s+(?P<body>.+)$",
@@ -1418,6 +1451,17 @@ def _extract_common_intent(  # noqa: C901, PLR0911, PLR0912, PLR0915 - REVIEW-20
                 },
             )
 
+    return None
+
+
+def _extract_weekday_or_birthday_intent(
+    text: str, tz: str
+) -> Optional[tuple[str, dict]]:
+    """Extract next-weekday tasks and birthdays without a known year."""
+    import pendulum
+
+    stripped = text
+
     weekday_task = re.match(
         r"^в\s+следующ(?:ий|ую|ее)\s+"
         r"(?P<weekday>понедельник|вторник|среду|четверг|пятницу|субботу|воскресенье)\s+"
@@ -1464,6 +1508,23 @@ def _extract_common_intent(  # noqa: C901, PLR0911, PLR0912, PLR0915 - REVIEW-20
                 {"name": name, "date": str(birth_date), "year_known": False},
             )
 
+    return None
+
+
+def _extract_common_intent(text: str, tz: str) -> Optional[tuple[str, dict]]:
+    """Надёжный узкий путь для частых фраз, на которых LLM может отказаться."""
+    stripped = " ".join(text.strip().split())
+    extractors = (
+        _extract_list_and_guard_intent,
+        _extract_note_or_routine_intent,
+        _extract_project_or_explicit_task_intent,
+        _extract_reminder_or_evening_intent,
+        _extract_weekday_or_birthday_intent,
+    )
+    for extractor in extractors:
+        intent = extractor(stripped, tz)
+        if intent is not None:
+            return intent
     return None
 
 

@@ -68,26 +68,23 @@ handlers ──► IntentNormalizer / typed intents ◄── LLM adapter
    provider objects. An AST boundary test enforces this rule, and strict mypy
    settings cover the complete `bot.application` package.
 
-New functions are capped by Ruff at complexity 15, 20 branches, 12 returns and
-80 statements. Nine pre-existing hotspots carry 16 inline complexity exceptions
-across product and operational code (15 under `bot/`).
-`scripts/check_complexity_ratchet.py` stores a numerical ceiling for every
-allowlisted function and Ruff metric (complexity, branches, returns and
-statements), rejects any increase, and requires a retired suppression and its
-baseline to disappear together. Removing those
-exceptions is incremental architecture work; widening the global limits is not
+All functions are capped by Ruff at complexity 15, 20 branches, 12 returns and
+80 statements. The former nine-hotspot allowlist and all 16 legacy complexity
+exceptions have been retired. `scripts/check_complexity_ratchet.py` scans all
+product and operational Python code and rejects every future suppression for
+complexity, branches, returns or statements; widening the global limits is not
 an accepted shortcut.
 
-The first central-path milestone is complete. Background scheduling and STT
+The central-path and command-presentation milestones are complete. Background scheduling and STT
 warmup are owned by `bot.runtime.background`, while `bot.main` is now a 295-line
 composition root with no complexity suppression. Task creation is a typed,
 transport-independent use case in `bot.application.task_creation`; its former
 43-complexity/104-statement dispatcher function is now a thin adapter without a
-suppression. The remaining owned milestones are Telegram intent adaptation and
-list/update task execution ([issue #4](https://github.com/kravdim/telegram-notebook-bot/issues/4),
-owner: `kravdim`, milestone `v0.4.0`) and command presentation
-([issue #5](https://github.com/kravdim/telegram-notebook-bot/issues/5), owner:
-`kravdim`, milestone `v0.5.0`).
+suppression. Telegram intent adaptation, list/update execution, backup and
+privacy deletion were decomposed for milestone `v0.4.0`; HTML splitting,
+morning digest and weekly review presentation were decomposed for milestone
+`v0.5.0`. Their public behavior remains protected by focused and parameterized
+tests.
 
 New business workflows should first become a service function callable without
 Telegram objects. Handlers should remain thin adapters around that function.
