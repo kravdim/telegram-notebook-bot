@@ -98,7 +98,7 @@ async def test_mutation_without_typed_result_fails_closed(
         return None
 
     async def no_claim(*args):
-        return None
+        return True
 
     async def finish(key, status):
         finished.append(status)
@@ -113,6 +113,7 @@ async def test_mutation_without_typed_result_fails_closed(
     monkeypatch.setattr(messages, "get_prompt", get_prompt)
     monkeypatch.setattr(messages, "_get_persisted_interaction", no_state)
     monkeypatch.setattr(messages, "_claim_request", no_claim)
+    monkeypatch.setattr(messages, "saved_plan", no_state)
     monkeypatch.setattr(messages, "_finish_request", finish)
     monkeypatch.setattr(messages, "dispatch_result", forbidden_dispatch)
     monkeypatch.setattr(

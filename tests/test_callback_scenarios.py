@@ -8,6 +8,23 @@ from tests.fakes import FakeCallback, FakeSessionContext
 
 
 @pytest.mark.asyncio
+async def test_retry_failed_reminder_uses_authenticated_owner(monkeypatch):
+    rid = uuid4()
+    calls = []
+
+    async def retry(session, reminder_id, user_id):
+        calls.append((reminder_id, user_id))
+        return True
+
+    monkeypatch.setattr(callbacks, "async_session", lambda: FakeSessionContext())
+    monkeypatch.setattr(callbacks, "retry_failed_reminder", retry)
+    callback = FakeCallback(user_id=42, data=f"reminder_retry:{rid}")
+    await callbacks.cb_reminder_retry(callback)
+    assert calls == [(rid, 42)]
+    assert "повторную" in callback.message.edits[0][0]
+
+
+@pytest.mark.asyncio
 async def test_snooze_done_failure_preserves_retry(monkeypatch):
     async def failed_lookup(*args):
         raise RuntimeError("database unavailable")

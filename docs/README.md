@@ -5,6 +5,10 @@
 - [`ARCHITECTURE.md`](ARCHITECTURE.md) — компоненты и контракты;
 - [`OPERATIONS.md`](OPERATIONS.md) — эксплуатация, release gate и recovery;
 - [`PRIVACY.md`](PRIVACY.md) — хранение, экспорт и удаление данных;
+- [`SESSION_CONTEXT_2026-09-05.md`](SESSION_CONTEXT_2026-09-05.md) — текущий
+  remediation checkpoint: реализованные изменения, локальные проверки и оставшаяся работа;
+- [`ADR_2026-09-04_RETRY_AND_DELIVERY.md`](ADR_2026-09-04_RETRY_AND_DELIVERY.md)
+  — реализуемые контракты доставки и повторов, ограничения и границы rollback;
 - [`REMEDIATION_PLAN_2026-09-04.md`](REMEDIATION_PLAN_2026-09-04.md)
   — рабочий план исполнения комплексного ревью: этапы, зависимости, проверки,
   выпуск и таблица закрытия R01–R16;

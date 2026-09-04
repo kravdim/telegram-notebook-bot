@@ -7,22 +7,33 @@ from pathlib import Path
 
 
 def arguments_match_schema(name: str, arguments: dict, functions: list[dict]) -> bool:
-    """Check required fields, primitive types and enums in the tool schema."""
+    """Check nested tool arguments, including arrays and explicit nullable fields."""
     schema = next((item["parameters"] for item in functions if item["name"] == name), None)
     if schema is None or not isinstance(arguments, dict):
         return False
-    if any(key not in arguments for key in schema.get("required", [])):
+    return _matches_schema(arguments, schema)
+
+
+def _matches_schema(value: object, schema: dict) -> bool:
+    allowed = schema.get("type")
+    if allowed is not None:
+        allowed = allowed if isinstance(allowed, list) else [allowed]
+        types: dict[str, tuple[type, ...]] = {
+            "string": (str,), "boolean": (bool,), "array": (list,), "object": (dict,),
+            "integer": (int,), "number": (int, float), "null": (type(None),),
+        }
+        if not any(type(value) in types.get(kind, ()) for kind in allowed):
+            return False
+    if "enum" in schema and value not in schema["enum"]:
         return False
-    python_types = {"string": str, "boolean": bool, "array": list, "object": dict}
-    for key, value in arguments.items():
-        field = schema.get("properties", {}).get(key)
-        if field is None:
-            return False
-        expected_type = python_types.get(field.get("type"))
-        if expected_type and not isinstance(value, expected_type):
-            return False
-        if "enum" in field and value not in field["enum"]:
-            return False
+    if isinstance(value, dict):
+        properties = schema.get("properties", {})
+        return all(key in value for key in schema.get("required", [])) and all(
+            key in properties and _matches_schema(item, properties[key])
+            for key, item in value.items()
+        )
+    if isinstance(value, list):
+        return all(_matches_schema(item, schema.get("items", {})) for item in value)
     return True
 
 
@@ -69,8 +80,9 @@ def main() -> None:
     invalid_rate = invalid / total if total else 1.0
     print(
         f"parser_cases={parser_total} tool_call_parser_accuracy={parser_accuracy:.3f} "
-        f"utterance_cases={utterance_total} utterance_contract_accuracy={utterance_accuracy:.3f} "
-        f"invalid_tool_rate={invalid_rate:.3f}"
+        f"saved_response_cases={utterance_total} saved_response_contract_accuracy={utterance_accuracy:.3f} "
+        f"invalid_saved_response_rate={invalid_rate:.3f} "
+        "scope=saved-response-parsing-not-intent-recognition"
     )
     if parser_accuracy < 1.0 or utterance_accuracy < 1.0 or invalid_rate > 0:
         raise SystemExit("LLM contract regression")

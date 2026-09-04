@@ -13,7 +13,7 @@ from aiogram import F, Router
 from aiogram.types import CallbackQuery, Message
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
-from bot.application.interactions import WorkflowType, interaction_service
+from bot.application.interactions import WorkflowType
 from bot.config import settings
 from bot.db.crud.users import get_user
 from bot.db.engine import async_session
@@ -21,6 +21,7 @@ from bot.handlers.telegram import callback_data, callback_message, message_bot
 from bot.logging_safety import error_type
 from bot.observability import metrics
 from bot.privacy import PRIVACY_NOTICE_VERSION, privacy_keyboard, privacy_notice_text
+from bot.services.interactions import interaction_service
 from bot.stt.base import STTClient
 
 logger = logging.getLogger(__name__)

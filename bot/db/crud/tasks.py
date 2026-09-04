@@ -268,16 +268,11 @@ async def update_task(
     if not task or task.user_id != user_id:
         return None
 
+    if {"status", "resolution", "completed_at"}.intersection(updates):
+        raise ValueError("Lifecycle fields require update_task_workflow")
     for key, value in updates.items():
         if hasattr(task, key):
             setattr(task, key, value)
-    if updates.get("status") == "cancelled":
-        task.resolution = "cancelled"
-        task.completed_at = pendulum.now("UTC")
-    elif updates.get("status") == "done":
-        task.resolution = "completed"
-        task.completed_at = pendulum.now("UTC")
-
     if commit:
         await _commit(session)
     else:

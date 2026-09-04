@@ -2,6 +2,7 @@
 
 import re
 from dataclasses import dataclass, field
+from html import escape
 from typing import List
 
 MAX_MESSAGE_LEN = 4096
@@ -12,6 +13,8 @@ def split_message(text: str, max_len: int = MAX_MESSAGE_LEN) -> List[str]:
 
     Гарантирует что каждая часть <= max_len символов.
     """
+    if max_len <= 0:
+        raise ValueError("max_len must be positive")
     if len(text) <= max_len:
         return [text]
 
@@ -34,6 +37,25 @@ _HTML_TAG_RE = re.compile(
     r"^<\s*(/?)\s*(b|strong|i|em|u|ins|s|strike|del|code|pre|a|blockquote|tg-spoiler)\b[^>]*>$",
     re.IGNORECASE,
 )
+
+
+class _HtmlSplitOverflow(ValueError):
+    """Markup consumes the entire chunk budget."""
+
+
+def _escaped_chunks(text: str, max_len: int) -> list[str]:
+    """Fall back to literal source text, preserving every character safely."""
+    chunks: list[str] = []
+    current = ""
+    for character in text:
+        encoded = escape(character, quote=False)
+        if len(current) + len(encoded) > max_len:
+            chunks.append(current)
+            current = ""
+        current += encoded
+    if current:
+        chunks.append(current)
+    return chunks
 
 
 @dataclass
@@ -77,11 +99,13 @@ class _HtmlChunker:
                 return
             if available <= 0:
                 self.flush()
+                if self.max_len - len(self.current) - len(self.closing_tags()) <= 0:
+                    raise _HtmlSplitOverflow
                 continue
             cut = max(1, available)
             preferred = max(
-                remaining.rfind("\n", 0, cut + 1),
-                remaining.rfind(" ", 0, cut + 1),
+                remaining.rfind("\n", 0, cut),
+                remaining.rfind(" ", 0, cut),
             )
             cut = preferred + 1 if preferred > 0 else cut
             self.current += remaining[:cut]
@@ -96,12 +120,20 @@ class _HtmlChunker:
 
 def split_html_message(text: str, max_len: int = MAX_MESSAGE_LEN) -> List[str]:
     """Разбить Telegram HTML, не разрывая entity и балансируя теги."""
+    if max_len < 5:
+        raise ValueError("HTML max_len must fit an escaped character (at least 5)")
     if len(text) <= max_len:
         return [text]
     chunker = _HtmlChunker(max_len)
-    for token in filter(None, _HTML_TOKEN_RE.split(text)):
-        if tag := _HTML_TAG_RE.match(token):
-            chunker.add_tag(token, bool(tag.group(1)), tag.group(2).lower())
-        else:
-            chunker.add_text(token)
-    return chunker.finish()
+    try:
+        for token in filter(None, _HTML_TOKEN_RE.split(text)):
+            if tag := _HTML_TAG_RE.match(token):
+                chunker.add_tag(token, bool(tag.group(1)), tag.group(2).lower())
+            else:
+                chunker.add_text(token)
+        parts = chunker.finish()
+        if any(len(part) > max_len for part in parts):
+            raise _HtmlSplitOverflow
+        return parts
+    except _HtmlSplitOverflow:
+        return _escaped_chunks(text, max_len)

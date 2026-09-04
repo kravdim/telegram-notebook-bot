@@ -1,5 +1,4 @@
 import asyncio
-import json
 from datetime import date
 from types import SimpleNamespace
 
@@ -172,8 +171,8 @@ async def test_ambiguous_delete_returns_button_choices(monkeypatch):
     monkeypatch.setattr(dispatcher, "search_tasks", fake_search)
 
     result = await dispatcher._handle_delete_task(42, {"search_query": "Б22"})
-    assert result.startswith("CHOOSE_DELETE:")
-    choices = json.loads(result.split(":", 1)[1])
+    assert result.kind == "choose_delete"
+    choices = result.list_payload()
     assert [item["title"] for item in choices] == ["Б22-xss", "Б22-молоко"]
 
 

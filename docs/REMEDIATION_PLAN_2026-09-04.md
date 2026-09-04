@@ -238,19 +238,19 @@ Docs-only handoff commit после live-проверки отдельно от�
 | Пункт ревью | Основной этап | Статус | Commit / test / evidence |
 | --- | --- | --- | --- |
 | R01 | 1 | проверен локально | callback failure/missing tests; PostgreSQL gate 487 passed, 1 skipped |
-| R02 | 4 | запланирован | — |
-| R03 | 4 | запланирован | — |
-| R04 | 4 | запланирован | — |
+| R02 | 4 | реализован, приёмка частичная | общие claims main/sweep; DB concurrency test |
+| R03 | 4 | реализован, приёмка частичная | fresh-session failure record, failed/retry, backoff |
+| R04 | 4 | частично | timezone series/backfill, future catch-up; календарные edge cases впереди |
 | R05 | 1 | проверен локально | concurrent expired read/new claim и expired replacement; coverage 73,22% |
-| R06 | 3 | запланирован | — |
-| R07 | 5 | запланирован | — |
-| R08 | 4 | запланирован | — |
-| R09 | 2 | запланирован | — |
-| R10 | 2–3 | запланирован | — |
-| R11 | 2–6 | запланирован | — |
-| R12 | 7, 9 | запланирован | — |
-| R13 | 6, 9 | запланирован | — |
-| R14 | 6, 9 | запланирован | — |
+| R06 | 3 | частично | lifecycle service и запрет generic status; legacy CRUD helpers ещё убрать |
+| R07 | 5 | частично | durable plan/effect/result, /retry, rollback tests; commit-ambiguity/live впереди |
+| R08 | 4 | реализован, приёмка частичная | weekly DeliveryBatch; full live впереди |
+| R09 | 2 | проверен локально | typed payload, splitter boundaries; полный UX audit впереди |
+| R10 | 2–3 | частично | explicit null/False, bound alarm sync; UX и reopen впереди |
+| R11 | 2–6 | частично | application imports закрыты, InteractionPort; task-creation Any/UoW остаются |
+| R12 | 7, 9 | частично | reusable CI release dependency, portable checksums/manifest; реальный release не выполнен |
+| R13 | 6, 9 | частично | nested schema checks, actual recognizer corpus, runner lock 85 cases; provider/live впереди |
+| R14 | 6, 9 | частично | CI audit cloud + STT; consent fingerprint/STT SBOM/threat model остаются |
 | R15 | 8 | запланирован | — |
 | R16 | 8–9 | запланирован | — |
 
@@ -259,4 +259,36 @@ Docs-only handoff commit после live-проверки отдельно от�
 Промежуточный исправляющий релиз допустим после закрытия P1 и всех применимых release
 gates; он не считается завершением всего плана и не откладывает оставшиеся R07–R16.
 
-**Следующее действие исполнителя:** этап 2, структурные результаты и границы вывода.
+## Промежуточная реализация 04.09.2026
+
+Этапы 2–5 реализованы частично, без объявления полного закрытия findings:
+
+- Typed CommandResult вместо sentinel-протокола; application contracts вынесены
+  из LLM. Explicit null/False сохраняются. HTML splitter имеет bounded fallback.
+- Lifecycle update/complete/cancel синхронизирует связанные reminders;
+  generic status update запрещён. Reopen recurring отклоняется до безопасного
+  разрешения конфликта серии. Полная UX-приёмка и набор календарных границ впереди.
+- Main/sweep разделяют durable claims; failed delivery видима через
+  `/reminder_errors`; retry/backoff и timezone серии сохранены в БД.
+  Weekly review переведён на DeliveryBatch.
+- Durable action plan/result и атомарные effects; `/retry` продолжает сохранённый
+  план; domain result отделён от Telegram response, декомпозиция имеет journal phase.
+  Failed plans не удаляются обычной retention.
+
+Полный локальный gate: **513 passed, 1 skipped; coverage 73.47%**. Миграции
+до `c8e1f3a5b702`, schema drift и complexity ratchet прошли. Это evidence только
+локального состояния, не релиза. Контракты и ограничения:
+[ADR retry/delivery](ADR_2026-09-04_RETRY_AND_DELIVERY.md).
+
+**Следующее действие исполнителя:** добрать failure/concurrency/UX приёмку этапов
+3–5, затем завершить архитектурные ports, eval/security и release evidence этапов
+6–9. Новая схема ещё не разрешена к production deploy: совместимость rollback со
+старым sender требует отдельного доказательства. Ни одно оставшееся finding не
+считать закрытым по одному общему зелёному coverage gate.
+
+Обновление 05.09.2026: после дополнительных architecture/eval/release checks полный
+PostgreSQL gate — **532 passed, 1 skipped; coverage 73.52%**. Ruff, mypy (120 файлов),
+Bandit, version/docs checks и runner lock verification проходят локально.
+Live-проверки и GitHub Actions в этом checkpoint не запускались. ShellCheck локально
+не установлен; `bash -n` изменённого live-wrapper прошёл, полноценный ShellCheck
+остаётся CI gate. Это не завершение плана и не release acceptance.

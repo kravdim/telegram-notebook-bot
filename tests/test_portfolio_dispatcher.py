@@ -7,9 +7,9 @@ import pytest
 
 from bot.application.command_bus import CommandBus, CommandContext, CommandResult
 from bot.application.intents import intent_from_parts
-from bot.application.interactions import InteractionService
 from bot.llm import dispatcher
 from bot.services import tasks
+from bot.services.interactions import InteractionService
 from tests.fakes import FakeSessionContext
 
 
@@ -62,10 +62,10 @@ async def test_dispatch_result_passes_typed_reminder_and_context_to_bus(monkeypa
 
 
 @pytest.mark.asyncio
-async def test_registered_intent_adapts_legacy_delete_protocol_to_typed_result(monkeypatch):
+async def test_registered_intent_preserves_typed_delete_result(monkeypatch):
     async def legacy_handler(user_id, args, timezone):
         assert (user_id, args, timezone) == (4, {"search_query": "счёт"}, "UTC")
-        return "CONFIRM_DELETE:task-7:Счёт"
+        return CommandResult("Удалить?", "confirm_delete", {"task_id": "task-7", "title": "Счёт"})
 
     monkeypatch.setitem(dispatcher._COMMAND_EXECUTORS, "delete_task", legacy_handler)
     result = await dispatcher._execute_registered_intent(
@@ -162,8 +162,8 @@ async def test_interaction_get_filters_wrong_workflow_after_read(monkeypatch):
         calls.append((session, user_id))
         return state
 
-    monkeypatch.setattr("bot.application.interactions.async_session", lambda: FakeSessionContext())
-    monkeypatch.setattr("bot.application.interactions.get_state", get_state)
+    monkeypatch.setattr("bot.services.interactions.async_session", lambda: FakeSessionContext())
+    monkeypatch.setattr("bot.services.interactions.get_state", get_state)
 
     assert await InteractionService().get(77, "voice_edit") is None
     assert len(calls) == 1 and calls[0][1] == 77
@@ -178,8 +178,8 @@ async def test_interaction_transition_forwards_token_and_ttl(monkeypatch):
         captured["args"] = args
         return expected
 
-    monkeypatch.setattr("bot.application.interactions.async_session", lambda: FakeSessionContext())
-    monkeypatch.setattr("bot.application.interactions.transition_state", transition)
+    monkeypatch.setattr("bot.services.interactions.async_session", lambda: FakeSessionContext())
+    monkeypatch.setattr("bot.services.interactions.transition_state", transition)
 
     actual = await InteractionService().transition(
         5, "voice_processing", "voice_edit", {"draft": "x"}, 7, "token-1"
@@ -346,7 +346,8 @@ async def test_project_creation_normalizes_category_and_returns_ui_protocol(monk
     monkeypatch.setattr(dispatcher, "crud_create_project", create)
     result = await dispatcher._handle_create_project(10, {"title": " <b>Ремонт</b> ", "category": "other"})
 
-    assert result == "PROJECT_CREATED:project-3:Ремонт"
+    assert result.kind == "project_created"
+    assert result.payload == {"project_id": "project-3", "title": "Ремонт"}
     assert captured == {"user_id": 10, "title": "Ремонт", "description": "", "category": "work"}
 
 

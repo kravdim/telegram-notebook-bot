@@ -24,6 +24,16 @@ cleanup_tmp() {
 }
 trap cleanup_tmp EXIT
 
+# A filtered or voice-skipped run is diagnostic, never full release acceptance.
+for argument in "$@"; do
+    case "$argument" in
+        --only|--only=*|--skip-voice)
+            echo "Full live gate forbids corpus filters and skipped voice cases" >&2
+            exit 2
+            ;;
+    esac
+done
+
 if [[ ! -f "$RUNNER" || ! -x "$USERBOT_DIR/.venv/bin/python" ]]; then
     echo "DailyPlanner live E2E runner or its virtualenv is missing" >&2
     exit 2
@@ -39,6 +49,8 @@ if [[ "$DEPLOYED_SHA" != "$TESTED_SHA" ]]; then
 fi
 
 cd "$PROJECT_DIR"
+EXPECTED_CASES="$("$PROJECT_DIR/.venv/bin/python" scripts/verify_live_runner.py --userbot-dir "$USERBOT_DIR")"
+uv sync --project "$USERBOT_DIR" --frozen --check
 "$PROJECT_DIR/.venv/bin/python" scripts/preflight.py
 "$PROJECT_DIR/.venv/bin/python" tests/live/run_memoir_gate.py \
     --userbot-dir "$USERBOT_DIR"
@@ -61,7 +73,7 @@ fi
 
 summary="$(grep -E 'Готово: [0-9]+/[0-9]+ PASS' "$LOG_FILE" | tail -1 || true)"
 if [[ ! "$summary" =~ Готово:\ ([0-9]+)/([0-9]+)\ PASS ]] || \
-   [[ "${BASH_REMATCH[1]}" != "${BASH_REMATCH[2]}" ]]; then
+   [[ "${BASH_REMATCH[1]}" != "$EXPECTED_CASES" || "${BASH_REMATCH[2]}" != "$EXPECTED_CASES" ]]; then
     if [[ "${DAILYPLANNER_KEEP_FAILURE_LOG:-0}" == "1" ]]; then
         KEEP_FAILURE_LOG=true
     fi
@@ -89,5 +101,6 @@ if [[ "$(head -1 "$CURRENT_RELEASE_FILE")" != "$TESTED_SHA" ]]; then
 fi
 
 echo "Live E2E gate passed: $summary"
+echo "Runner lock: $(shasum -a 256 tests/live/runner-lock.json) expected_cases=$EXPECTED_CASES"
 echo "Evidence: tested_sha=$TESTED_SHA started_at=$STARTED_AT finished_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 echo "Runner report is stored under $USERBOT_DIR/tests_dailyplanner/results"

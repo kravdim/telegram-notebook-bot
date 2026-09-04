@@ -4,6 +4,7 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_call:
 
 permissions:
   contents: read
@@ -71,6 +72,8 @@ jobs:
         run: |
           uv export --frozen --no-dev --no-emit-project -o /tmp/requirements.txt
           uv run pip-audit -r /tmp/requirements.txt
+          uv export --frozen --no-dev --no-emit-project --extra stt -o /tmp/requirements-stt.txt
+          uv run pip-audit -r /tmp/requirements-stt.txt
       - run: uv run alembic upgrade head
       - name: Reject ORM and migration schema drift
         run: uv run alembic check
@@ -109,6 +112,8 @@ jobs:
       - name: Enforce central-runtime risk coverage ratchets
         run: scripts/check_risk_coverage.sh
       - run: uv run python scripts/evaluate_llm_contracts.py
+      - name: Evaluate current deterministic recognizer on utterances
+        run: uv run python scripts/evaluate_task_recognizer.py
       - name: Create and restore a real backup
         run: |
           backup="$(uv run python -c 'import asyncio; from bot.scheduler.backup import run_backup; print(asyncio.run(run_backup()))')"

@@ -8,9 +8,9 @@ from aiogram import F, Router
 from aiogram.types import CallbackQuery
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
-from bot.db.crud.tasks import update_task
 from bot.db.engine import async_session
 from bot.handlers.telegram import callback_data, callback_message
+from bot.services.tasks import update_task_workflow as update_task
 
 logger = logging.getLogger(__name__)
 
@@ -64,7 +64,7 @@ async def cb_review_cancel(callback: CallbackQuery) -> None:
     async with async_session() as session:
         task = await update_task(
             session, task_id, callback.from_user.id,
-            status="cancelled", resolution="cancelled",
+            status="cancelled",
         )
 
     if task:

@@ -2,7 +2,7 @@ import pendulum
 import pytest
 
 from bot.db.crud import reminders as reminder_crud
-from bot.db.crud.reminders import _calc_next_occurrence
+from bot.db.crud.reminders import _calc_next_occurrence, next_future_occurrence
 from bot.llm.client import LLMClient
 
 
@@ -25,6 +25,19 @@ def test_monthly_repeat_clamps_to_month_end():
     assert next_dt.date() == pendulum.date(2026, 2, 28)
     assert next_dt.hour == 10
     assert next_dt.minute == 15
+
+
+def test_weekdays_midnight_uses_series_timezone_after_utc_roundtrip():
+    local = pendulum.datetime(2026, 9, 4, 0, 30, tz="Europe/Moscow")
+    stored = local.in_timezone("UTC")
+    result = next_future_occurrence(stored.in_timezone("Europe/Moscow"), "weekdays", stored)
+    assert result == pendulum.datetime(2026, 9, 7, 0, 30, tz="Europe/Moscow")
+
+
+def test_recurrence_skips_overdue_backlog():
+    current = pendulum.datetime(2026, 9, 1, 9, tz="Europe/Moscow")
+    now = current.add(days=8, hours=1)
+    assert next_future_occurrence(current, "daily", now) == current.add(days=9)
 
 
 def test_llm_client_defaults_to_minimax_without_fallback():

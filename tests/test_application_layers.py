@@ -6,7 +6,7 @@ import ast
 from pathlib import Path
 
 APPLICATION = Path(__file__).resolve().parents[1] / "bot" / "application"
-TRANSPORT_PREFIXES = ("aiogram", "bot.handlers")
+FORBIDDEN_PREFIXES = ("aiogram", "bot.handlers", "bot.db", "bot.llm", "bot.services")
 
 
 def test_application_layer_does_not_import_transport_or_persistence() -> None:
@@ -19,11 +19,8 @@ def test_application_layer_does_not_import_transport_or_persistence() -> None:
                 modules.extend(alias.name for alias in node.names)
             elif isinstance(node, ast.ImportFrom) and node.module:
                 modules.append(node.module)
-            forbidden = TRANSPORT_PREFIXES
-            if path.name.endswith("_recognizer.py"):
-                forbidden += ("bot.db",)
             for module in modules:
-                if module.startswith(forbidden):
+                if module.startswith(FORBIDDEN_PREFIXES):
                     violations.append(f"{path.name}:{node.lineno}: {module}")
 
     assert violations == []
