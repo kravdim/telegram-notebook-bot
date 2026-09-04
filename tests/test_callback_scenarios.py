@@ -8,6 +8,35 @@ from tests.fakes import FakeCallback, FakeSessionContext
 
 
 @pytest.mark.asyncio
+async def test_snooze_done_failure_preserves_retry(monkeypatch):
+    async def failed_lookup(*args):
+        raise RuntimeError("database unavailable")
+
+    monkeypatch.setattr(callbacks, "async_session", lambda: FakeSessionContext())
+    monkeypatch.setattr(callbacks, "get_reminder_by_id", failed_lookup)
+    callback = FakeCallback(user_id=42, data=f"snooze_done:{uuid4()}")
+    await callbacks.cb_snooze_done(callback)
+
+    assert not callback.message.edits
+    assert callback.answered[0][0] != "✅"
+    assert "ещё раз" in callback.message.answers[0][0]
+
+
+@pytest.mark.asyncio
+async def test_snooze_done_missing_is_not_success(monkeypatch):
+    async def missing(*args):
+        return None
+
+    monkeypatch.setattr(callbacks, "async_session", lambda: FakeSessionContext())
+    monkeypatch.setattr(callbacks, "get_reminder_by_id", missing)
+    callback = FakeCallback(user_id=42, data=f"snooze_done:{uuid4()}")
+    await callbacks.cb_snooze_done(callback)
+
+    assert "не найдено" in callback.message.edits[0][0]
+    assert "Готово" not in callback.message.edits[0][0]
+
+
+@pytest.mark.asyncio
 async def test_snooze_done_marks_reminder_and_task(monkeypatch):
     reminder_id = uuid4()
     task_id = uuid4()

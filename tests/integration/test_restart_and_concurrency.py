@@ -67,6 +67,56 @@ async def isolate_engine_pool():
 
 
 @pytest.mark.asyncio
+async def test_expired_read_preserves_concurrently_claimed_workflow(monkeypatch):
+    user_id = 8_090_000_000 + int(uuid.uuid4().hex[:6], 16)
+    async with async_session() as session:
+        session.add(User(telegram_id=user_id, username="expiry-race"))
+        await session.commit()
+        await set_state(session, user_id, "memoir", {"session_token": "old"}, ttl_minutes=-1)
+
+    try:
+        async with async_session() as reader:
+            original_execute = reader.execute
+
+            async def read_then_replace(*args, **kwargs):
+                result = await original_execute(*args, **kwargs)
+                async with async_session() as writer:
+                    assert await claim_state(
+                        writer, user_id, "voice_edit", {"session_token": "new"}
+                    ) is not None
+                return result
+
+            monkeypatch.setattr(reader, "execute", read_then_replace)
+            assert await get_state(reader, user_id) is None
+            await reader.commit()
+
+        async with async_session() as session:
+            active = await get_state(session, user_id)
+            assert active is not None
+            assert active.state_type == "voice_edit"
+            assert active.payload == {"session_token": "new"}
+    finally:
+        async with async_session() as session:
+            await session.execute(delete(User).where(User.telegram_id == user_id))
+            await session.commit()
+
+
+@pytest.mark.asyncio
+async def test_set_state_replaces_expired_row_without_unique_violation():
+    user_id = 8_095_000_000 + int(uuid.uuid4().hex[:6], 16)
+    async with async_session() as session:
+        session.add(User(telegram_id=user_id, username="expiry-replace"))
+        await session.commit()
+        try:
+            await set_state(session, user_id, "memoir", ttl_minutes=-1)
+            active = await set_state(session, user_id, "voice_edit", {"session_token": "new"})
+            assert active.state_type == "voice_edit"
+        finally:
+            await session.execute(delete(User).where(User.telegram_id == user_id))
+            await session.commit()
+
+
+@pytest.mark.asyncio
 async def test_two_processes_cannot_hold_runtime_lease():
     first = SingletonLease(engine, "dailyplanner:test:singleton")
     second = SingletonLease(engine, "dailyplanner:test:singleton")

@@ -109,9 +109,9 @@ async def cb_snooze_morning(callback: CallbackQuery) -> None:
 async def cb_snooze_done(callback: CallbackQuery) -> None:
     """Напоминание выполнено — отметить задачу если есть."""
     reminder_id = callback_data(callback).split(":", 1)[1]
-    await callback.answer("✅")
+    await callback.answer()
 
-    result_text = "✅ Готово!"
+    result_text = "ℹ️ Напоминание не найдено. Возможно, оно уже удалено."
     try:
         async with async_session() as session:
             reminder = await get_reminder_by_id(
@@ -119,6 +119,7 @@ async def cb_snooze_done(callback: CallbackQuery) -> None:
             )
             if reminder:
                 if reminder.task_id:
+                    result_text = "ℹ️ Связанная задача не найдена. Проверь список /tasks."
                     user = await get_user(session, callback.from_user.id)
                     completion = await complete_task_workflow(
                         session,
@@ -141,10 +142,19 @@ async def cb_snooze_done(callback: CallbackQuery) -> None:
                             f"{closed_task_status(completion.task)}."
                         )
                 else:
-                    await resolve_reminder(session, reminder.id, callback.from_user.id)
+                    resolved = await resolve_reminder(
+                        session, reminder.id, callback.from_user.id
+                    )
+                    if resolved:
+                        result_text = "✅ Готово!"
     except Exception as e:
         logger.error("Ошибка при обработке snooze_done: error_type=%s", error_type(e))
-        result_text = "✅ Готово!"
+        await callback_message(callback).answer(
+            "Не удалось подтвердить выполнение. Нажми «Сделано» ещё раз — "
+            "повторное нажатие безопасно.",
+            parse_mode=None,
+        )
+        return
 
     try:
         await callback_message(callback).edit_text(result_text, reply_markup=None)
