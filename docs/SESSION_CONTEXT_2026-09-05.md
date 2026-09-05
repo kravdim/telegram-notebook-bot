@@ -144,3 +144,158 @@ drill выполнялся отдельно от pytest coverage. Migration/sche
 critical/risk floors, Ruff, mypy (122 файла), Bandit и docs gate прошли.
 Дополнительная проверка драйвера запрещает exact-SHA evidence при dirty/untracked
 runtime в `bot/` или незакоммиченном изменении зависимостей.
+
+## Maintenance-deploy: ядро реализовано, адаптеры ещё впереди
+
+Добавлен `bot/operations/maintenance.py`: durable журнал (atomic replace + fsync,
+0600), общий с installer каталог `deploy.lock`, проверка checksum снимка,
+проверки freeze/identity/data через порт, восстановление только в отдельную БД.
+Разрешение snapshot rollback необратимо закрывается в журнале до runtime activation.
+При неопределённом результате записи журнала перечитывается состояние с диска.
+После admission автоматический restore запрещён; нужен разбор оператором.
+
+21 новый fault-injection тест проверяет orchestration, повреждённый снимок,
+изменённую identity/data, сбои миграции/валидации/активации, восстановление после
+прерывания и installer lock. Это fake-port тесты с реальным файловым журналом,
+не доказательство production freeze/restore. Полный локальный gate: **585 passed,
+1 skipped, coverage 73.24%**, migrations/drift/complexity/critical/risk проходят;
+Ruff, mypy bot и documentation gate проходят.
+
+**Задача maintenance-deploy ещё не завершена.** Исполняемого CLI нет. Следующий
+шаг — PostgreSQL snapshot/data-guard/restore adapter и macOS disable/bootout,
+singleton lease, private plist/database override и bounded activation. Затем
+failure injection конкретных адаптеров с реальным PostgreSQL; до этого production
+deploy запрещён существующим schema gate. Не менять compatibility allowlist.
+Детальный контракт дополнен в MIGRATION_ROLLBACK.md. Production не затронут.
+
+## Продолжение: PostgreSQL snapshot/restore и data guard
+
+Добавлены `bot/operations/maintenance_postgres.py` и `maintenance_data.py`.
+Снимок pg_dump и fingerprint используют один exported MVCC snapshot. Проверяется
+checksum; до восстановления требуется least-privilege CREATEDB operator и template.
+Восстановление создаёт отдельную БД, проверяет head и fingerprint, выдаёт приложению
+права на таблицы/последовательности. Исходная БД не изменяется. Имена recovery targets
+фиксируются в fsynced 0600 manifest **до** createdb; неудачные targets сохраняются.
+
+Data guard проверяет baseline rows и известные новые поля reminder leases,
+action plan/results, timezone backfill и consent fingerprint. Неизвестные изменения
+схемы или новые данные запрещают restore. Нельзя просто игнорировать новые колонки.
+Пароли не передаются в argv; native subprocess timeout/cancellation завершают и
+дожидаются child process. Требуется совпадение major PostgreSQL-клиента и сервера:
+local PG17 tool против Docker PG16 показал отказ restore, поэтому тесты используют
+реальные PG16 clients из изолированного контейнера. Это подключено и к CI, но remote
+CI в этом продолжении не запускался. Нативный запуск клиентов покрыт unit tests.
+
+Добавлены 23 теста: 10 real-DB и 13 client/unit. Реальные проверки используют
+малую representative schema, не весь старый runtime: отдельный exact-release drill
+остаётся предыдущим evidence. Проверены отдельный restore, application-role writes,
+сохранение candidate canary, concurrent write во время dump, неизвестные schema
+changes, новые recovery-bearing values и сохранение failed restore target.
+Тестовые БД/роли удаляются внутри disposable gate; production не затронут.
+
+Итоговый полный local gate: **608 passed, 1 skipped, coverage 73.66%**.
+Migrations/drift, complexity, critical/risk gates, Ruff, mypy (126 файлов), Bandit,
+documentation/version checks и diff whitespace проходят. B608 suppression ограничен
+двумя динамическими SQL с dialect-quoted identifiers и константным whitelist;
+экранирование нестандартных имён проверено реальной БД.
+
+**Следующее действие:** связать компоненты с macOS freeze/lease/activation adapter
+и runtime/config identity validation. CLI ещё нет, orchestration с реальными
+launchd/Telegram не проверено; production schema gate/allowlist не менялись.
+Восстановленные объекты принадлежат operator: будущие DDL/миграции требуют явного
+решения по роли/ownership. Изменения этого и предыдущего maintenance checkpoint
+остаются в рабочем дереве; commit/push/deploy в этом продолжении не выполнялись.
+
+## Продолжение: launchd control и живой maintenance lease
+
+Добавлены `maintenance_launchd.py` и `maintenance_lease.py`. Контроллер ограничен
+`gui/<uid>/com.notebook-bot`; проверяет plist label/ownership/permissions и запрещает
+symlink plist. Persistent disable выполняется до bootout; неизвестный disabled
+output, недоступный domain и любой статус отсутствия кроме 113 блокируют процесс.
+Вывод launchctl — diagnostic, не стабильный API; реальный macOS не переключался,
+его версия/ответы требуют подтверждения перед production window.
+
+Lease использует тот же advisory key, что SingletonLease runtime. Проверяется
+реальный backend PID и точное владение lock, отсутствие остальных DB sessions
+и prepared transactions. `pg_stat_clear_snapshot()` вызывается при каждой проверке,
+чтобы новый клиент не был скрыт cached statistics. На реальном PostgreSQL проверены
+конкуренция runtime/maintenance, snapshot connection cleanup, новый клиент после
+успешного freeze, explicit unlock и invalidated connection. Factory PostgreSQL
+теперь ограничивает connect timeout 10s и command timeout 60s.
+
+Activation требует durable admission с rollback=false и identity:
+`identity.candidate`, `identity.previous` — полные SHA; `identity.database` —
+source identity hash, `identity.source_database` — имя исходной БД. Для previous
+target берётся `activating_database`. Plist с DATABASE_URL пишется atomic/fsync/0600;
+shared `.env` не меняется. Запускается release Python `-m bot.main`, **не run.sh**:
+обычный скрипт запуска выполняет Alembic/seed до получения singleton, что недопустимо
+для этого перехода. Migration/preflight/seeding policy должны жить в composition.
+Lease снимается только после admission; затем enable/bootstrap и exact-SHA heartbeat
+по новому уникальному readiness path. Любой неопределённый запуск ведёт к halt,
+а не восстановлению снимка. current-release обновляется после readiness.
+
+Добавлено 27 тестов: 23 launchd/unit и 4 real-DB lease. Проверены failure injection,
+ошибка acknowledgement после фактического bootstrap, ошибка после записи plist,
+native subprocess timeout/cancellation, подмена release/database и неверный plist.
+Итоговый полный gate: **635 passed, 1 skipped, coverage 74.01%**; migrations/drift,
+complexity/critical/risk, Ruff, mypy (128 файлов), Bandit, docs/version/diff проходят.
+Production, Telegram, реальный launchd не затронуты; Git commit/push не выполнялись.
+
+**Следующий шаг:** concrete composition MaintenancePort + exact artifact/config
+validation и explicit maintenance CLI. Нужно связать все компоненты, получить
+отдельный lease на восстановленной БД при old-runtime validation (source lease её
+не защищает), проверить migration/preflight без раннего polling и сквозной failure
+matrix. До этой приёмки нельзя считать maintenance-deploy завершённым и нельзя
+менять rollback allowlist. Все maintenance-изменения нескольких checkpoints пока
+незакоммичены; проверять весь diff, сохраняя текущее рабочее дерево.
+
+## Следующий checkpoint: единая процедура и explicit CLI
+
+Добавлены `bot/operations/maintenance_release.py`, `maintenance_deploy.py` и
+`scripts/maintenance_deploy.py`. `MacMaintenance` реализует весь MaintenancePort:
+initial validation -> persistent freeze/source lease -> snapshot -> реальный
+verification restore + отдельный target lease + old preflight/smoke -> migrate ->
+candidate preflight/smoke -> data guard -> journal admission -> launchd activation.
+При восстановлении target lease удерживается до admission; shared `.env` не меняется.
+Seeding не выполняется автоматически: release с seed changes требует отдельной
+проверенной политики и адаптации data guard.
+
+Release verification сравнивает prepared files и executable modes с exact Git
+objects (без replacement refs), отклоняет extras/symlinks/submodules, требует private
+dotenv, проверяет `uv sync --check --frozen --offline --no-dev --extra stt` и связывает
+source/config/lock/interpreter fingerprints с release paths. Это не побайтовая
+аттестация всех установленных dependencies: host/venv остаются trusted assets.
+Команды и runtime используют новый PYTHONPYCACHEPREFIX и запрещают bytecode writes,
+чтобы старый `.pyc` не подменил проверенный source. `.env` и config повторно хэшируются
+при переходах; административные редакторы/писатели должны быть остановлены на окно.
+
+CLI запускается как `.venv/bin/python -m scripts.maintenance_deploy` из repo.
+Обязательны --repository, --release-root, --previous/--candidate (полные commit SHA),
+--plist, --state-dir. DATABASE_URL и OPERATOR_DATABASE_URL только через защищённое
+environment, не argv. По умолчанию plan-only: без stop/migration/restore/journal write.
+Execution только на macOS с `--execute --confirm <MAINTENANCE-...>`; token связывает
+operation+identity. Recovery имеет отдельный token (`--recover`) и подчиняется
+durable запрету после admission. Journal state dir сверяется с installed READINESS_FILE
+для общего deploy.lock. Чужой installed SHA/source DB отклоняется до freeze.
+Exit 0 = plan/deployed; 2 = candidate failed, restored_previous; 1 = failure/manual
+reconciliation. MaintenanceError содержит только специально безопасные diagnostics;
+raw SQL/OS exception messages не печатаются. Не снимать stale lock автоматически.
+
+Добавлен 21 тест: real disposable Git для artifact verification (uv check в этих
+unit tests подменён), default-no-write/confirmation/error privacy CLI и 5 composition
+сценариев с реальными PostgreSQL dump/restore/leases. В composition launchd и release
+команды simulated на малой схеме: success, migration failure, validation failure,
+post-snapshot new data, uncertain activation. Это **не** native macOS/exact-release
+rehearsal. Предыдущий exact-old-release drill остаётся отдельным evidence, не новым.
+
+Итоговый полный quality gate завершился с exit 0: **656 passed, 1 skipped**, coverage
+**74.53%** (657 collected). Migrations/drift, complexity/critical/risk gates, Ruff,
+mypy (131 файл), Bandit, docs/version и diff whitespace проходят. Production,
+реальный launchd, Telegram и remote CI не затронуты. Commit/push/deploy не выполнялись.
+
+**Дальше:** зафиксировать текущий проверенный код, подготовить exact-SHA releases и
+провести rehearsal всей процедуры с настоящими old/candidate командами; отдельно
+подтвердить native launchctl responses на целевой macOS и пройти remote release CI,
+live/profile gates. Production window требует явного согласования. Compatibility
+allowlist и обычный staged installer не ослаблялись. Все maintenance checkpoints
+пока находятся в общем незакоммиченном рабочем дереве; не терять их при продолжении.

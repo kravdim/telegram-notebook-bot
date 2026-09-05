@@ -63,6 +63,7 @@ jobs:
       MINIMAX_API_KEY: ci-placeholder-not-a-key
       ALLOW_ALL_USERS: "true"
       RUN_DB_TESTS: "1"
+      DAILYPLANNER_DISPOSABLE_DB: "1"
       BACKUP_DIR: /tmp/dailyplanner-backups
       OPERATOR_DATABASE_URL: postgresql://planner_recovery:planner_recovery@localhost:5432/postgres
       PYTHONPATH: .
@@ -118,6 +119,8 @@ jobs:
       - name: Require a single Alembic head
         run: test "$(uv run alembic heads | wc -l)" -eq 1
       - name: Test with coverage floor
+        env:
+          DAILYPLANNER_TEST_PG_CONTAINER: ${{ job.services.postgres.id }}
         run: uv run pytest --cov --cov-report=term-missing --cov-report=xml
       - name: Upload machine-readable coverage
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

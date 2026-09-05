@@ -39,6 +39,8 @@ export BOT_TOKEN="local-quality-placeholder"
 export MINIMAX_API_KEY="local-quality-placeholder"
 export ALLOW_ALL_USERS="true"
 export RUN_DB_TESTS="1"
+export DAILYPLANNER_DISPOSABLE_DB="1"
+export DAILYPLANNER_TEST_PG_CONTAINER="${QUALITY_PROJECT}-postgres-1"
 export BACKUP_DIR="$QUALITY_BACKUP_DIR"
 export PYTHONPATH="."
 
