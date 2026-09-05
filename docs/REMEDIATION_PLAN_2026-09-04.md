@@ -324,6 +324,30 @@ runtime `27ce9e0` в отдельной frozen-среде. Старый prefligh
 с остановкой writers, snapshot identity и запретом молчаливой потери post-snapshot
 updates. Эта проверка не разрешает code-only/zero-downtime rollback.
 
+Продолжение maintenance (05.09): добавлены durable orchestration и PostgreSQL
+snapshot/data-guard/separate-restore компоненты. Реальные DB-тесты проверяют
+экспортированный snapshot, post-snapshot writes, новые recovery-поля, доступ
+application role к восстановленной БД и сохранение failed target. Это ещё не
+закрытие deployment gate: впереди freeze/lease/launchd adapter, проверка точных
+runtime/config identities и интеграция с orchestration без раннего polling.
+
+Следующий checkpoint: реализованы `maintenance_launchd.py` и `maintenance_lease.py`.
+Проверяются persistent disable/bootout, живое владение runtime lock, отсутствие
+других DB connections/prepared transactions и journal-bound activation. Launch
+обходит `run.sh`, чтобы не повторять migrations до singleton; uncertainty после
+admission приводит к halt без snapshot rollback. launchd пока только simulated,
+lock проверяется на реальном PostgreSQL. На этом checkpoint composition и CLI ещё
+не были реализованы; их следующий checkpoint описан ниже.
+
+Composition/CLI checkpoint: `MacMaintenance` связывает PostgreSQL, source/target
+leases, journal и launchd. Проверяются exact Git blobs/modes, config/lock/interpreter
+fingerprints и frozen offline environment consistency; конфигурация перепроверяется
+перед фазами. CLI по умолчанию только строит план, execution требует macOS и точного
+confirmation identifier для текущей операции/identity. Сквозные DB-сценарии покрывают
+успех, безопасное восстановление до admission, сохранение новых данных и uncertain
+activation. Это implementation/local evidence, не production acceptance: впереди
+exact-release/native macOS rehearsal, remote CI/live/profile gates и downtime window.
+
 Quality gate этого шага: 564 passed, 1 skipped; coverage 72.89% с новыми
 operational scripts. Реальный migration drill выполнялся отдельно от pytest
 coverage. Пороговые проверки, линтер, типизация, Bandit и docs gate прошли.
