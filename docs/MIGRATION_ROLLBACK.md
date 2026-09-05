@@ -107,8 +107,8 @@ The executable composition and its separate acceptance limits are described belo
 
 Remaining production acceptance obligations:
 
-- Rehearse the composition below with the exact prepared old/candidate runtimes
-  and confirm native launchctl responses on the target macOS version.
+- Confirm native launchctl responses and real runtime admission on the target
+  macOS version. The local exact-release rehearsal below simulates launchd.
 - Pass release CI/live/profile gates and obtain an explicit maintenance window.
 - Keep all administrative writers and artifact/configuration editors stopped
   for the entire window; the runtime lease is not a universal DBA write fence.
@@ -254,3 +254,46 @@ new-data preservation and uncertain activation. Source verification separately
 uses real disposable Git objects; CLI tests prove default-no-write and confirmation
 binding. These tests do **not** replace the exact-old-runtime drill or a native
 maintenance rehearsal. No production transition has been performed by this work.
+
+## Exact-release composition rehearsal: local evidence
+
+`scripts/run_maintenance_rehearsal.py` now exercises the concrete composition with
+two independently prepared, frozen `--no-dev --extra stt` environments. Source,
+configuration and interpreter verification, migrations, preflight and schema/vector
+smoke execute from the actual old/candidate releases; those commands are not mocks.
+Only launchd/heartbeat are simulated, and matching PostgreSQL clients execute inside
+the disposable PostgreSQL 16 container. No Telegram polling or external AI calls run.
+
+The driver accepts a previous Git revision, **not** a database URL. It refuses dirty
+runtime code and clears inherited database, UV environment and Git overrides before
+preparation. Every scenario has a separate synthetic source DB; recovery uses the
+real least-privilege operator and separate target. The source is retained until the
+result is verified. Injection reachability, admission count and restore count are
+checked so an unrelated exception cannot masquerade as an expected failure.
+
+Local report: [MAINTENANCE_REHEARSAL_2026-09-05.json](evidence/MAINTENANCE_REHEARSAL_2026-09-05.json).
+Previous `27ce9e0620a18b00e199584cf013351bb9b8040b`, candidate
+`f79514052c249838215b3e2dba3c4764bc2c987a`; driver/export-helper hashes are recorded
+separately. Five scenarios passed:
+
+- Success: real migration/validation, then simulated admission of the candidate.
+- Failure after real migration: validated old-runtime restore to a separate DB.
+- Failure after real candidate preflight: the same safe pre-admission recovery.
+- Post-snapshot write: source canary retained; no rollback admission.
+- Uncertain activation: service simulation halted and snapshot rollback revoked.
+
+The container, temporary release environments, databases and snapshots were removed
+after verification. This report is evidence, not a retained backup. The reusable CI
+now requires this rehearsal and uploads its JSON beside the migration-rollback
+report; remote execution has not yet been confirmed. Local quality gate after the
+driver addition: **664 passed, 1 skipped, coverage 73.72%**. The real rehearsal runs
+outside pytest coverage; its driver still contributes to the coverage denominator.
+
+Reproduce from a clean committed runtime with Docker and uv available:
+
+```bash
+.venv/bin/python -m scripts.run_maintenance_rehearsal
+```
+
+This establishes exact-source composition behaviour, **not** native launchd,
+Telegram/live E2E, STT inference or release-CI acceptance. Production remains gated.

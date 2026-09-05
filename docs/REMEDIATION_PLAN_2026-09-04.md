@@ -346,7 +346,14 @@ fingerprints и frozen offline environment consistency; конфигурация
 confirmation identifier для текущей операции/identity. Сквозные DB-сценарии покрывают
 успех, безопасное восстановление до admission, сохранение новых данных и uncertain
 activation. Это implementation/local evidence, не production acceptance: впереди
-exact-release/native macOS rehearsal, remote CI/live/profile gates и downtime window.
+native macOS rehearsal, remote CI/live/profile gates и downtime window.
+
+Exact-release checkpoint: runtime зафиксирован в `f795140`, реальная composition
+репетиция `27ce9e0 -> f795140` прошла 5/5 сценариев. Release commands, frozen venv,
+PostgreSQL и restore настоящие, launchd/heartbeat simulated. Evidence находится в
+`docs/evidence/MAINTENANCE_REHEARSAL_2026-09-05.json`; driver/helper hashes отдельно.
+Драйвер добавлен в обязательный reusable CI, но remote CI ещё не выполнялся.
+Local quality gate: 664 passed, 1 skipped, coverage 73.72%. Production не затронут.
 
 Quality gate этого шага: 564 passed, 1 skipped; coverage 72.89% с новыми
 operational scripts. Реальный migration drill выполнялся отдельно от pytest

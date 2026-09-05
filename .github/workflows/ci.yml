@@ -25,11 +25,15 @@ jobs:
       - run: uv sync --frozen --group dev
       - name: Prove old-runtime rejection and maintenance snapshot restore
         run: uv run python scripts/run_migration_rollback_drill.py > migration-rollback.json
+      - name: Rehearse exact releases through the composed maintenance workflow
+        run: uv run python -m scripts.run_maintenance_rehearsal > maintenance-rehearsal.json
       - name: Preserve exact-SHA database rollback evidence
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: dailyplanner-migration-rollback
-          path: migration-rollback.json
+          path: |
+            migration-rollback.json
+            maintenance-rehearsal.json
           retention-days: 90
 
   developer-bootstrap:
