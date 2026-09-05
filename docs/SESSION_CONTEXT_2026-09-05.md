@@ -299,3 +299,38 @@ mypy (131 файл), Bandit, docs/version и diff whitespace проходят. P
 live/profile gates. Production window требует явного согласования. Compatibility
 allowlist и обычный staged installer не ослаблялись. Все maintenance checkpoints
 пока находятся в общем незакоммиченном рабочем дереве; не терять их при продолжении.
+
+## Commit и exact-release composition rehearsal
+
+Все накопленные maintenance runtime/CLI/tests изменения зафиксированы в
+**`f79514052c249838215b3e2dba3c4764bc2c987a`** (`feat: add guarded maintenance deployment
+workflow`). Ветка остаётся `remediation/comprehensive-2026-09-04`; main не менялась.
+
+Добавлен `scripts/run_maintenance_rehearsal.py`. Два самостоятельных export/uv frozen
+окружения old `27ce9e0` и candidate `f795140`; настоящие source verification, migration,
+preflight, schema/vector smoke, PostgreSQL snapshot/restore и source/target leases.
+Launchd и heartbeat simulated; bot.main/Telegram polling и внешние AI не запускаются.
+Драйвер не принимает production URL, очищает inherited DB/UV/Git overrides и требует
+committed runtime. Каждый сценарий имеет отдельную БД. Инъекция должна быть реально
+достигнута; проверяются admissions/restores counts, чтобы случайный отказ не был
+ошибочно принят за успешный failure test.
+
+Итог **5/5**: success; failure после настоящей migration; failure после настоящего
+candidate preflight; сохранение post-snapshot canary без restore; uncertain activation
+с halt и rollback=false. Evidence: `docs/evidence/MAINTENANCE_REHEARSAL_2026-09-05.json`.
+В нём exact previous/candidate SHA, source/config/lock/interpreter fingerprints,
+snapshot checksums, driver/helper SHA256 и timestamps. Runtime f795140 не менялся
+после репетиции; драйвер, CI/docs/evidence фиксируются отдельно. Нельзя выдавать это
+за native-launchd или live/release доказательство другого будущего SHA.
+
+Драйвер включён в reusable CI migration-rollback job; JSON сохраняется рядом со старым
+drill report. Remote CI не запускался. Восемь новых unit/contract tests проверяют
+disposable boundary, dirty-runtime rejection, environment isolation и CI obligation.
+Полный local gate: **664 passed, 1 skipped; coverage 73.72%**, Ruff, mypy (132 файла),
+Bandit, migrations/drift, complexity/critical/risk gates проходят. Реальный drill
+выполнялся отдельно от pytest coverage, новый driver входит в общий denominator.
+
+Временные release dirs, Docker container, synthetic databases и snapshots удалены
+после проверки; JSON не является retained backup. Production не затронут, Git push
+и deploy не выполнялись. Следующий этап — публикация ветки/remote CI, затем native
+macOS и live/profile acceptance; production maintenance window согласовать явно.
