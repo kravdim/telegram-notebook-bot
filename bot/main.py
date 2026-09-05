@@ -164,7 +164,7 @@ async def main() -> None:
         await engine.dispose()
         return
 
-    from bot.application.interactions import interaction_service
+    from bot.services.interactions import interaction_service
 
     recovered_interactions = await interaction_service.recover_interrupted()
     if recovered_interactions:
@@ -253,6 +253,9 @@ async def main() -> None:
     dp.include_router(evening_review.router)
     dp.include_router(trip.router)
     dp.include_router(voice.router)
+    from bot.handlers import request_retry
+
+    dp.include_router(request_retry.router)
     dp.include_router(messages.router)
 
     # Graceful shutdown

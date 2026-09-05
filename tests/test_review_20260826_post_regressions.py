@@ -7,6 +7,7 @@ import bot.handlers.callbacks as callbacks
 import bot.handlers.messages as messages
 import bot.scheduler.chronometry as chronometry_scheduler
 import scripts.delete_user_data as deletion_script
+from bot.privacy import provider_fingerprint
 from tests.fakes import FakeCallback, FakeMessage, FakeSession, FakeSessionContext
 
 
@@ -89,7 +90,7 @@ async def test_mutation_without_typed_result_fails_closed(
     finished = []
 
     async def get_user(session, user_id):
-        return SimpleNamespace(timezone="Europe/Moscow", privacy_notice_version=1, cloud_processing_enabled=True)
+        return SimpleNamespace(timezone="Europe/Moscow", privacy_notice_version=1, cloud_processing_enabled=True, privacy_provider_fingerprint=provider_fingerprint())
 
     async def get_prompt(session, prompt_key):
         return "prompt {now} {timezone}"
@@ -98,7 +99,7 @@ async def test_mutation_without_typed_result_fails_closed(
         return None
 
     async def no_claim(*args):
-        return None
+        return True
 
     async def finish(key, status):
         finished.append(status)
@@ -113,6 +114,7 @@ async def test_mutation_without_typed_result_fails_closed(
     monkeypatch.setattr(messages, "get_prompt", get_prompt)
     monkeypatch.setattr(messages, "_get_persisted_interaction", no_state)
     monkeypatch.setattr(messages, "_claim_request", no_claim)
+    monkeypatch.setattr(messages, "saved_plan", no_state)
     monkeypatch.setattr(messages, "_finish_request", finish)
     monkeypatch.setattr(messages, "dispatch_result", forbidden_dispatch)
     monkeypatch.setattr(

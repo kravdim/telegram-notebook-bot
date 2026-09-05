@@ -109,7 +109,6 @@ async def _orchestrate(args: argparse.Namespace) -> None:
     from aiogram import Bot  # noqa: PLC0415
     from sqlalchemy import select  # noqa: PLC0415
 
-    from bot.application.interactions import interaction_service  # noqa: PLC0415
     from bot.config import settings  # noqa: PLC0415
     from bot.db.engine import async_session, engine  # noqa: PLC0415
     from bot.db.models import (  # noqa: PLC0415
@@ -119,6 +118,7 @@ async def _orchestrate(args: argparse.Namespace) -> None:
         Task,
     )
     from bot.scheduler.memoir import build_memoir_keyboard  # noqa: PLC0415
+    from bot.services.interactions import interaction_service  # noqa: PLC0415
     tested_sha = subprocess.check_output(
         ["git", "rev-parse", "HEAD"], cwd=ROOT, text=True
     ).strip()

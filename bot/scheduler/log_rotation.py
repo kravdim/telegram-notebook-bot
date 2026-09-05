@@ -42,7 +42,8 @@ async def rotate_llm_logs() -> None:
         )
         request_result = await session.execute(
             delete(ProcessedRequest).where(
-                ProcessedRequest.created_at < transient_cutoff
+                ProcessedRequest.created_at < transient_cutoff,
+                ProcessedRequest.status == "completed",
             )
         )
         fsm_result = await session.execute(

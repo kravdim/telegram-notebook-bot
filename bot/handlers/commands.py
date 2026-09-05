@@ -101,6 +101,8 @@ async def cmd_help(message: Message) -> None:
         "/settings — настройки\n"
         "/export — выгрузить данные\n"
         "/privacy — privacy и cloud AI\n"
+        "/reminder_errors — ошибки напоминаний и повторная отправка\n"
+        "/retry — продолжить незавершённый составной запрос без дублей\n"
         "/delete_data — полное удаление данных\n\n"
         "💡 <b>Примеры фраз:</b>\n"
         "• Купить продукты завтра\n"
@@ -297,7 +299,7 @@ async def cmd_done(message: Message, command: CommandObject) -> None:
         tasks = await search_tasks(session, message.from_user.id, query, status="open")
 
     if not tasks:
-        await message.answer(f"Не нашёл задачу по запросу «{query}».")
+        await message.answer(f"Не нашёл задачу по запросу «{query}».", parse_mode=None)
         return
 
     exact = next(
@@ -324,11 +326,13 @@ async def cmd_done(message: Message, command: CommandObject) -> None:
                 if completion.next_date
                 else ""
             )
-            await message.answer(f"✅ Задача «{completion.task.title}» выполнена! 🎉{next_text}")
+            await message.answer(
+                f"✅ Задача «{completion.task.title}» выполнена! 🎉{next_text}", parse_mode=None
+            )
         elif completion.task:
             await message.answer(
                 f"ℹ️ Задача «{completion.task.title}» "
-                f"{closed_task_status(completion.task)}."
+                f"{closed_task_status(completion.task)}.", parse_mode=None
             )
         return
 
@@ -1221,3 +1225,29 @@ async def cmd_export(message: Message) -> None:
     except Exception as exc:
         logger.error("Export failed: error_type=%s", error_type(exc))
         await message.answer("Не удалось подготовить экспорт. Попробуй позже.")
+
+
+@router.message(Command("reminder_errors"))
+async def cmd_reminder_errors(message: Message) -> None:
+    """Show owned failed deliveries without exposing another user's content."""
+    from sqlalchemy import select
+
+    from bot.db.models import Reminder
+
+    if not message.from_user:
+        return
+    async with async_session() as session:
+        rows = list((await session.scalars(select(Reminder).where(
+            Reminder.user_id == message.from_user.id, Reminder.status == "failed",
+        ).order_by(Reminder.remind_at).limit(10))).all())
+    if not rows:
+        await message.answer("Ошибок доставки напоминаний нет.")
+        return
+    for reminder in rows:
+        keyboard = InlineKeyboardBuilder()
+        keyboard.button(text="Повторить отправку", callback_data=f"reminder_retry:{reminder.id}")
+        await message.answer(
+            f"⚠️ Не доставлено: {reminder.message[:500]}\n"
+            f"Попыток: {reminder.delivery_attempts}. Можно повторить отправку.",
+            parse_mode=None, reply_markup=keyboard.as_markup(),
+        )

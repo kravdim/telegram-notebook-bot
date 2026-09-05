@@ -4,6 +4,7 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_call:
 
 permissions:
   contents: read
@@ -13,6 +14,28 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  migration-rollback:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
+      - run: uv sync --frozen --group dev
+      - name: Prove old-runtime rejection and maintenance snapshot restore
+        run: uv run python scripts/run_migration_rollback_drill.py > migration-rollback.json
+      - name: Rehearse exact releases through the composed maintenance workflow
+        run: uv run python -m scripts.run_maintenance_rehearsal > maintenance-rehearsal.json
+      - name: Preserve exact-SHA database rollback evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: dailyplanner-migration-rollback
+          path: |
+            migration-rollback.json
+            maintenance-rehearsal.json
+          retention-days: 90
+
   developer-bootstrap:
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -44,6 +67,7 @@ jobs:
       MINIMAX_API_KEY: ci-placeholder-not-a-key
       ALLOW_ALL_USERS: "true"
       RUN_DB_TESTS: "1"
+      DAILYPLANNER_DISPOSABLE_DB: "1"
       BACKUP_DIR: /tmp/dailyplanner-backups
       OPERATOR_DATABASE_URL: postgresql://planner_recovery:planner_recovery@localhost:5432/postgres
       PYTHONPATH: .
@@ -71,6 +95,8 @@ jobs:
         run: |
           uv export --frozen --no-dev --no-emit-project -o /tmp/requirements.txt
           uv run pip-audit -r /tmp/requirements.txt
+          uv export --frozen --no-dev --no-emit-project --extra stt -o /tmp/requirements-stt.txt
+          uv run pip-audit -r /tmp/requirements-stt.txt
       - run: uv run alembic upgrade head
       - name: Reject ORM and migration schema drift
         run: uv run alembic check
@@ -97,6 +123,8 @@ jobs:
       - name: Require a single Alembic head
         run: test "$(uv run alembic heads | wc -l)" -eq 1
       - name: Test with coverage floor
+        env:
+          DAILYPLANNER_TEST_PG_CONTAINER: ${{ job.services.postgres.id }}
         run: uv run pytest --cov --cov-report=term-missing --cov-report=xml
       - name: Upload machine-readable coverage
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -109,6 +137,8 @@ jobs:
       - name: Enforce central-runtime risk coverage ratchets
         run: scripts/check_risk_coverage.sh
       - run: uv run python scripts/evaluate_llm_contracts.py
+      - name: Evaluate current deterministic recognizer on utterances
+        run: uv run python scripts/evaluate_task_recognizer.py
       - name: Create and restore a real backup
         run: |
           backup="$(uv run python -c 'import asyncio; from bot.scheduler.backup import run_backup; print(asyncio.run(run_backup()))')"

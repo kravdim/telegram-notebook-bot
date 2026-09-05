@@ -10,7 +10,7 @@ from bot.db.models import InteractionState
 
 
 async def get_state(session: AsyncSession, user_id: int) -> Optional[InteractionState]:
-    """Return active interaction state, clearing it if expired."""
+    """Read active state without mutating a concurrently replaced workflow."""
     result = await session.execute(
         select(InteractionState).where(InteractionState.user_id == user_id)
     )
@@ -18,8 +18,6 @@ async def get_state(session: AsyncSession, user_id: int) -> Optional[Interaction
     if not state:
         return None
     if state.expires_at and pendulum.instance(state.expires_at) < pendulum.now("UTC"):
-        await session.delete(state)
-        await session.commit()
         return None
     return state
 
@@ -32,7 +30,13 @@ async def set_state(
     ttl_minutes: int = 30,
 ) -> InteractionState:
     """Create or replace a user interaction state."""
-    state = await get_state(session, user_id)
+    await session.execute(select(func.pg_advisory_xact_lock(user_id)))
+    result = await session.execute(
+        select(InteractionState)
+        .where(InteractionState.user_id == user_id)
+        .with_for_update()
+    )
+    state = result.scalar_one_or_none()
     expires_at = pendulum.now("UTC").add(minutes=ttl_minutes)
     if state:
         state.state_type = state_type

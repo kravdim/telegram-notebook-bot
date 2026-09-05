@@ -267,7 +267,7 @@ async def test_declined_cloud_processing_blocks_text_before_llm(monkeypatch):
     monkeypatch.setattr(messages, "llm_queue", None)
     message = FakeMessage("PRIVATE-CONTENT-CANARY", user_id=42)
 
-    outcome = await messages.process_text_message(42, message.text, message)
+    outcome = await messages._process_text_message_unlocked(42, message.text, message)
 
     assert outcome is messages.MessageOutcome.REJECTED
     assert "облачная обработка" in message.answers[0][0]
@@ -285,7 +285,7 @@ async def test_missing_consent_attributes_fail_closed(monkeypatch):
     )
     message = FakeMessage("PRIVATE-CONTENT-CANARY", user_id=42)
 
-    outcome = await messages.process_text_message(42, message.text, message)
+    outcome = await messages._process_text_message_unlocked(42, message.text, message)
 
     assert outcome is messages.MessageOutcome.REJECTED
     assert "Текущий выбор: не выбрана" in message.answers[0][0]

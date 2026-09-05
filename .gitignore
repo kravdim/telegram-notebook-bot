@@ -61,3 +61,11 @@ config.yaml
 # Misc
 *.zip
 project/
+
+# Generated release evidence (published as assets, not source)
+/release-manifest.json
+/attestation.json
+/dailyplanner-image.tar
+/dailyplanner.sbom.cdx.json
+/SHA256SUMS
+/migration-rollback.json

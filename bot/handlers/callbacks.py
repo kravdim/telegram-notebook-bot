@@ -10,14 +10,19 @@ from aiogram.exceptions import TelegramBadRequest
 from aiogram.types import CallbackQuery
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
-from bot.application.interactions import interaction_service
 from bot.db.crud.projects import complete_project_and_cancel_open_tasks
-from bot.db.crud.reminders import get_reminder_by_id, resolve_reminder, snooze_reminder
+from bot.db.crud.reminders import (
+    get_reminder_by_id,
+    resolve_reminder,
+    retry_failed_reminder,
+    snooze_reminder,
+)
 from bot.db.crud.tasks import delete_task, get_task_by_id
 from bot.db.crud.users import get_user
 from bot.db.engine import async_session
 from bot.handlers.telegram import callback_data, callback_message
 from bot.logging_safety import error_type
+from bot.services.interactions import interaction_service
 from bot.services.tasks import closed_task_status, complete_task_workflow
 
 logger = logging.getLogger(__name__)
@@ -25,6 +30,24 @@ logger = logging.getLogger(__name__)
 router = Router()
 
 MAX_SNOOZE = 5
+
+
+@router.callback_query(F.data.startswith("reminder_retry:"))
+async def cb_reminder_retry(callback: CallbackQuery) -> None:
+    await callback.answer()
+    try:
+        reminder_id = uuid.UUID(callback_data(callback).split(":", 1)[1])
+        async with async_session() as session:
+            queued = await retry_failed_reminder(session, reminder_id, callback.from_user.id)
+    except Exception as exc:
+        logger.error("Reminder retry failed: error_type=%s", error_type(exc))
+        await callback_message(callback).answer("Не удалось повторить. Попробуй ещё раз.")
+        return
+    await callback_message(callback).edit_text(
+        "🔔 Напоминание поставлено на повторную отправку." if queued
+        else "Это напоминание уже обработано или связанная задача закрыта.",
+        reply_markup=None,
+    )
 
 
 @router.callback_query(F.data.startswith("memoir_skip"))
@@ -109,9 +132,9 @@ async def cb_snooze_morning(callback: CallbackQuery) -> None:
 async def cb_snooze_done(callback: CallbackQuery) -> None:
     """Напоминание выполнено — отметить задачу если есть."""
     reminder_id = callback_data(callback).split(":", 1)[1]
-    await callback.answer("✅")
+    await callback.answer()
 
-    result_text = "✅ Готово!"
+    result_text = "ℹ️ Напоминание не найдено. Возможно, оно уже удалено."
     try:
         async with async_session() as session:
             reminder = await get_reminder_by_id(
@@ -119,6 +142,7 @@ async def cb_snooze_done(callback: CallbackQuery) -> None:
             )
             if reminder:
                 if reminder.task_id:
+                    result_text = "ℹ️ Связанная задача не найдена. Проверь список /tasks."
                     user = await get_user(session, callback.from_user.id)
                     completion = await complete_task_workflow(
                         session,
@@ -141,10 +165,19 @@ async def cb_snooze_done(callback: CallbackQuery) -> None:
                             f"{closed_task_status(completion.task)}."
                         )
                 else:
-                    await resolve_reminder(session, reminder.id, callback.from_user.id)
+                    resolved = await resolve_reminder(
+                        session, reminder.id, callback.from_user.id
+                    )
+                    if resolved:
+                        result_text = "✅ Готово!"
     except Exception as e:
         logger.error("Ошибка при обработке snooze_done: error_type=%s", error_type(e))
-        result_text = "✅ Готово!"
+        await callback_message(callback).answer(
+            "Не удалось подтвердить выполнение. Нажми «Сделано» ещё раз — "
+            "повторное нажатие безопасно.",
+            parse_mode=None,
+        )
+        return
 
     try:
         await callback_message(callback).edit_text(result_text, reply_markup=None)

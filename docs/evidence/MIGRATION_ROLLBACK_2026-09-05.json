@@ -1,0 +1,40 @@
+{
+  "accepted_user_writes_during_drill": false,
+  "automatic_code_rollback_safe": false,
+  "before": {
+    "mode": "seed",
+    "ok": true,
+    "schema_head": "a6c9d1e4f7b2"
+  },
+  "candidate": {
+    "mode": "candidate",
+    "ok": true,
+    "schema_head": "d9f2a4b6c803"
+  },
+  "candidate_sha": "0676c182bd81dc110d9eae42584dc7330f6b8e2c",
+  "downgrade_with_pending_plan_blocked": true,
+  "driver_sha256": "e7724fd45b8170c7fe82df8f46bcc232070e6b861b9975df059c4eb0ba48681f",
+  "failed_candidate_database_preserved_until_drill_cleanup": true,
+  "finished_at": "2026-09-05T07:55:13.760597+00:00",
+  "hazard": {
+    "legacy_sender_unsafe": true,
+    "selected_statuses": [
+      "failed",
+      "pending"
+    ]
+  },
+  "lock_sha256": "40ec1d48872bcae6be7ac09afb0d03a9892980a8bfdaf3668f6bc509fe8d58d5",
+  "mode": "maintenance-snapshot-restore",
+  "ok": true,
+  "previous_lock_sha256": "40ec1d48872bcae6be7ac09afb0d03a9892980a8bfdaf3668f6bc509fe8d58d5",
+  "previous_sha": "27ce9e0620a18b00e199584cf013351bb9b8040b",
+  "probe_sha256": "d00e6faac85e4093056aa89fc37e6b7c33ea40950ec4906915135f9737ff1036",
+  "production_touched": false,
+  "restored": {
+    "mode": "restored",
+    "ok": true,
+    "schema_head": "a6c9d1e4f7b2"
+  },
+  "snapshot_sha256": "191c06ca78e5c075e6422476330c6bdf56b7ee5eae0c869e5b20ca63b77a6543",
+  "started_at": "2026-09-05T07:55:05.078521+00:00"
+}

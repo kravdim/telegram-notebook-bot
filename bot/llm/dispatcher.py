@@ -39,15 +39,13 @@ from bot.db.crud.tasks import (
     set_frog,
     task_title_similarity,
 )
-from bot.db.crud.tasks import (
-    update_task as crud_update_task,
-)
 from bot.db.crud.trips import get_active_trip
 from bot.db.engine import async_session
 from bot.llm.contracts import Action, ToolName
 from bot.logging_safety import error_type, field_names, payload_size, validation_codes
 from bot.observability import metrics
 from bot.services.tasks import complete_task_workflow
+from bot.services.tasks import update_task_workflow as crud_update_task
 
 logger = logging.getLogger(__name__)
 
@@ -177,7 +175,7 @@ async def _execute_registered_intent(
     args = intent.arguments()
     executor = _COMMAND_EXECUTORS[intent.name]
     text = await executor(context.user_id, args, context.timezone)
-    return CommandResult.from_legacy_text(text)
+    return text if isinstance(text, CommandResult) else CommandResult(text)
 
 
 async def _exec_create_task(user_id: int, args: Dict[str, Any], tz: str) -> str:
@@ -228,19 +226,19 @@ async def _exec_update_task(user_id: int, args: Dict[str, Any], tz: str) -> str:
     return await _handle_update_task(user_id, args, tz)
 
 
-async def _exec_delete_task(user_id: int, args: Dict[str, Any], tz: str) -> str:
+async def _exec_delete_task(user_id: int, args: Dict[str, Any], tz: str) -> str | CommandResult:
     return await _handle_delete_task(user_id, args)
 
 
-async def _exec_create_project(user_id: int, args: Dict[str, Any], tz: str) -> str:
+async def _exec_create_project(user_id: int, args: Dict[str, Any], tz: str) -> str | CommandResult:
     return await _handle_create_project(user_id, args)
 
 
-async def _exec_complete_project(user_id: int, args: Dict[str, Any], tz: str) -> str:
+async def _exec_complete_project(user_id: int, args: Dict[str, Any], tz: str) -> str | CommandResult:
     return await _handle_complete_project(user_id, args)
 
 
-_CommandExecutor = Callable[[int, Dict[str, Any], str], Awaitable[str]]
+_CommandExecutor = Callable[[int, Dict[str, Any], str], Awaitable[str | CommandResult]]
 
 _COMMAND_EXECUTORS: Dict[ToolName, _CommandExecutor] = {
     "create_task": _exec_create_task,
@@ -825,7 +823,7 @@ async def _handle_update_task(
     return "Не удалось обновить задачу."
 
 
-async def _handle_delete_task(user_id: int, args: Dict[str, Any]) -> str:
+async def _handle_delete_task(user_id: int, args: Dict[str, Any]) -> str | CommandResult:
     query = args.get("search_query", "")
     if not query:
         return "Укажи какую задачу удалить."
@@ -843,16 +841,19 @@ async def _handle_delete_task(user_id: int, args: Dict[str, Any]) -> str:
             choices = [
                 {"id": str(task.id), "title": task.title} for task in top3
             ]
-            return "CHOOSE_DELETE:" + json.dumps(choices, ensure_ascii=False)
+            return CommandResult("Выбери задачу для удаления.", "choose_delete", choices)
 
         task_id = confident.id
         task_title = confident.title
 
     # Возвращаем текст с предложением confirm — кнопки добавит message handler
-    return f"CONFIRM_DELETE:{task_id}:{task_title}"
+    return CommandResult(
+        f"Удалить задачу «{task_title}»?", "confirm_delete",
+        {"task_id": str(task_id), "title": task_title},
+    )
 
 
-async def _handle_create_project(user_id: int, args: Dict[str, Any]) -> str:
+async def _handle_create_project(user_id: int, args: Dict[str, Any]) -> str | CommandResult:
     title = _sanitize_title(args.get("title", ""))
     err = _validate_title(title)
     if err:
@@ -879,10 +880,13 @@ async def _handle_create_project(user_id: int, args: Dict[str, Any]) -> str:
             category=category,
         )
 
-    return f"PROJECT_CREATED:{project.id}:{project.title}"
+    return CommandResult(
+        f"Создан проект «{project.title}».", "project_created",
+        {"project_id": str(project.id), "title": project.title},
+    )
 
 
-async def _handle_complete_project(user_id: int, args: Dict[str, Any]) -> str:
+async def _handle_complete_project(user_id: int, args: Dict[str, Any]) -> str | CommandResult:
     query = args.get("search_query", "").strip()
     if not query:
         return "Какой слон закрываем? Напиши название проекта."
@@ -907,8 +911,9 @@ async def _handle_complete_project(user_id: int, args: Dict[str, Any]) -> str:
         project_tasks = await get_project_tasks(session, selected.id)
         open_count = sum(task.status == "open" for task in project_tasks)
         if open_count:
-            return (
-                f"CONFIRM_PROJECT_COMPLETE:{selected.id}:{selected.title}:{open_count}"
+            return CommandResult(
+                f"Закрыть проект «{selected.title}»?", "confirm_project_complete",
+                {"project_id": str(selected.id), "title": selected.title, "open_count": open_count},
             )
         project = await crud_complete_project(session, selected.id, user_id)
 

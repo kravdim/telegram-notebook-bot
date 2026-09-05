@@ -2,11 +2,56 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
+from urllib.parse import urlsplit
+
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from bot.config import settings
 
 PRIVACY_NOTICE_VERSION = 1
+
+
+def provider_fingerprint() -> str:
+    """Bind consent to recipients, not API secrets or model tuning parameters."""
+    config = settings.yaml_config
+    llm = config.get("llm", {})
+    recipients = []
+    for role in ("main", "fallback"):
+        provider = llm.get(role) or {}
+        if role == "fallback" and not provider:
+            continue
+        recipients.append((role, provider.get("provider", "minimax"),
+                           _endpoint_identity(provider.get("base_url", "https://api.minimax.io/v1"))))
+    embedding = config.get("embedding", {})
+    recipients.append(("embedding", embedding.get("provider", "ollama"),
+                       _endpoint_identity(getattr(settings, "embedding_base_url", "")
+                                          or embedding.get("base_url", ""))))
+    recipients.append(("stt", config.get("stt", {}).get("provider", "local"), ""))
+    payload = json.dumps(recipients, sort_keys=True).encode()
+    return hashlib.sha256(payload).hexdigest()[:32]
+
+
+def _endpoint_identity(url: str) -> str:
+    parsed = urlsplit(url)
+    return f"{parsed.scheme.lower()}://{parsed.hostname}:{parsed.port}{parsed.path.rstrip('/')}"
+
+
+def has_current_consent(user: object | None) -> bool:
+    return bool(
+        user is not None
+        and getattr(user, "cloud_processing_enabled", False)
+        and getattr(user, "privacy_notice_version", 0) >= PRIVACY_NOTICE_VERSION
+        and getattr(user, "privacy_provider_fingerprint", None) == provider_fingerprint()
+    )
+
+
+def consent_display_state(user: object | None) -> bool | None:
+    enabled = getattr(user, "cloud_processing_enabled", None)
+    if enabled is True:
+        return True if has_current_consent(user) else None
+    return False if enabled is False else None
 
 _PROVIDER_LABELS = {
     "minimax": "MiniMax",
@@ -50,6 +95,7 @@ def privacy_notice_text(*, enabled: bool | None = None) -> str:
         f"AI-получателям ({providers}) текст задач, заметок, дневника и текущий "
         "контекст диалога. Голос передаётся наружу только при выбранном cloud-STT; "
         "локальные Ollama/Whisper данные наружу не отправляют.\n\n"
+        "При смене получателей или API-адресов согласие запрашивается повторно.\n\n"
         "Цель: распознать намерение, выполнить поиск или транскрипцию. Содержимое "
         "LLM-запросов в журнале приложения по умолчанию не хранится; технические "
         f"метаданные хранятся до {retention} дней, backups — по операторской "
@@ -61,7 +107,7 @@ def privacy_notice_text(*, enabled: bool | None = None) -> str:
 
 def privacy_keyboard():
     keyboard = InlineKeyboardBuilder()
-    keyboard.button(text="✅ Разрешить cloud AI", callback_data="privacy:enable")
+    keyboard.button(text="✅ Разрешить cloud AI", callback_data=f"privacy:enable:{provider_fingerprint()}")
     keyboard.button(text="🚫 Отключить cloud AI", callback_data="privacy:disable")
     keyboard.adjust(1)
     return keyboard.as_markup()

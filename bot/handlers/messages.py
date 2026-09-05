@@ -14,7 +14,7 @@ from aiogram import F, Router
 from aiogram.types import Message
 
 from bot.application.command_bus import CommandResult
-from bot.application.interactions import WorkflowType, interaction_service
+from bot.application.interactions import WorkflowType
 from bot.application.normalizer import intent_normalizer
 from bot.application.task_creation_recognizer import extract_task_request as _extract_task_request
 from bot.application.task_creation_recognizer import guess_task_category as _guess_task_category
@@ -29,13 +29,20 @@ from bot.formatters import split_message
 from bot.handlers.telegram import message_bot
 from bot.llm.client import LLMClient, LLMResponse, LLMUnavailableError
 from bot.llm.context import add_message, get_history, needs_trimming, trim_history
-from bot.llm.dispatcher import dispatch, dispatch_result
+from bot.llm.dispatcher import dispatch_result
 from bot.llm.functions import FUNCTIONS
 from bot.llm.prompts import get_prompt
 from bot.llm.queue import PRIORITY_INTENT, LLMQueue
 from bot.logging_safety import error_type
 from bot.observability import metrics
-from bot.privacy import PRIVACY_NOTICE_VERSION, privacy_keyboard, privacy_notice_text
+from bot.privacy import (
+    consent_display_state,
+    has_current_consent,
+    privacy_keyboard,
+    privacy_notice_text,
+)
+from bot.services.command_execution import active_request, execute_action, persist_plan, saved_plan
+from bot.services.interactions import interaction_service
 
 logger = logging.getLogger(__name__)
 
@@ -204,7 +211,7 @@ async def _transition_persisted_interaction(
 
 
 async def process_text_message(
-    user_id: int, text: str, message: Message
+    user_id: int, text: str, message: Message, *, resume_key: str | None = None
 ) -> MessageOutcome:
     """Сериализовать полный pipeline сообщений одного пользователя."""
     request_started = time.monotonic()
@@ -213,14 +220,21 @@ async def process_text_message(
     await lock.acquire()
     metrics.observe("messages.user_lock_wait_seconds", time.monotonic() - lock_started)
     try:
-        request_key = _request_key(user_id, text, message)
+        request_key = resume_key or _request_key(user_id, text, message)
         claimed = await _claim_request(request_key, user_id)
         if claimed is False:
             await message.answer("Это сообщение уже обработано.")
             return MessageOutcome.DUPLICATE
+        if claimed is None:
+            await message.answer("Не удалось надёжно принять сообщение. Повтори его чуть позже.")
+            return MessageOutcome.RETRYABLE_ERROR
         try:
             pending_voice_edit = await _get_persisted_interaction(user_id, "voice_edit")
-            outcome = await _process_text_message_unlocked(user_id, text, message)
+            token = active_request.set(request_key if claimed else None)
+            try:
+                outcome = await _process_text_message_unlocked(user_id, text, message)
+            finally:
+                active_request.reset(token)
             outcome = outcome or MessageOutcome.COMPLETED
             if pending_voice_edit and outcome == MessageOutcome.COMPLETED:
                 await _clear_persisted_interaction(
@@ -232,6 +246,7 @@ async def process_text_message(
                 request_key,
                 "failed"
                 if outcome == MessageOutcome.RETRYABLE_ERROR
+                or (resume_key is not None and outcome == MessageOutcome.REJECTED)
                 else "completed",
             )
             return outcome
@@ -261,9 +276,12 @@ async def _claim_request(request_key: str, user_id: int) -> Optional[bool]:
         async with async_session() as session:
             result = await session.execute(
                 select(ProcessedRequest).where(ProcessedRequest.request_key == request_key)
+                .with_for_update()
             )
             existing = result.scalar_one_or_none()
             if existing:
+                if existing.user_id != user_id:
+                    return False
                 import pendulum
                 is_stale = (
                     existing.status == "processing"
@@ -330,12 +348,8 @@ async def _route_basic_task_shortcuts(
         return None
 
     await message_bot(message).send_chat_action(chat_id=message.chat.id, action="typing")
-    result = await dispatch(direct_call, user_id, user_tz)
     add_message(user_id, "user", text)
-    add_message(user_id, "assistant", result)
-    for part in split_message(result):
-        await message.answer(part, parse_mode=None)
-    return MessageOutcome.COMPLETED
+    return await _present_tool_calls(user_id, text, message, user_tz, [direct_call])
 
 
 async def _route_project_and_delete_workflows(
@@ -478,12 +492,9 @@ async def _route_deterministic_intents(
     if combined_intents:
         add_message(user_id, "user", text)
         await message_bot(message).send_chat_action(chat_id=message.chat.id, action="typing")
-        results = [
-            await dispatch({"name": name, "arguments": arguments}, user_id, user_tz)
-            for name, arguments in combined_intents
-        ]
-        await _answer_and_remember(user_id, None, message, "\n".join(results))
-        return MessageOutcome.COMPLETED
+        return await _present_tool_calls(user_id, text, message, user_tz, [
+            {"name": name, "arguments": arguments} for name, arguments in combined_intents
+        ])
 
     task_query = recognize_task_list_query(text)
     if task_query and task_query.needs_clarification:
@@ -503,9 +514,9 @@ async def _route_deterministic_intents(
             result = str(arguments["message"])
         else:
             await message_bot(message).send_chat_action(chat_id=message.chat.id, action="typing")
-            result = await dispatch(
-                {"name": tool_name, "arguments": arguments}, user_id, user_tz
-            )
+            return await _present_tool_calls(user_id, text, message, user_tz, [
+                {"name": tool_name, "arguments": arguments},
+            ])
         await _answer_and_remember(user_id, None, message, result)
         return MessageOutcome.COMPLETED
 
@@ -513,11 +524,10 @@ async def _route_deterministic_intents(
     if not task_args:
         return None
     await message_bot(message).send_chat_action(chat_id=message.chat.id, action="typing")
-    result = await dispatch(
-        {"name": "create_task", "arguments": task_args}, user_id, user_tz
-    )
-    await _answer_and_remember(user_id, text, message, result)
-    return MessageOutcome.COMPLETED
+    add_message(user_id, "user", text)
+    return await _present_tool_calls(user_id, text, message, user_tz, [
+        {"name": "create_task", "arguments": task_args},
+    ])
 
 
 async def _answer_and_remember(
@@ -626,21 +636,19 @@ async def _process_text_message_unlocked(
         user = await get_user(session, user_id)
     user_tz = user.timezone if user else "Europe/Moscow"
 
-    if (
-        user is None
-        or getattr(user, "privacy_notice_version", 0) < PRIVACY_NOTICE_VERSION
-        or not getattr(user, "cloud_processing_enabled", False)
-    ):
+    if not has_current_consent(user):
         await message.answer(
             privacy_notice_text(
-                enabled=getattr(user, "cloud_processing_enabled", None)
-                if user
-                else None
+                enabled=consent_display_state(user)
             ),
             parse_mode=None,
             reply_markup=privacy_keyboard(),
         )
         return MessageOutcome.REJECTED
+
+    previous_plan = await saved_plan(user_id)
+    if previous_plan is not None:
+        return await _present_tool_calls(user_id, text, message, user_tz, previous_plan)
 
     memoir_outcome = await _route_pending_memoir(user_id, text, message, user_tz)
     if memoir_outcome is not None:
@@ -832,10 +840,22 @@ async def _present_tool_calls(
 ) -> MessageOutcome:
     all_results: list[str] = []
     retryable_error = False
-    for function_call in function_calls:
-        function_call = _preserve_user_marker_in_call(text, function_call)
-        function_call = _guard_relative_birthday(text, function_call)
-        command_result = await dispatch_result(function_call, user_id, user_tz)
+    proposed = [
+        _guard_relative_birthday(text, _preserve_user_marker_in_call(text, call))
+        for call in function_calls
+    ]
+    function_calls = await persist_plan(user_id, proposed)
+    for position, function_call in enumerate(function_calls):
+        try:
+            command_result = await execute_action(
+                user_id, position, lambda: dispatch_result(function_call, user_id, user_tz)
+            )
+        except Exception as exc:
+            logger.error("Action execution failed: error_type=%s", error_type(exc))
+            command_result = CommandResult(
+                "Не удалось выполнить действие. Используй /retry для безопасного продолжения.",
+                "error",
+            )
         if command_result.kind == "error":
             retryable_error = True
             all_results.append(command_result.text)
@@ -844,9 +864,15 @@ async def _present_tool_calls(
         elif command_result.kind == "confirm_project_complete":
             await _present_project_completion_result(user_id, message, command_result)
         elif command_result.kind == "project_created":
-            await _present_created_project(user_id, message, command_result)
+            result = await _present_created_project(user_id, message, command_result, position)
+            retryable_error = retryable_error or result.kind == "error"
         else:
             all_results.append(command_result.text)
+    if retryable_error:
+        all_results.append(
+            "Запрос выполнен не полностью. Продолжить сохранённый план: /retry. "
+            "Не отправляй тот же текст заново: это будет отдельный запрос."
+        )
     await _present_combined_results(user_id, message, all_results)
     return (
         MessageOutcome.RETRYABLE_ERROR
@@ -867,15 +893,8 @@ async def _present_combined_results(
 
 
 async def _present_created_project(
-    user_id: int, message: Message, command_result: CommandResult
-) -> None:
-    import uuid
-
-    from bot.db.crud.projects import get_project_by_id
-    from bot.llm.decompose import create_project_tasks, decompose_project
-
-    assert llm_client is not None and llm_queue is not None
-
+    user_id: int, message: Message, command_result: CommandResult, position: int = 0
+) -> CommandResult:
     payload = command_result.dict_payload()
     project_id = str(payload["project_id"])
     project_title = str(payload["title"])
@@ -883,6 +902,26 @@ async def _present_created_project(
     add_message(user_id, "assistant", project_prompt)
     await message.answer(project_prompt, parse_mode=None)
     await message_bot(message).send_chat_action(chat_id=message.chat.id, action="typing")
+    result = await execute_action(
+        user_id, position,
+        lambda: _decompose_created_project(user_id, project_id, project_title),
+        phase="project_tasks",
+    )
+    add_message(user_id, "assistant", result.text)
+    for part in split_message(result.text):
+        await message.answer(part, parse_mode=None)
+    return result
+
+
+async def _decompose_created_project(
+    user_id: int, project_id: str, project_title: str,
+) -> CommandResult:
+    import uuid
+
+    from bot.db.crud.projects import get_project_by_id
+    from bot.llm.decompose import create_project_tasks, decompose_project
+
+    assert llm_client is not None and llm_queue is not None
 
     async with async_session() as session:
         project = await get_project_by_id(session, uuid.UUID(project_id))
@@ -892,18 +931,16 @@ async def _present_created_project(
         llm_client, llm_queue, user_id, project_id, project_title, description
     )
     if not task_titles:
-        add_message(user_id, "assistant", "Слон создан без декомпозиции")
-        await message.answer(
-            "Не удалось автоматически декомпозировать. Добавь задачи вручную."
+        return CommandResult(
+            "Слон создан, но декомпозиция не удалась. Продолжи через /retry.", "error"
         )
-        return
     created = await create_project_tasks(user_id, project_id, task_titles, category)
+    if created != len(task_titles):
+        return CommandResult("Не удалось сохранить задачи проекта. Продолжи через /retry.", "error")
     tasks_list = "\n".join(f"  • {title}" for title in task_titles)
-    add_message(user_id, "assistant", f"Слон создан, нарезан на {created} бифштексов")
-    await message.answer(
+    return CommandResult(
         f"🔪 Нарезано {created} бифштексов:\n{tasks_list}\n\n"
         "Смотри /projects для прогресса.",
-        parse_mode=None,
     )
 
 

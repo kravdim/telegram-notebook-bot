@@ -11,6 +11,7 @@ import bot.scheduler.chronometry as chronometry_scheduler
 from bot.application.command_bus import CommandResult
 from bot.llm.client import LLMUnavailableError
 from bot.llm.context import clear_all, get_history
+from bot.privacy import provider_fingerprint
 from tests.fakes import FakeMessage, FakeSessionContext
 
 
@@ -44,7 +45,17 @@ def reset_message_globals(monkeypatch):
     clear_all()
 
     async def no_claim(*args, **kwargs):
+        return True
+
+    async def no_plan(user_id):
         return None
+
+    async def memory_plan(user_id, plan):
+        return plan
+
+    async def memory_action(user_id, position, execute, **kwargs):
+        result = await execute()
+        return result if isinstance(result, CommandResult) else CommandResult(result)
 
     async def no_finish(*args, **kwargs):
         return None
@@ -77,6 +88,9 @@ def reset_message_globals(monkeypatch):
         return True
 
     monkeypatch.setattr(messages, "_claim_request", no_claim)
+    monkeypatch.setattr(messages, "saved_plan", no_plan)
+    monkeypatch.setattr(messages, "persist_plan", memory_plan)
+    monkeypatch.setattr(messages, "execute_action", memory_action)
     monkeypatch.setattr(messages, "_finish_request", no_finish)
     monkeypatch.setattr(messages, "_get_persisted_interaction", no_state)
     monkeypatch.setattr(messages, "_clear_persisted_interaction", no_clear)
@@ -98,7 +112,7 @@ async def test_done_message_routes_directly_to_dispatch(monkeypatch):
     calls = []
 
     async def fake_get_user(session, user_id):
-        return SimpleNamespace(timezone="Europe/Moscow", privacy_notice_version=1, cloud_processing_enabled=True)
+        return SimpleNamespace(timezone="Europe/Moscow", privacy_notice_version=1, cloud_processing_enabled=True, privacy_provider_fingerprint=provider_fingerprint())
 
     async def fake_dispatch(function_call, user_id, user_tz):
         calls.append((function_call, user_id, user_tz))
@@ -106,7 +120,7 @@ async def test_done_message_routes_directly_to_dispatch(monkeypatch):
 
     monkeypatch.setattr(messages, "async_session", lambda: FakeSessionContext())
     monkeypatch.setattr(messages, "get_user", fake_get_user)
-    monkeypatch.setattr(messages, "dispatch", fake_dispatch)
+    monkeypatch.setattr(messages, "dispatch_result", fake_dispatch)
 
     msg = FakeMessage("Подключить онлайн-кассу - сделал", user_id=42)
     await messages.process_text_message(42, msg.text, msg)
@@ -134,7 +148,7 @@ async def test_followup_task_list_question_bypasses_llm(monkeypatch):
         return SimpleNamespace(
             timezone="Europe/Moscow",
             privacy_notice_version=1,
-            cloud_processing_enabled=True,
+            cloud_processing_enabled=True, privacy_provider_fingerprint=provider_fingerprint(),
         )
 
     async def fake_dispatch(function_call, user_id, user_tz):
@@ -148,7 +162,7 @@ async def test_followup_task_list_question_bypasses_llm(monkeypatch):
 
     monkeypatch.setattr(messages, "async_session", lambda: FakeSessionContext())
     monkeypatch.setattr(messages, "get_user", fake_get_user)
-    monkeypatch.setattr(messages, "dispatch", fake_dispatch)
+    monkeypatch.setattr(messages, "dispatch_result", fake_dispatch)
 
     msg = FakeMessage("А какие еще задачи есть?", user_id=42)
     await messages.process_text_message(42, msg.text, msg)
@@ -170,7 +184,7 @@ async def test_qualified_task_list_question_fails_closed_before_llm(monkeypatch)
         return SimpleNamespace(
             timezone="Europe/Moscow",
             privacy_notice_version=1,
-            cloud_processing_enabled=True,
+            cloud_processing_enabled=True, privacy_provider_fingerprint=provider_fingerprint(),
         )
 
     async def forbidden_dispatch(*args, **kwargs):
@@ -178,7 +192,7 @@ async def test_qualified_task_list_question_fails_closed_before_llm(monkeypatch)
 
     monkeypatch.setattr(messages, "async_session", lambda: FakeSessionContext())
     monkeypatch.setattr(messages, "get_user", fake_get_user)
-    monkeypatch.setattr(messages, "dispatch", forbidden_dispatch)
+    monkeypatch.setattr(messages, "dispatch_result", forbidden_dispatch)
 
     msg = FakeMessage("Покажи задачи на завтра", user_id=42)
     outcome = await messages.process_text_message(42, msg.text, msg)
@@ -193,7 +207,7 @@ async def test_conversational_done_bypasses_pending_chronometry(monkeypatch):
     calls = []
 
     async def fake_get_user(session, user_id):
-        return SimpleNamespace(timezone="Europe/Moscow", privacy_notice_version=1, cloud_processing_enabled=True)
+        return SimpleNamespace(timezone="Europe/Moscow", privacy_notice_version=1, cloud_processing_enabled=True, privacy_provider_fingerprint=provider_fingerprint())
 
     async def fake_dispatch(function_call, user_id, user_tz):
         calls.append(function_call)
@@ -204,7 +218,7 @@ async def test_conversational_done_bypasses_pending_chronometry(monkeypatch):
 
     monkeypatch.setattr(messages, "async_session", lambda: FakeSessionContext())
     monkeypatch.setattr(messages, "get_user", fake_get_user)
-    monkeypatch.setattr(messages, "dispatch", fake_dispatch)
+    monkeypatch.setattr(messages, "dispatch_result", fake_dispatch)
     monkeypatch.setattr(chronometry_scheduler, "is_awaiting_response", lambda user_id: True)
     monkeypatch.setattr(chronometry_scheduler, "get_chrono_message_id", lambda user_id: 100)
     monkeypatch.setattr(chronometry_handler, "process_chronometry_response", forbidden_chrono)
@@ -226,7 +240,7 @@ async def test_reschedule_bypasses_pending_chronometry(monkeypatch):
     calls = []
 
     async def fake_get_user(session, user_id):
-        return SimpleNamespace(timezone="Europe/Moscow", privacy_notice_version=1, cloud_processing_enabled=True)
+        return SimpleNamespace(timezone="Europe/Moscow", privacy_notice_version=1, cloud_processing_enabled=True, privacy_provider_fingerprint=provider_fingerprint())
 
     async def fake_dispatch(function_call, user_id, user_tz):
         calls.append(function_call)
@@ -237,7 +251,7 @@ async def test_reschedule_bypasses_pending_chronometry(monkeypatch):
 
     monkeypatch.setattr(messages, "async_session", lambda: FakeSessionContext())
     monkeypatch.setattr(messages, "get_user", fake_get_user)
-    monkeypatch.setattr(messages, "dispatch", fake_dispatch)
+    monkeypatch.setattr(messages, "dispatch_result", fake_dispatch)
     monkeypatch.setattr(chronometry_scheduler, "is_awaiting_response", lambda user_id: True)
     monkeypatch.setattr(chronometry_scheduler, "get_chrono_message_id", lambda user_id: 100)
     monkeypatch.setattr(chronometry_handler, "process_chronometry_response", forbidden_chrono)
@@ -256,7 +270,7 @@ async def test_cancel_bypasses_pending_chronometry(monkeypatch):
     calls = []
 
     async def fake_get_user(session, user_id):
-        return SimpleNamespace(timezone="Europe/Moscow", privacy_notice_version=1, cloud_processing_enabled=True)
+        return SimpleNamespace(timezone="Europe/Moscow", privacy_notice_version=1, cloud_processing_enabled=True, privacy_provider_fingerprint=provider_fingerprint())
 
     async def fake_dispatch(function_call, user_id, user_tz):
         calls.append(function_call)
@@ -267,7 +281,7 @@ async def test_cancel_bypasses_pending_chronometry(monkeypatch):
 
     monkeypatch.setattr(messages, "async_session", lambda: FakeSessionContext())
     monkeypatch.setattr(messages, "get_user", fake_get_user)
-    monkeypatch.setattr(messages, "dispatch", fake_dispatch)
+    monkeypatch.setattr(messages, "dispatch_result", fake_dispatch)
     monkeypatch.setattr(chronometry_scheduler, "is_awaiting_response", lambda user_id: True)
     monkeypatch.setattr(chronometry_scheduler, "get_chrono_message_id", lambda user_id: 100)
     monkeypatch.setattr(chronometry_handler, "process_chronometry_response", forbidden_chrono)
@@ -290,7 +304,7 @@ async def test_cancel_bypasses_pending_chronometry(monkeypatch):
 @pytest.mark.asyncio
 async def test_chronometry_reply_routes_to_chronometry_handler(monkeypatch):
     async def fake_get_user(session, user_id):
-        return SimpleNamespace(timezone="Europe/Moscow", privacy_notice_version=1, cloud_processing_enabled=True)
+        return SimpleNamespace(timezone="Europe/Moscow", privacy_notice_version=1, cloud_processing_enabled=True, privacy_provider_fingerprint=provider_fingerprint())
 
     async def fake_process_chrono(user_id, text, tz):
         assert (user_id, text, tz) == (42, "Обедаю", "Europe/Moscow")
@@ -324,7 +338,7 @@ async def test_reply_to_other_message_does_not_go_to_chronometry(monkeypatch):
             return FakeResponse(content="Обычный ответ")
 
     async def fake_get_user(session, user_id):
-        return SimpleNamespace(timezone="Europe/Moscow", privacy_notice_version=1, cloud_processing_enabled=True)
+        return SimpleNamespace(timezone="Europe/Moscow", privacy_notice_version=1, cloud_processing_enabled=True, privacy_provider_fingerprint=provider_fingerprint())
 
     async def fake_get_prompt(session, prompt_key):
         return "prompt {now} {timezone}"
@@ -386,7 +400,7 @@ async def test_explicit_reply_to_persisted_memoir_is_saved(monkeypatch):
     cleared = []
 
     async def fake_get_user(session, user_id):
-        return SimpleNamespace(timezone="Europe/Moscow", privacy_notice_version=1, cloud_processing_enabled=True)
+        return SimpleNamespace(timezone="Europe/Moscow", privacy_notice_version=1, cloud_processing_enabled=True, privacy_provider_fingerprint=provider_fingerprint())
 
     async def memoir_state(user_id, state_type):
         if state_type == "memoir":
@@ -421,7 +435,7 @@ async def test_task_like_reply_is_owned_by_pending_memoir(monkeypatch):
     saved = []
 
     async def fake_get_user(session, user_id):
-        return SimpleNamespace(timezone="Europe/Moscow", privacy_notice_version=1, cloud_processing_enabled=True)
+        return SimpleNamespace(timezone="Europe/Moscow", privacy_notice_version=1, cloud_processing_enabled=True, privacy_provider_fingerprint=provider_fingerprint())
 
     async def memoir_state(user_id, state_type):
         if state_type == "memoir":
@@ -441,7 +455,7 @@ async def test_task_like_reply_is_owned_by_pending_memoir(monkeypatch):
     monkeypatch.setattr(messages, "get_user", fake_get_user)
     monkeypatch.setattr(messages, "_get_persisted_interaction", memoir_state)
     monkeypatch.setattr(messages, "_save_memoir_answer", fake_save)
-    monkeypatch.setattr(messages, "dispatch", forbidden_dispatch)
+    monkeypatch.setattr(messages, "dispatch_result", forbidden_dispatch)
 
     reply = SimpleNamespace(message_id=100)
     msg = FakeMessage(
@@ -502,7 +516,7 @@ async def test_pending_memoir_does_not_steal_reply_to_another_message(monkeypatc
             return FakeResponse(content="Обычный ответ")
 
     async def fake_get_user(session, user_id):
-        return SimpleNamespace(timezone="Europe/Moscow", privacy_notice_version=1, cloud_processing_enabled=True)
+        return SimpleNamespace(timezone="Europe/Moscow", privacy_notice_version=1, cloud_processing_enabled=True, privacy_provider_fingerprint=provider_fingerprint())
 
     async def fake_get_prompt(session, prompt_key):
         return "prompt {now} {timezone}"
@@ -537,7 +551,7 @@ async def test_pending_memoir_does_not_steal_reply_to_another_message(monkeypatc
 @pytest.mark.asyncio
 async def test_incomplete_mutation_never_reuses_old_context(monkeypatch):
     async def fake_get_user(session, user_id):
-        return SimpleNamespace(timezone="Europe/Moscow", privacy_notice_version=1, cloud_processing_enabled=True)
+        return SimpleNamespace(timezone="Europe/Moscow", privacy_notice_version=1, cloud_processing_enabled=True, privacy_provider_fingerprint=provider_fingerprint())
 
     monkeypatch.setattr(messages, "async_session", lambda: FakeSessionContext())
     monkeypatch.setattr(messages, "get_user", fake_get_user)
@@ -560,7 +574,7 @@ async def test_greeting_does_not_get_captured_by_pending_chronometry(monkeypatch
             return FakeResponse(content="И тебе доброе утро.")
 
     async def fake_get_user(session, user_id):
-        return SimpleNamespace(timezone="Europe/Moscow", privacy_notice_version=1, cloud_processing_enabled=True)
+        return SimpleNamespace(timezone="Europe/Moscow", privacy_notice_version=1, cloud_processing_enabled=True, privacy_provider_fingerprint=provider_fingerprint())
 
     async def fake_get_prompt(session, prompt_key):
         return "prompt {now} {timezone}"
@@ -591,7 +605,7 @@ async def test_task_request_bypasses_pending_chronometry(monkeypatch):
     calls = []
 
     async def fake_get_user(session, user_id):
-        return SimpleNamespace(timezone="Europe/Moscow", privacy_notice_version=1, cloud_processing_enabled=True)
+        return SimpleNamespace(timezone="Europe/Moscow", privacy_notice_version=1, cloud_processing_enabled=True, privacy_provider_fingerprint=provider_fingerprint())
 
     async def fake_dispatch(function_call, user_id, user_tz):
         calls.append(function_call)
@@ -602,7 +616,7 @@ async def test_task_request_bypasses_pending_chronometry(monkeypatch):
 
     monkeypatch.setattr(messages, "async_session", lambda: FakeSessionContext())
     monkeypatch.setattr(messages, "get_user", fake_get_user)
-    monkeypatch.setattr(messages, "dispatch", fake_dispatch)
+    monkeypatch.setattr(messages, "dispatch_result", fake_dispatch)
     monkeypatch.setattr(chronometry_scheduler, "is_awaiting_response", lambda user_id: True)
     monkeypatch.setattr(chronometry_scheduler, "get_chrono_message_id", lambda user_id: 100)
     monkeypatch.setattr(chronometry_handler, "process_chronometry_response", forbidden_chrono)
@@ -628,7 +642,7 @@ async def test_project_completion_waits_for_title_and_dispatches(monkeypatch):
     calls = []
 
     async def fake_get_user(session, user_id):
-        return SimpleNamespace(timezone="Europe/Moscow", privacy_notice_version=1, cloud_processing_enabled=True)
+        return SimpleNamespace(timezone="Europe/Moscow", privacy_notice_version=1, cloud_processing_enabled=True, privacy_provider_fingerprint=provider_fingerprint())
 
     async def fake_dispatch_result(function_call, user_id, user_tz):
         calls.append(function_call)
@@ -666,7 +680,7 @@ async def test_free_text_fake_task_creation_is_blocked(monkeypatch):
             return FakeResponse(content="Создаю задачу: Настройка почты ✅\n\nВсё верно?")
 
     async def fake_get_user(session, user_id):
-        return SimpleNamespace(timezone="Europe/Moscow", privacy_notice_version=1, cloud_processing_enabled=True)
+        return SimpleNamespace(timezone="Europe/Moscow", privacy_notice_version=1, cloud_processing_enabled=True, privacy_provider_fingerprint=provider_fingerprint())
 
     async def fake_get_prompt(session, prompt_key):
         return "prompt {now} {timezone}"
@@ -720,7 +734,7 @@ async def test_failed_mutation_is_closed_in_history_before_next_turn(monkeypatch
             return await coro
 
     async def fake_get_user(session, user_id):
-        return SimpleNamespace(timezone="Europe/Moscow", privacy_notice_version=1, cloud_processing_enabled=True)
+        return SimpleNamespace(timezone="Europe/Moscow", privacy_notice_version=1, cloud_processing_enabled=True, privacy_provider_fingerprint=provider_fingerprint())
 
     async def fake_get_prompt(session, prompt_key):
         return "prompt {now} {timezone}"
@@ -734,7 +748,7 @@ async def test_failed_mutation_is_closed_in_history_before_next_turn(monkeypatch
     monkeypatch.setattr(messages, "async_session", lambda: FakeSessionContext())
     monkeypatch.setattr(messages, "get_user", fake_get_user)
     monkeypatch.setattr(messages, "get_prompt", fake_get_prompt)
-    monkeypatch.setattr(messages, "dispatch", fake_dispatch)
+    monkeypatch.setattr(messages, "dispatch_result", fake_dispatch)
     monkeypatch.setattr(messages, "llm_client", Client())
     monkeypatch.setattr(messages, "llm_queue", Queue())
     monkeypatch.setattr("bot.db.crud.llm_logs.log_llm_request", fake_log)
@@ -781,7 +795,7 @@ async def test_llm_multiple_function_calls_are_dispatched(monkeypatch):
             )
 
     async def fake_get_user(session, user_id):
-        return SimpleNamespace(timezone="Europe/Moscow", privacy_notice_version=1, cloud_processing_enabled=True)
+        return SimpleNamespace(timezone="Europe/Moscow", privacy_notice_version=1, cloud_processing_enabled=True, privacy_provider_fingerprint=provider_fingerprint())
 
     async def fake_get_prompt(session, prompt_key):
         return "prompt {now} {timezone}"
@@ -821,7 +835,7 @@ async def test_confirm_delete_result_builds_keyboard(monkeypatch):
             return FakeResponse(function_calls=[{"name": "delete_task", "arguments": {}}])
 
     async def fake_get_user(session, user_id):
-        return SimpleNamespace(timezone="Europe/Moscow", privacy_notice_version=1, cloud_processing_enabled=True)
+        return SimpleNamespace(timezone="Europe/Moscow", privacy_notice_version=1, cloud_processing_enabled=True, privacy_provider_fingerprint=provider_fingerprint())
 
     async def fake_get_prompt(session, prompt_key):
         return "prompt {now} {timezone}"
@@ -867,7 +881,7 @@ async def test_llm_unavailable_message(monkeypatch):
             raise LLMUnavailableError("down")
 
     async def fake_get_user(session, user_id):
-        return SimpleNamespace(timezone="Europe/Moscow", privacy_notice_version=1, cloud_processing_enabled=True)
+        return SimpleNamespace(timezone="Europe/Moscow", privacy_notice_version=1, cloud_processing_enabled=True, privacy_provider_fingerprint=provider_fingerprint())
 
     async def fake_get_prompt(session, prompt_key):
         return "prompt {now} {timezone}"

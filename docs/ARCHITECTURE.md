@@ -51,7 +51,8 @@ handlers ──► IntentNormalizer / typed intents ◄── LLM adapter
    disk-backed archive writer in `services/export.py`. Telegram handlers never
    hold the complete ZIP payload in process memory.
 7. Multi-step interaction workflows have one PostgreSQL slot per user and are
-   accessed through `application/interactions.py`. Claims, transitions and
+   defined by `application/interactions.py` ports, with their PostgreSQL adapter
+   in `services/interactions.py`. Claims, transitions and
    clears are compare-and-set operations by type and session token. Voice and
    memoir callbacks additionally verify the originating Telegram message ID;
    stale buttons cannot mutate a newer session. Memoir and chronometry finish
@@ -67,6 +68,9 @@ handlers ──► IntentNormalizer / typed intents ◄── LLM adapter
    `application/task_creation_recognizer.py` have no Telegram, persistence or
    provider objects. An AST boundary test enforces this rule, and strict mypy
    settings cover the complete `bot.application` package.
+   The same import restriction now applies to every application module, not only
+   recognizers. Task-creation callback signatures still contain `Any`; this is
+   remaining typed-port work, not a fully completed dependency inversion.
 
 All functions are capped by Ruff at complexity 15, 20 branches, 12 returns and
 80 statements. The former nine-hotspot allowlist and all 16 legacy complexity

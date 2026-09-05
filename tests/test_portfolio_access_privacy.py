@@ -13,6 +13,7 @@ import bot.handlers.privacy as privacy_handlers
 import bot.handlers.trip as trip
 import bot.middleware as middleware
 from bot.middleware import PrivateChatMiddleware, RateLimitMiddleware, WhitelistMiddleware
+from bot.privacy import provider_fingerprint
 from bot.services.export import ExportTooLargeError
 from tests.fakes import FakeCallback, FakeMessage, FakeSessionContext
 
@@ -168,10 +169,11 @@ async def test_privacy_choice_persists_decision_and_refreshes_notice(
 
     monkeypatch.setattr(privacy_handlers, "async_session", lambda: FakeSessionContext())
     monkeypatch.setattr(privacy_handlers, "update_user_settings", update)
-    callback = FakeCallback(user_id=42, data=payload)
+    callback = FakeCallback(user_id=42, data=f"{payload}:{provider_fingerprint()}" if expected else payload)
     await privacy_handlers.cb_privacy_choice(callback)
     assert updated == [
-        (42, {"privacy_notice_version": 1, "cloud_processing_enabled": expected})
+        (42, {"privacy_notice_version": 1, "cloud_processing_enabled": expected,
+              "privacy_provider_fingerprint": provider_fingerprint() if expected else None})
     ]
     assert callback.answered == [("Настройка сохранена", {})]
     assert f"Текущий выбор: {'включена' if expected else 'отключена'}" in callback.message.edits[0][0]
@@ -184,7 +186,7 @@ async def test_privacy_choice_for_missing_user_reports_onboarding(monkeypatch):
 
     monkeypatch.setattr(privacy_handlers, "async_session", lambda: FakeSessionContext())
     monkeypatch.setattr(privacy_handlers, "update_user_settings", update)
-    callback = FakeCallback(user_id=42, data="privacy:enable")
+    callback = FakeCallback(user_id=42, data=f"privacy:enable:{provider_fingerprint()}")
     await privacy_handlers.cb_privacy_choice(callback)
     assert callback.answered == [("Сначала выполни /start", {})]
     assert "Текущий выбор: не выбрана" in callback.message.edits[0][0]
@@ -232,7 +234,8 @@ async def test_returning_onboarding_privacy_choice_persists_and_finishes(monkeyp
     state = FakeState({"privacy_return": "completed"})
     callback = FakeCallback(user_id=42, data="onb_privacy_decline")
     await onboarding.onb_privacy_choice(callback, state)
-    assert updates == [(42, {"privacy_notice_version": 1, "cloud_processing_enabled": False})]
+    assert updates == [(42, {"privacy_notice_version": 1, "cloud_processing_enabled": False,
+                             "privacy_provider_fingerprint": None})]
     assert state.cleared is True
     assert "slash-команды" in callback.message.edits[0][0]
 
@@ -250,8 +253,9 @@ async def test_new_onboarding_privacy_choice_sends_name_step_without_creating_us
     monkeypatch.setattr(onboarding, "async_session", lambda: FakeSessionContext())
     monkeypatch.setattr(onboarding, "get_user", no_user)
     monkeypatch.setattr(onboarding, "_send_name_step", send_name)
-    state = FakeState({"suggested_name": "Лена", "privacy_return": "onboarding"})
-    callback = FakeCallback(user_id=42, data="onb_privacy_accept")
+    state = FakeState({"suggested_name": "Лена", "privacy_return": "onboarding",
+                       "privacy_offered_fingerprint": provider_fingerprint()})
+    callback = FakeCallback(user_id=42, data=f"onb_privacy_accept:{provider_fingerprint()}")
     await onboarding.onb_privacy_choice(callback, state)
     assert state.data["cloud_processing_enabled"] is True
     assert sent_names == [(callback.message, state, "Лена")]

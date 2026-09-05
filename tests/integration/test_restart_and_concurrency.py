@@ -46,6 +46,7 @@ from bot.db.models import (
     User,
 )
 from bot.llm.dispatcher import dispatch_result
+from bot.privacy import provider_fingerprint
 from bot.runtime.singleton import SingletonLease
 from bot.scheduler.reminders import send_pending_reminders
 from bot.services.delivery import DeliveryPartSpec, deliver_batch
@@ -64,6 +65,161 @@ async def isolate_engine_pool():
     """Do not carry asyncpg connections across pytest event loops."""
     yield
     await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_expired_read_preserves_concurrently_claimed_workflow(monkeypatch):
+    user_id = 8_090_000_000 + int(uuid.uuid4().hex[:6], 16)
+    async with async_session() as session:
+        session.add(User(telegram_id=user_id, username="expiry-race"))
+        await session.commit()
+        await set_state(session, user_id, "memoir", {"session_token": "old"}, ttl_minutes=-1)
+
+    try:
+        async with async_session() as reader:
+            original_execute = reader.execute
+
+            async def read_then_replace(*args, **kwargs):
+                result = await original_execute(*args, **kwargs)
+                async with async_session() as writer:
+                    assert await claim_state(
+                        writer, user_id, "voice_edit", {"session_token": "new"}
+                    ) is not None
+                return result
+
+            monkeypatch.setattr(reader, "execute", read_then_replace)
+            assert await get_state(reader, user_id) is None
+            await reader.commit()
+
+        async with async_session() as session:
+            active = await get_state(session, user_id)
+            assert active is not None
+            assert active.state_type == "voice_edit"
+            assert active.payload == {"session_token": "new"}
+    finally:
+        async with async_session() as session:
+            await session.execute(delete(User).where(User.telegram_id == user_id))
+            await session.commit()
+
+
+@pytest.mark.asyncio
+async def test_set_state_replaces_expired_row_without_unique_violation():
+    user_id = 8_095_000_000 + int(uuid.uuid4().hex[:6], 16)
+    async with async_session() as session:
+        session.add(User(telegram_id=user_id, username="expiry-replace"))
+        await session.commit()
+        try:
+            await set_state(session, user_id, "memoir", ttl_minutes=-1)
+            active = await set_state(session, user_id, "voice_edit", {"session_token": "new"})
+            assert active.state_type == "voice_edit"
+        finally:
+            await session.execute(delete(User).where(User.telegram_id == user_id))
+            await session.commit()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", ["done", "cancelled"])
+async def test_update_status_coordinates_reminders_and_recurrence(status):
+    user_id = 8_096_000_000 + int(uuid.uuid4().hex[:6], 16)
+    today = pendulum.now("Europe/Moscow").date()
+    async with async_session() as session:
+        session.add(User(telegram_id=user_id, username="lifecycle-test"))
+        await session.commit()
+        task = Task(user_id=user_id, title="Lifecycle unique task", scheduled_date=today,
+                    repeat_rule="daily")
+        session.add(task)
+        await session.commit()
+        alarm = await create_reminder(
+            session, user_id, task.title, pendulum.now("UTC").add(hours=1), task_id=task.id
+        )
+        alarm_id = alarm.id
+    try:
+        response = await dispatch_result(
+            {"name": "update_task", "arguments": {
+                "search_query": "Lifecycle unique task", "updates": {"status": status},
+            }}, user_id,
+        )
+        assert response.kind != "error"
+        async with async_session() as session:
+            alarm = await session.get(Reminder, alarm_id)
+            assert alarm.is_sent
+            assert alarm.status == ("resolved" if status == "done" else "cancelled")
+            open_tasks = list((await session.scalars(
+                select(Task).where(Task.user_id == user_id, Task.status == "open")
+            )).all())
+            assert len(open_tasks) == (1 if status == "done" else 0)
+    finally:
+        async with async_session() as session:
+            await session.execute(delete(User).where(User.telegram_id == user_id))
+            await session.commit()
+
+
+@pytest.mark.asyncio
+async def test_main_and_sweep_share_durable_claims_and_record_failure():
+    from bot.scheduler.sweep import sweep_missed_reminders
+
+    user_id = 8_097_000_000 + int(uuid.uuid4().hex[:6], 16)
+    async with async_session() as session:
+        session.add(User(telegram_id=user_id, username="delivery-claims"))
+        await session.commit()
+        for index, title in enumerate(("first", "failure", "third")):
+            await create_reminder(session, user_id, title,
+                                  pendulum.now("UTC").subtract(minutes=3-index))
+    sent = []
+
+    class Bot:
+        async def send_message(self, **kwargs):
+            title = kwargs["text"].splitlines()[-1]
+            sent.append(title)
+            if title == "first":
+                await sweep_missed_reminders(self)
+            if title == "failure":
+                raise TimeoutError("synthetic outage")
+            return SimpleNamespace(message_id=len(sent))
+
+    try:
+        await send_pending_reminders(Bot())
+        assert sent == ["first", "failure", "third"]
+        async with async_session() as session:
+            rows = list((await session.scalars(select(Reminder).where(
+                Reminder.user_id == user_id,
+            ))).all())
+            failure = next(row for row in rows if row.message == "failure")
+            assert failure.delivery_attempts == 1
+            assert failure.lease_token is None
+            assert failure.next_attempt_at > pendulum.now("UTC")
+            assert failure.status == "pending"
+            assert sum(row.is_sent for row in rows) == 2
+        await sweep_missed_reminders(Bot())
+        assert sent == ["first", "failure", "third"]
+    finally:
+        async with async_session() as session:
+            await session.execute(delete(User).where(User.telegram_id == user_id))
+            await session.commit()
+
+
+@pytest.mark.asyncio
+async def test_terminal_failure_is_visible_retryable_and_owner_scoped():
+    from bot.db.crud.reminders import record_delivery_failure, retry_failed_reminder
+
+    user_id = 8_098_000_000 + int(uuid.uuid4().hex[:6], 16)
+    async with async_session() as session:
+        session.add(User(telegram_id=user_id, username="retry-owner"))
+        await session.commit()
+        reminder = await create_reminder(session, user_id, "retry test", pendulum.now("UTC"))
+        try:
+            for _ in range(5):
+                await record_delivery_failure(session, reminder.id, "TimeoutError")
+            await session.refresh(reminder)
+            assert reminder.status == "failed" and not reminder.is_sent
+            assert not await retry_failed_reminder(session, reminder.id, user_id + 1)
+            assert await retry_failed_reminder(session, reminder.id, user_id)
+            assert not await retry_failed_reminder(session, reminder.id, user_id)
+            await session.refresh(reminder)
+            assert reminder.status == "pending" and reminder.delivery_attempts == 0
+        finally:
+            await session.execute(delete(User).where(User.telegram_id == user_id))
+            await session.commit()
 
 
 @pytest.mark.asyncio
@@ -157,7 +313,7 @@ async def test_full_export_matches_deletion_inventory_and_excludes_other_users(t
                     telegram_id=user_id,
                     username="export-owner",
                     privacy_notice_version=1,
-                    cloud_processing_enabled=True,
+                    cloud_processing_enabled=True, privacy_provider_fingerprint=provider_fingerprint(),
                 ),
                 User(telegram_id=other_id, username="other-owner"),
             ]

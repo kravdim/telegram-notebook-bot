@@ -1,0 +1,19 @@
+{
+  "now": "2026-09-04T12:00:00+03:00",
+  "timezone": "Europe/Moscow",
+  "cases": [
+    {"id": "plain", "utterance": "надо купить хлеб", "expected": {"title": "Купить хлеб", "category": "personal", "priority": "normal"}},
+    {"id": "tomorrow", "utterance": "завтра надо написать отчёт", "expected": {"title": "Написать отчёт", "category": "work", "priority": "normal", "scheduled_date": "2026-09-05"}},
+    {"id": "today-priority", "utterance": "надо срочно отправить отчёт сегодня", "expected": {"title": "Отправить отчёт", "category": "work", "priority": "high", "scheduled_date": "2026-09-04"}},
+    {"id": "unicode-title", "utterance": "нужно купить <лампу>: для кухни", "expected": {"title": "Купить <лампу>: для кухни", "category": "personal", "priority": "normal"}},
+    {"id": "natural-date-handoff", "utterance": "надо купить хлеб через два дня", "expected": null},
+    {"id": "calendar-date-handoff", "utterance": "надо написать отчёт 10 сентября", "expected": null},
+    {"id": "week-handoff", "utterance": "надо написать отчёт на следующей неделе", "expected": null},
+    {"id": "conflicting-dates", "utterance": "сегодня надо купить хлеб завтра", "expected": null},
+    {"id": "conflicting-priorities", "utterance": "надо срочно купить хлеб приоритет обычный", "expected": null},
+    {"id": "time-handoff", "utterance": "надо позвонить врачу завтра в 9", "expected": null},
+    {"id": "non-task", "utterance": "доброе утро", "expected": null},
+    {"id": "no-verb", "utterance": "надо", "expected": null},
+    {"id": "quoted-activity", "utterance": "нужно работаю над отчётом", "expected": null}
+  ]
+}
