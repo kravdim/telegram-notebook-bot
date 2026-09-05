@@ -18,6 +18,7 @@ from bot.llm.client import LLMResponse
 from bot.llm.context import add_message, clear_history, get_history
 from bot.llm.dispatcher import _extract_value_tag
 from bot.observability import MetricsRegistry, TelegramConflictAlertHandler
+from bot.privacy import provider_fingerprint
 from tests.fakes import FakeMessage, FakeSessionContext
 
 
@@ -165,7 +166,7 @@ async def test_mutation_without_tool_retries_with_required_tool(monkeypatch):
             return await coro
 
     async def fake_get_user(session, user_id):
-        return SimpleNamespace(timezone="Europe/Moscow", privacy_notice_version=1, cloud_processing_enabled=True)
+        return SimpleNamespace(timezone="Europe/Moscow", privacy_notice_version=1, cloud_processing_enabled=True, privacy_provider_fingerprint=provider_fingerprint())
 
     async def fake_get_prompt(session, prompt_key):
         return "prompt {now} {timezone}"
@@ -223,7 +224,7 @@ async def test_project_decomposition_has_no_duplicate_confirmation(monkeypatch):
             return await coro
 
     async def fake_get_user(session, user_id):
-        return SimpleNamespace(timezone="Europe/Moscow", privacy_notice_version=1, cloud_processing_enabled=True)
+        return SimpleNamespace(timezone="Europe/Moscow", privacy_notice_version=1, cloud_processing_enabled=True, privacy_provider_fingerprint=provider_fingerprint())
 
     async def fake_get_prompt(session, prompt_key):
         return "prompt {now} {timezone}"
@@ -391,7 +392,7 @@ async def test_voice_reports_progress_and_times_out(monkeypatch):
     async def consented_user(session, user_id):
         return SimpleNamespace(
             privacy_notice_version=1,
-            cloud_processing_enabled=True,
+            cloud_processing_enabled=True, privacy_provider_fingerprint=provider_fingerprint(),
         )
 
     class Bot:

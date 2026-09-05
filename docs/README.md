@@ -5,6 +5,8 @@
 - [`ARCHITECTURE.md`](ARCHITECTURE.md) — компоненты и контракты;
 - [`OPERATIONS.md`](OPERATIONS.md) — эксплуатация, release gate и recovery;
 - [`PRIVACY.md`](PRIVACY.md) — хранение, экспорт и удаление данных;
+- [`THREAT_MODEL.md`](THREAT_MODEL.md) — границы доверия, угрозы, действующие защиты
+  и порядок ротации credentials;
 - [`SESSION_CONTEXT_2026-09-05.md`](SESSION_CONTEXT_2026-09-05.md) — текущий
   remediation checkpoint: реализованные изменения, локальные проверки и оставшаяся работа;
 - [`ADR_2026-09-04_RETRY_AND_DELIVERY.md`](ADR_2026-09-04_RETRY_AND_DELIVERY.md)

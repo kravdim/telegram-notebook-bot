@@ -40,6 +40,23 @@ def test_recurrence_skips_overdue_backlog():
     assert next_future_occurrence(current, "daily", now) == current.add(days=9)
 
 
+@pytest.mark.parametrize("month,day,elapsed_hours", [(3, 28, 23), (10, 24, 25)])
+def test_daily_recurrence_preserves_local_hour_across_dst(month, day, elapsed_hours):
+    before = pendulum.datetime(2026, month, day, 9, 15, tz="Europe/Berlin")
+    following = _calc_next_occurrence(before, "daily")
+    assert following.hour == 9 and following.minute == 15
+    assert (following - before).total_hours() == elapsed_hours
+
+
+def test_monthly_31_recovers_after_leap_february_clamp():
+    before = pendulum.datetime(2028, 1, 31, 10, 15, tz="Europe/Moscow")
+    february = _calc_next_occurrence(before, "monthly:31")
+    march = _calc_next_occurrence(february, "monthly:31")
+    assert february.day == 29 and february.month == 2
+    assert march.day == 31 and march.month == 3
+    assert (march.hour, march.minute) == (10, 15)
+
+
 def test_llm_client_defaults_to_minimax_without_fallback():
     client = LLMClient()
     assert client.main_model == "MiniMax-M2.7"

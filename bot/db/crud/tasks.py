@@ -219,43 +219,6 @@ async def search_tasks(
     return list(result.scalars().all())
 
 
-async def complete_task(
-    session: AsyncSession,
-    user_id: int,
-    search_query: str,
-) -> Optional[Task]:
-    """Найти задачу по запросу и отметить выполненной."""
-    tasks = await search_tasks(session, user_id, search_query)
-    if not tasks:
-        return None
-
-    task = tasks[0]
-    task.status = "done"
-    task.resolution = "completed"
-    task.completed_at = pendulum.now("UTC")
-    await _commit(session)
-    await session.refresh(task)
-    return task
-
-
-async def complete_task_by_id(
-    session: AsyncSession,
-    task_id: uuid.UUID,
-    user_id: int,
-) -> Optional[Task]:
-    """Отметить задачу выполненной по ID."""
-    task = await get_task_by_id(session, task_id)
-    if not task or task.user_id != user_id:
-        return None
-
-    task.status = "done"
-    task.resolution = "completed"
-    task.completed_at = pendulum.now("UTC")
-    await _commit(session)
-    await session.refresh(task)
-    return task
-
-
 async def update_task(
     session: AsyncSession,
     task_id: uuid.UUID,

@@ -46,8 +46,6 @@ from bot.db.crud.reminders import (
     upsert_task_reminder,
 )
 from bot.db.crud.tasks import (
-    complete_task,
-    complete_task_by_id,
     count_similar_completed,
     create_task,
     delete_task,
@@ -79,6 +77,7 @@ from bot.db.crud.users import (
 )
 from bot.db.engine import async_session, engine
 from bot.db.models import KnowledgeChunk, User
+from bot.services.tasks import complete_task_workflow
 
 pytestmark = pytest.mark.skipif(
     os.environ.get("RUN_DB_TESTS") != "1", reason="requires disposable migrated PostgreSQL"
@@ -220,8 +219,8 @@ async def test_projects_tasks_and_trips_cover_mutations_filters_and_ownership(po
             done_task.id,
             open_task.id,
         }
-        assert await complete_task_by_id(session, done_task.id, other_id) is None
-        completed = await complete_task_by_id(session, done_task.id, owner_id)
+        assert (await complete_task_workflow(session, done_task.id, other_id)).task is None
+        completed = (await complete_task_workflow(session, done_task.id, owner_id)).task
         assert completed and completed.resolution == "completed"
         assert await update_task(session, other_task.id, owner_id, title="stolen") is None
         progress = await get_project_progress(session, project.id)
@@ -340,7 +339,7 @@ async def test_tasks_cover_calendar_associations_frogs_completion_and_deletion(p
         assert overdue.is_frog is False
         assert future.id in {task.id for task in await get_today_tasks(session, owner_id, today)}
 
-        completed = await complete_task(session, owner_id, "scheduled work")
+        completed = (await complete_task_workflow(session, scheduled.id, owner_id)).task
         assert completed and completed.id == scheduled.id and completed.completed_at is not None
         from bot.services.tasks import update_task_workflow
 
