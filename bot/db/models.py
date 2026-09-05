@@ -46,6 +46,7 @@ class User(Base):
     focus_until: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
     onboarding_completed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     privacy_notice_version: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    privacy_provider_fingerprint: Mapped[Optional[str]] = mapped_column(Text)
     cloud_processing_enabled: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False
     )

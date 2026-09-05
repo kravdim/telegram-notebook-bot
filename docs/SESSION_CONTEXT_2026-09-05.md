@@ -48,7 +48,7 @@ ShellCheck на Mac отсутствует; `bash -n` прошёл, ShellCheck �
 Ни release workflow, ни production live E2E не считаются выполненными. Проверка
 manifest/CI YAML локальная и не заменяет выпуск реальных скачиваемых артефактов.
 
-## Продолжение без повторного исследования
+## План на входе в продолжение (история checkpoint 7e63d56)
 
 1. Добрать lifecycle tests на clear/reschedule/reopen, DST/month/catch-up и in-flight
    cancellation; убрать оставшиеся direct completion CRUD helpers (runtime ими не
@@ -69,3 +69,41 @@ manifest/CI YAML локальная и не заменяет выпуск реа
 
 Подробные открытые критерии и таблица R01–R16 остаются в плане. Не подменять их
 одним общим зелёным прогоном и не сообщать пользователю «всё исправлено».
+
+## Продолжение по просьбе пользователя 05.09.2026
+
+В том же remediation branch реализован следующий блок:
+
+- Legacy direct-completion CRUD helpers удалены. DB tests используют общий
+  workflow; обход синхронизации reminders больше не остаётся в публичном API CRUD.
+- При upsert/reschedule reminder отзывается старый lease, очищаются backoff/error
+  state и attempts; failed reminder переиспользуется, а не дублируется новой записью.
+- Добавлены PostgreSQL тесты clear/reschedule/stale ack, protected recurring reopen,
+  concurrent request retries, injection потери ack после настоящего COMMIT.
+  Это client-side failure injection, не реальное разрушение TCP-соединения.
+- CommandSession нельзя унаследовать в дочерний asyncio Task и использовать
+  одновременно. Переход к явным typed UoW/ports всё ещё остаётся отдельной работой.
+- Consent fingerprint хранится в User; main/fallback LLM, embedding endpoint и
+  STT provider входят в identity. API key/model tuning не являются новым получателем.
+  Старые кнопки обычного privacy и onboarding не могут включить изменившийся набор.
+- Text/voice блокируются до обработки при старом consent. Cloud reindex проверяет
+  согласие перед каждой записью; DB тест отзывает его во время первого embed и
+  доказывает, что вторая запись не отправляется. Уже in-flight запрос не отзывается.
+- Privacy rejection сохраняет незавершённый `/retry`, а не завершает его навсегда.
+- Добавлены DST-hour и leap-February/monthly-31 проверки; обновлены PRIVACY,
+  ARCHITECTURE и [THREAT_MODEL](THREAT_MODEL.md). Threat model входит в doc gate.
+
+Миграция `d9f2a4b6c803` добавляет fingerprint без фиктивного consent backfill.
+После будущего deploy нужно один раз подтвердить `/privacy`; старое согласие
+не принимается как согласие новому набору получателей. При downgrade именно этой
+миграции consent отключается. Остальные ограничения rollback остаются неизменными.
+
+Следующий блок: доказанный migration/runtime rollback; explicit typed task-creation
+ports; полный voice/retry live; STT SBOM/profile acceptance; R15/R16 docs/UX/undo/demo.
+Production не изменялся, main не затрагивался, новый release не создавался.
+
+Итоговая локальная проверка этого продолжения: **557 passed, 1 skipped; coverage
+74.01%**. `scripts/run_local_test_gate.sh` применил миграции до `d9f2a4b6c803`,
+подтвердил отсутствие ORM drift и прошёл complexity/critical/risk gates.
+Ruff, mypy (120 файлов), Bandit, documentation (11 активных файлов), version check
+и `git diff --check` проходят. Это по-прежнему не live/release evidence.

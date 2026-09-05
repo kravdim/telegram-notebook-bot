@@ -30,7 +30,7 @@ def test_manifest_identifies_commit_schema_and_evidence_limits(monkeypatch):
     with patch("scripts.build_release_manifest.subprocess.check_output", return_value="a" * 40):
         manifest = build_manifest(ROOT)
     assert manifest["revision"] == "a" * 40
-    assert manifest["schema_head"] == "c8e1f3a5b702"
+    assert manifest["schema_head"] == "d9f2a4b6c803"
     assert manifest["image_profile"] == "cloud"
     assert manifest["live_e2e"] == "not-attested-by-this-manifest"
     assert json.loads(json.dumps(manifest)) == manifest

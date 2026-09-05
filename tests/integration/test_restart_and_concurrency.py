@@ -46,6 +46,7 @@ from bot.db.models import (
     User,
 )
 from bot.llm.dispatcher import dispatch_result
+from bot.privacy import provider_fingerprint
 from bot.runtime.singleton import SingletonLease
 from bot.scheduler.reminders import send_pending_reminders
 from bot.services.delivery import DeliveryPartSpec, deliver_batch
@@ -312,7 +313,7 @@ async def test_full_export_matches_deletion_inventory_and_excludes_other_users(t
                     telegram_id=user_id,
                     username="export-owner",
                     privacy_notice_version=1,
-                    cloud_processing_enabled=True,
+                    cloud_processing_enabled=True, privacy_provider_fingerprint=provider_fingerprint(),
                 ),
                 User(telegram_id=other_id, username="other-owner"),
             ]

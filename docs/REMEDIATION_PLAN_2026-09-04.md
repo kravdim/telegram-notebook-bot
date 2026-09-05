@@ -242,15 +242,15 @@ Docs-only handoff commit после live-проверки отдельно от�
 | R03 | 4 | реализован, приёмка частичная | fresh-session failure record, failed/retry, backoff |
 | R04 | 4 | частично | timezone series/backfill, future catch-up; календарные edge cases впереди |
 | R05 | 1 | проверен локально | concurrent expired read/new claim и expired replacement; coverage 73,22% |
-| R06 | 3 | частично | lifecycle service и запрет generic status; legacy CRUD helpers ещё убрать |
-| R07 | 5 | частично | durable plan/effect/result, /retry, rollback tests; commit-ambiguity/live впереди |
+| R06 | 3 | частично | legacy completion helpers удалены; clear/reschedule/reopen tests; полный межканальный UX впереди |
+| R07 | 5 | частично | concurrent retry, injection после реального COMMIT, child-task guard; полный live/voice впереди |
 | R08 | 4 | реализован, приёмка частичная | weekly DeliveryBatch; full live впереди |
 | R09 | 2 | проверен локально | typed payload, splitter boundaries; полный UX audit впереди |
 | R10 | 2–3 | частично | explicit null/False, bound alarm sync; UX и reopen впереди |
 | R11 | 2–6 | частично | application imports закрыты, InteractionPort; task-creation Any/UoW остаются |
 | R12 | 7, 9 | частично | reusable CI release dependency, portable checksums/manifest; реальный release не выполнен |
 | R13 | 6, 9 | частично | nested schema checks, actual recognizer corpus, runner lock 85 cases; provider/live впереди |
-| R14 | 6, 9 | частично | CI audit cloud + STT; consent fingerprint/STT SBOM/threat model остаются |
+| R14 | 6, 9 | частично | consent fingerprint, stale-button и egress tests, threat model; STT SBOM/CI приёмка остаются |
 | R15 | 8 | запланирован | — |
 | R16 | 8–9 | запланирован | — |
 
@@ -292,3 +292,20 @@ Bandit, version/docs checks и runner lock verification проходят лок�
 Live-проверки и GitHub Actions в этом checkpoint не запускались. ShellCheck локально
 не установлен; `bash -n` изменённого live-wrapper прошёл, полноценный ShellCheck
 остаётся CI gate. Это не завершение плана и не release acceptance.
+
+Продолжение 05.09.2026: снят публичный CRUD bypass завершения задач; перенос
+напоминания отзывает старый lease и сбрасывает retry state. Добавлены DB проверки
+clear/reschedule/protected recurring reopen, конкурентного retry и потерянного
+подтверждения после реального COMMIT (инъекция исключения в клиентском адаптере,
+не сетевой proxy drill). Запрещено наследовать command session в дочернюю coroutine.
+
+Consent теперь связан с fingerprint получателей/endpoint; старые consent не
+backfill-ятся как разрешённые. Проверяются устаревшие обычные/onboarding кнопки,
+текст/голос и отзыв согласия между записями reindex batch. Новый schema head:
+`d9f2a4b6c803`. Downgrade этой миграции сбрасывает cloud consent перед удалением
+fingerprint, чтобы старый runtime не расширил доступ молча. Это **не** разрешение
+на rollback reminder/action-journal migrations; их compatibility gate остаётся.
+
+Итог продолжения: **557 passed, 1 skipped; coverage 74.01%**, миграции/schema drift,
+complexity и coverage gates зелёные. Ruff/mypy/Bandit/docs/version checks проходят.
+GitHub CI, live-приёмка и deploy в этом продолжении не выполнялись.

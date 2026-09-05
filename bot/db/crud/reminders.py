@@ -304,10 +304,12 @@ async def upsert_task_reminder(
         .where(
             Reminder.user_id == user_id,
             Reminder.task_id == task_id,
-            Reminder.status.in_(("pending", "snoozed")),
+            Reminder.status.in_(("pending", "snoozed", "failed")),
         )
         .order_by(Reminder.created_at.desc())
         .limit(1)
+        .with_for_update()
+        .execution_options(populate_existing=True)
     )
     reminder = result.scalar_one_or_none()
     if reminder:
@@ -317,6 +319,11 @@ async def upsert_task_reminder(
         reminder.repeat_rule = repeat_rule
         reminder.is_sent = False
         reminder.status = "pending"
+        reminder.lease_token = None
+        reminder.lease_expires_at = None
+        reminder.next_attempt_at = None
+        reminder.delivery_attempts = 0
+        reminder.last_error = None
     else:
         reminder = Reminder(
             user_id=user_id,

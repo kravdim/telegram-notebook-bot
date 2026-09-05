@@ -1,5 +1,6 @@
 """Async SQLAlchemy engine и session factory."""
 
+import asyncio
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from contextvars import ContextVar
@@ -17,6 +18,7 @@ engine = create_async_engine(
 )
 
 _command_session: ContextVar["CommandSession | None"] = ContextVar("command_session", default=None)
+_command_owner: ContextVar[object | None] = ContextVar("command_owner", default=None)
 
 
 class CommandSession(AsyncSession):
@@ -47,6 +49,8 @@ session_factory = async_sessionmaker(
 async def async_session() -> AsyncGenerator[CommandSession, None]:
     borrowed = _command_session.get()
     if borrowed is not None:
+        if _command_owner.get() is not asyncio.current_task():
+            raise RuntimeError("Command session cannot be shared with a child task")
         yield borrowed
     else:
         async with session_factory() as session:
@@ -59,12 +63,14 @@ async def command_transaction(session: CommandSession) -> AsyncGenerator[None, N
     if _command_session.get() is not None:
         raise RuntimeError("Nested command transaction")
     token = _command_session.set(session)
+    owner_token = _command_owner.set(asyncio.current_task())
     try:
         yield
         if session.rollback_only:
             raise RuntimeError("Command rolled back its transaction")
     finally:
         _command_session.reset(token)
+        _command_owner.reset(owner_token)
 
 
 async def get_session() -> AsyncGenerator[AsyncSession, None]:

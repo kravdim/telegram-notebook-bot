@@ -7,6 +7,7 @@ import bot.handlers.callbacks as callbacks
 import bot.handlers.messages as messages
 import bot.scheduler.chronometry as chronometry_scheduler
 import scripts.delete_user_data as deletion_script
+from bot.privacy import provider_fingerprint
 from tests.fakes import FakeCallback, FakeMessage, FakeSession, FakeSessionContext
 
 
@@ -89,7 +90,7 @@ async def test_mutation_without_typed_result_fails_closed(
     finished = []
 
     async def get_user(session, user_id):
-        return SimpleNamespace(timezone="Europe/Moscow", privacy_notice_version=1, cloud_processing_enabled=True)
+        return SimpleNamespace(timezone="Europe/Moscow", privacy_notice_version=1, cloud_processing_enabled=True, privacy_provider_fingerprint=provider_fingerprint())
 
     async def get_prompt(session, prompt_key):
         return "prompt {now} {timezone}"

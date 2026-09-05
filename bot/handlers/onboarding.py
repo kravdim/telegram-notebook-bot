@@ -17,7 +17,12 @@ from bot.db.crud.tasks import create_task
 from bot.db.crud.users import get_or_create_user, get_user, update_user_settings
 from bot.db.engine import async_session
 from bot.handlers.telegram import callback_message
-from bot.privacy import PRIVACY_NOTICE_VERSION, privacy_notice_text
+from bot.privacy import (
+    PRIVACY_NOTICE_VERSION,
+    has_current_consent,
+    privacy_notice_text,
+    provider_fingerprint,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -61,6 +66,7 @@ async def cmd_start(message: Message, state: FSMContext) -> None:
         user
         and user.onboarding_completed
         and getattr(user, "privacy_notice_version", 0) >= PRIVACY_NOTICE_VERSION
+        and (not getattr(user, "cloud_processing_enabled", False) or has_current_consent(user))
     ):
         next_step = (
             "Напиши задачу или используй /help для списка команд."
@@ -92,8 +98,9 @@ async def cmd_start(message: Message, state: FSMContext) -> None:
 
 async def _send_privacy_step(message: Message, state: FSMContext) -> None:
     """Show the privacy contract before any cloud-assisted user input."""
+    await state.update_data(privacy_offered_fingerprint=provider_fingerprint())
     keyboard = InlineKeyboardBuilder()
-    keyboard.button(text="✅ Разрешить cloud AI", callback_data="onb_privacy_accept")
+    keyboard.button(text="✅ Разрешить cloud AI", callback_data=f"onb_privacy_accept:{provider_fingerprint()}")
     keyboard.button(text="🚫 Продолжить без cloud AI", callback_data="onb_privacy_decline")
     keyboard.adjust(1)
     await message.answer(
@@ -106,14 +113,20 @@ async def _send_privacy_step(message: Message, state: FSMContext) -> None:
 
 @router.callback_query(
     OnboardingStates.step_privacy,
-    F.data.in_({"onb_privacy_accept", "onb_privacy_decline"}),
+    F.data.startswith("onb_privacy_accept") | (F.data == "onb_privacy_decline"),
 )
 async def onb_privacy_choice(callback: CallbackQuery, state: FSMContext) -> None:
     """Persist an explicit cloud-processing choice before onboarding continues."""
     await callback.answer()
-    enabled = callback.data == "onb_privacy_accept"
+    enabled = bool(callback.data and callback.data.startswith("onb_privacy_accept"))
+    fingerprint = provider_fingerprint()
+    offered = (await state.get_data()).get("privacy_offered_fingerprint")
+    if enabled and (offered != fingerprint or callback.data != f"onb_privacy_accept:{fingerprint}"):
+        await _send_privacy_step(callback_message(callback), state)
+        return
     await state.update_data(
         privacy_notice_version=PRIVACY_NOTICE_VERSION,
+        privacy_provider_fingerprint=fingerprint if enabled else None,
         cloud_processing_enabled=enabled,
     )
     async with async_session() as session:
@@ -123,6 +136,7 @@ async def onb_privacy_choice(callback: CallbackQuery, state: FSMContext) -> None
                 session,
                 callback.from_user.id,
                 privacy_notice_version=PRIVACY_NOTICE_VERSION,
+                privacy_provider_fingerprint=fingerprint if enabled else None,
                 cloud_processing_enabled=enabled,
             )
     data = await state.get_data()
@@ -243,6 +257,7 @@ async def _save_name_and_proceed(callback: CallbackQuery, state: FSMContext, nam
             session,
             user_id,
             privacy_notice_version=int(data.get("privacy_notice_version") or 0),
+            privacy_provider_fingerprint=data.get("privacy_provider_fingerprint"),
             cloud_processing_enabled=bool(data.get("cloud_processing_enabled", False)),
         )
 
@@ -263,6 +278,7 @@ async def _save_name_and_proceed_msg(message: Message, state: FSMContext, name: 
             session,
             user_id,
             privacy_notice_version=int(data.get("privacy_notice_version") or 0),
+            privacy_provider_fingerprint=data.get("privacy_provider_fingerprint"),
             cloud_processing_enabled=bool(data.get("cloud_processing_enabled", False)),
         )
 

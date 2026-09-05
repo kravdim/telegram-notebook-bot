@@ -35,7 +35,12 @@ from bot.llm.prompts import get_prompt
 from bot.llm.queue import PRIORITY_INTENT, LLMQueue
 from bot.logging_safety import error_type
 from bot.observability import metrics
-from bot.privacy import PRIVACY_NOTICE_VERSION, privacy_keyboard, privacy_notice_text
+from bot.privacy import (
+    consent_display_state,
+    has_current_consent,
+    privacy_keyboard,
+    privacy_notice_text,
+)
 from bot.services.command_execution import active_request, execute_action, persist_plan, saved_plan
 from bot.services.interactions import interaction_service
 
@@ -241,6 +246,7 @@ async def process_text_message(
                 request_key,
                 "failed"
                 if outcome == MessageOutcome.RETRYABLE_ERROR
+                or (resume_key is not None and outcome == MessageOutcome.REJECTED)
                 else "completed",
             )
             return outcome
@@ -630,16 +636,10 @@ async def _process_text_message_unlocked(
         user = await get_user(session, user_id)
     user_tz = user.timezone if user else "Europe/Moscow"
 
-    if (
-        user is None
-        or getattr(user, "privacy_notice_version", 0) < PRIVACY_NOTICE_VERSION
-        or not getattr(user, "cloud_processing_enabled", False)
-    ):
+    if not has_current_consent(user):
         await message.answer(
             privacy_notice_text(
-                enabled=getattr(user, "cloud_processing_enabled", None)
-                if user
-                else None
+                enabled=consent_display_state(user)
             ),
             parse_mode=None,
             reply_markup=privacy_keyboard(),

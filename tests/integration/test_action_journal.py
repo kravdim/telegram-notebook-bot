@@ -1,5 +1,6 @@
 """Real PostgreSQL failure boundaries of the persisted command transaction."""
 
+import asyncio
 import os
 import uuid
 
@@ -8,7 +9,7 @@ import pytest_asyncio
 from sqlalchemy import delete, select
 
 from bot.application.command_bus import CommandResult
-from bot.db.engine import async_session, engine
+from bot.db.engine import CommandSession, async_session, engine
 from bot.db.models import Note, ProcessedRequest, User
 from bot.services.command_execution import active_request, execute_action, persist_plan, saved_plan
 
@@ -101,3 +102,66 @@ async def test_caught_repository_rollback_cannot_commit_journal(journal):
     async with async_session() as session:
         assert await session.scalar(select(Note.id).where(Note.user_id == user_id)) is None
         assert (await session.get(ProcessedRequest, key)).action_results == {}
+
+
+@pytest.mark.asyncio
+async def test_concurrent_retries_commit_effect_once(journal):
+    user_id, _ = journal
+    await persist_plan(user_id, [{"name": "create_note"}])
+    calls = []
+
+    async def effect():
+        calls.append("executed")
+        return await write_note(user_id, "one effect")
+
+    results = await asyncio.gather(
+        execute_action(user_id, 0, effect), execute_action(user_id, 0, effect),
+    )
+    assert results == [CommandResult("one effect")] * 2
+    assert calls == ["executed"]
+    async with async_session() as session:
+        assert list(await session.scalars(select(Note.content).where(Note.user_id == user_id))) == ["one effect"]
+
+
+@pytest.mark.asyncio
+async def test_lost_commit_ack_replays_committed_result(journal, monkeypatch):
+    user_id, _ = journal
+    await persist_plan(user_id, [{"name": "create_note"}])
+    original_commit = CommandSession.commit
+
+    async def lose_ack(session):
+        await original_commit(session)
+        if session.info.pop("lose_ack", False) and not session.in_transaction():
+            raise ConnectionError("server committed, client lost acknowledgement")
+
+    async def effect():
+        result = await write_note(user_id, "committed")
+        async with async_session() as session:
+            session.info["lose_ack"] = True
+        return result
+
+    monkeypatch.setattr(CommandSession, "commit", lose_ack)
+    with pytest.raises(ConnectionError, match="client lost"):
+        await execute_action(user_id, 0, effect)
+    await engine.dispose()
+
+    async def forbidden_replay():
+        raise AssertionError("Committed action must not be repeated")
+
+    assert await execute_action(user_id, 0, forbidden_replay) == CommandResult("committed")
+    async with async_session() as session:
+        assert list(await session.scalars(select(Note.content).where(Note.user_id == user_id))) == ["committed"]
+
+
+@pytest.mark.asyncio
+async def test_child_task_cannot_borrow_command_session(journal):
+    user_id, _ = journal
+    await persist_plan(user_id, [{"name": "create_note"}])
+
+    async def effect():
+        await asyncio.create_task(write_note(user_id, "unsafe concurrent session"))
+        return CommandResult("not reached")
+
+    with pytest.raises(RuntimeError, match="child task"):
+        await execute_action(user_id, 0, effect)
+    assert await execute_action(user_id, 0, lambda: write_note(user_id, "safe")) == CommandResult("safe")

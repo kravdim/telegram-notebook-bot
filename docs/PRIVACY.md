@@ -21,6 +21,19 @@ commands, `/export`, `/privacy` and `/delete_data` remain available. Reindexing
 also excludes users who have not enabled cloud processing when the configured
 embedding adapter is external.
 
+The remediation branch additionally records `privacy_provider_fingerprint`:
+consent identifies the active main/fallback LLM, embedding recipient/endpoint and
+STT provider. A provider or endpoint change requires confirmation again; changing
+an API key or model tuning alone does not. Old enable buttons cannot authorize a
+new recipient set. Existing consent without a fingerprint is not backfilled as
+accepted: after this migration, use `/privacy` once to confirm the current notice.
+This behaviour has not yet been deployed to production v0.5.0.
+
+Cloud reindexing filters by current consent and checks it again immediately before
+each record is sent. Revoking consent stops remaining records, not a request that
+has already gone out over the network. `/retry` remains available after renewing
+consent; a privacy rejection must not discard its saved unfinished action plan.
+
 Depending on the active profile, external AI recipients can receive task,
 note, diary and conversation text for intent recognition or search, and voice
 audio for transcription. Local Ollama and local Whisper do not send those
@@ -38,8 +51,9 @@ retain export archives.
 Default retention:
 
 - domain data: until the user or operator deletes the account/data;
-- transient interaction and idempotency state: operational only, periodically
-  eligible for cleanup after 30 days;
+- transient interaction state and completed idempotency records: operational only,
+  periodically eligible for cleanup after 30 days; unfinished/failed action plans
+  are retained for safe retry until completed or deleted with the user's data;
 - LLM logs: 90 days; prompt and response bodies are disabled by default with
   `privacy.store_llm_payloads: false`;
 - backups: 30 days; checksum sidecars have the same lifecycle;
