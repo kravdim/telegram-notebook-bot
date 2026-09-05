@@ -217,6 +217,13 @@ the installed readiness path. It shares `deploy.lock`. The installed previous SH
 and effective source database must match the planned source before stopping it.
 Plan and execution do not prepare missing releases, install packages, or fetch Git.
 
+Activation stores only nonsecret source identity and target database name in the
+LaunchAgent. A small embedded bootstrap reads the release's existing credentials,
+checks the source identity, selects the target in memory, then starts `bot.main`.
+This also works with the old release and never invokes its migrating `run.sh`.
+Both releases' credential configuration is checked before stopping the service;
+the deployment does not add a plaintext database URL to the plist.
+
 Use the module entry point from the repository virtual environment. Supply source
 and recovery-operator credentials through protected environment variables
 `DATABASE_URL` and `OPERATOR_DATABASE_URL`, never command-line arguments. Substitute

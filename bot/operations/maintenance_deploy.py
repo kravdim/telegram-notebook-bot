@@ -85,6 +85,12 @@ class MacMaintenance:
         await self.previous.command(["-c", _CHECK_SOURCE], {
             **environment, "MAINTENANCE_EXPECTED_DATABASE": self._url(),
         })
+        # Activation reads existing .env credentials, not a URL saved in launchd.
+        startup_environment = {key: value for key, value in environment.items() if key != "DATABASE_URL"}
+        for release in (self.previous, self.candidate):
+            await release.command(["-c", _CHECK_SOURCE], {
+                **startup_environment, "MAINTENANCE_EXPECTED_DATABASE": self._url(),
+            })
         if not self.journal.path.exists():
             await self.previous.command(["scripts/preflight.py"], {
                 **environment, "DATABASE_URL": self._url(),
