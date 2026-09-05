@@ -309,3 +309,21 @@ fingerprint, чтобы старый runtime не расширил доступ 
 Итог продолжения: **557 passed, 1 skipped; coverage 74.01%**, миграции/schema drift,
 complexity и coverage gates зелёные. Ruff/mypy/Bandit/docs/version checks проходят.
 GitHub CI, live-приёмка и deploy в этом продолжении не выполнялись.
+
+Rollback step 05.09.2026: выполнен новый реальный Docker/PostgreSQL drill со старым
+runtime `27ce9e0` в отдельной frozen-среде. Старый preflight отвергает новую схему;
+принудительное разрешение head не делает sender совместимым (он выбирает failed
+и leased occurrences). Downgrade с pending plan блокируется атомарно, включая
+сохранение consent state. Восстановление предмиграционного снимка в другую БД
+прошло старые preflight, singleton/schema/pgvector smoke и domain read/write.
+База кандидата сохранялась до завершения проверки.
+
+[Evidence и границы](MIGRATION_ROLLBACK.md). Drill добавлен в reusable CI,
+но remote CI ещё не подтверждён. Обычный installer по-прежнему правильно блокирует
+новую схему; allowlist не расширялся. **Следующий шаг:** guarded maintenance-deploy
+с остановкой writers, snapshot identity и запретом молчаливой потери post-snapshot
+updates. Эта проверка не разрешает code-only/zero-downtime rollback.
+
+Quality gate этого шага: 564 passed, 1 skipped; coverage 72.89% с новыми
+operational scripts. Реальный migration drill выполнялся отдельно от pytest
+coverage. Пороговые проверки, линтер, типизация, Bandit и docs gate прошли.

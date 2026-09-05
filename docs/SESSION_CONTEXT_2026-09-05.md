@@ -107,3 +107,40 @@ Production не изменялся, main не затрагивался, новы
 подтвердил отсутствие ORM drift и прошёл complexity/critical/risk gates.
 Ruff, mypy (120 файлов), Bandit, documentation (11 активных файлов), version check
 и `git diff --check` проходят. Это по-прежнему не live/release evidence.
+
+## Следующий шаг: реальный migration rollback drill
+
+Добавлены `scripts/run_migration_rollback_drill.py` и `migration_rollback_probe.py`.
+Драйвер принимает только previous Git revision, а не production URL; сам создаёт
+изолированный Docker PG и экспортирует старый source в tempdir. У v0.5.0 своя
+`uv sync --frozen --no-dev --extra stt` среда и sample config. Новые migrations
+и synthetic data выполняются отдельно от production. Дочерний probe проверяет,
+что импортировал именно выбранный source tree.
+
+Фактически проверено:
+
+- старый preflight отвергает новый head;
+- override head недостаточен: old sender выбирает failed/leased reminders;
+- downgrade с pending request блокируется без частичной смены schema/consent;
+- snapshot restore в отдельную БД проходит старые preflight, singleton/schema/vector
+  smoke, чтение baseline и запись через старый task workflow;
+- canary данных кандидата остаётся в исходной БД до cleanup.
+
+Evidence: [JSON](evidence/MIGRATION_ROLLBACK_2026-09-05.json), previous `27ce9e0`,
+candidate runtime `0676c18`, SHA проверяющих скриптов отдельно в JSON.
+Temporary databases/snapshot удалены после успешной проверки. Production не затронут.
+Drill добавлен в обязательный reusable CI, но сам remote CI пока не запускался.
+
+**Следующее действие:** реализовать и проверить guarded maintenance-deploy.
+Обычный `platform/macos/install.sh` остаётся fail-closed; не добавлять head в
+compatibility allowlist. Нужны freeze writers до снимка, восстановление в новую
+БД с сохранением failed candidate, exact snapshot/runtime identity и явный отказ
+от автоматического restore, если уже принимались новые пользовательские updates.
+Подробный контракт: [MIGRATION_ROLLBACK](MIGRATION_ROLLBACK.md).
+
+Локальный quality gate после добавления drill: **564 passed, 1 skipped; coverage
+72.89%**. Новые operational scripts входят в общий denominator; реальный Docker
+drill выполнялся отдельно от pytest coverage. Migration/schema drift, complexity,
+critical/risk floors, Ruff, mypy (122 файла), Bandit и docs gate прошли.
+Дополнительная проверка драйвера запрещает exact-SHA evidence при dirty/untracked
+runtime в `bot/` или незакоммиченном изменении зависимостей.

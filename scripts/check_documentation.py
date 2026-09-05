@@ -10,7 +10,8 @@ from urllib.parse import unquote
 ROOT = Path(__file__).resolve().parents[1]
 LINK_RE = re.compile(r"(?<!!)\[[^\]]+\]\(([^)]+)\)")
 ROOT_DOCS = ["README.md", "CONTRIBUTING.md", "SECURITY.md", "CHANGELOG.md"]
-PRODUCT_DOCS = ["README.md", "ARCHITECTURE.md", "OPERATIONS.md", "PRIVACY.md", "THREAT_MODEL.md"]
+PRODUCT_DOCS = ["README.md", "ARCHITECTURE.md", "OPERATIONS.md", "PRIVACY.md",
+                "THREAT_MODEL.md", "MIGRATION_ROLLBACK.md"]
 
 
 def active_documents(root: Path = ROOT) -> list[Path]:
