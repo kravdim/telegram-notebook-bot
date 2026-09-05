@@ -4,8 +4,11 @@ import asyncio
 import json
 import os
 import plistlib
+import runpy
+import sys
 import time
 from pathlib import Path
+from types import ModuleType, SimpleNamespace
 
 import pytest
 from sqlalchemy.engine import make_url
@@ -17,6 +20,32 @@ from bot.operations.maintenance_postgres import identity
 SHA = "a" * 40
 PREVIOUS = "b" * 40
 SOURCE = "postgresql+asyncpg://app:synthetic-secret@localhost/source"
+
+
+@pytest.mark.parametrize("target", ["source", "restored"])
+def test_bootstrap_loads_credentials_in_memory_before_main(monkeypatch, target):
+    config = ModuleType("bot.config")
+    config.settings = SimpleNamespace(database_url=SOURCE)
+    monkeypatch.setitem(sys.modules, "bot.config", config)
+    monkeypatch.setenv("DAILYPLANNER_DATABASE_SOURCE", json.dumps(["localhost", 5432, "app", "source"]))
+    monkeypatch.setenv("DAILYPLANNER_DATABASE_TARGET", target)
+    monkeypatch.setenv("DATABASE_URL", "")
+    calls = []
+    monkeypatch.setattr(runpy, "run_module", lambda *args, **kwargs: calls.append(
+        (args, kwargs, config.settings.database_url, os.environ["DATABASE_URL"])))
+    exec(module.RUNTIME_BOOTSTRAP, {})
+    expected = SOURCE.replace("/source", f"/{target}")
+    assert calls == [(("bot.main",), {"run_name": "__main__"}, expected, expected)]
+
+
+def test_bootstrap_rejects_changed_source_before_main(monkeypatch):
+    config = ModuleType("bot.config")
+    config.settings = SimpleNamespace(database_url=SOURCE)
+    monkeypatch.setitem(sys.modules, "bot.config", config)
+    monkeypatch.setenv("DAILYPLANNER_DATABASE_SOURCE", json.dumps(["other", 5432, "app", "source"]))
+    monkeypatch.setattr(runpy, "run_module", lambda *a, **kw: pytest.fail("must not start"))
+    with pytest.raises(RuntimeError, match="configuration changed"):
+        exec(module.RUNTIME_BOOTSTRAP, {})
 
 
 class Lease:
@@ -153,8 +182,10 @@ async def test_candidate_activation_uses_private_plist_without_run_sh(service):
     admit(controller)
     await controller.activate(release, SHA, SOURCE)
     payload = plistlib.loads(controller.plist.read_bytes())
-    assert payload["ProgramArguments"] == [str(release / ".venv/bin/python"), "-m", "bot.main"]
-    assert payload["EnvironmentVariables"]["DATABASE_URL"] == SOURCE
+    assert payload["ProgramArguments"] == [str(release / ".venv/bin/python"), "-c", module.RUNTIME_BOOTSTRAP]
+    assert "DATABASE_URL" not in payload["EnvironmentVariables"]
+    assert "synthetic-secret" not in controller.plist.read_text()
+    assert payload["EnvironmentVariables"]["DAILYPLANNER_DATABASE_TARGET"] == "source"
     assert payload["EnvironmentVariables"]["HTTP_PROXY"] == "http://localhost:8080"
     assert controller.plist.stat().st_mode & 0o777 == 0o600
     assert fake.loaded and not fake.disabled

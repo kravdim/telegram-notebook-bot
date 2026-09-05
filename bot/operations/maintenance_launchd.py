@@ -18,6 +18,25 @@ from bot.runtime.readiness import validate_readiness_file
 
 LABEL = "com.notebook-bot"
 
+# Embedded so rollback can launch older releases that do not contain this module.
+# Credentials stay in the existing runtime configuration and process memory.
+RUNTIME_BOOTSTRAP = """
+import json
+import os
+import runpy
+from sqlalchemy.engine import make_url
+from bot.config import settings
+url = make_url(settings.database_url)
+source = [url.host, url.port or 5432, url.username, url.database]
+if source != json.loads(os.environ['DAILYPLANNER_DATABASE_SOURCE']):
+    raise RuntimeError('Runtime database configuration changed')
+settings.database_url = url.set(
+    database=os.environ['DAILYPLANNER_DATABASE_TARGET']
+).render_as_string(hide_password=False)
+os.environ['DATABASE_URL'] = settings.database_url
+runpy.run_module('bot.main', run_name='__main__')
+"""
+
 
 class WriterLease(Protocol):
     async def acquire(self, timeout: float = 30) -> None: ...
@@ -143,7 +162,7 @@ class MaintenanceLaunchd:
         payload = copy.deepcopy(self.installed())
         # Do not invoke run.sh: it migrates/seeds before the bot's singleton lock.
         payload.pop("Program", None)
-        payload["ProgramArguments"] = [str(release / ".venv/bin/python"), "-m", "bot.main"]
+        payload["ProgramArguments"] = [str(release / ".venv/bin/python"), "-c", RUNTIME_BOOTSTRAP]
         payload["WorkingDirectory"] = str(release)
         payload["RunAtLoad"] = True
         payload["KeepAlive"] = True
@@ -151,7 +170,10 @@ class MaintenanceLaunchd:
         environment = payload.setdefault("EnvironmentVariables", {})
         # Each attempt has a unique heartbeat path, never accept an old heartbeat.
         readiness = self.journal.path.parent / f"readiness-{os.urandom(12).hex()}.json"
-        environment.update(DATABASE_URL=database_url, PYTHONPATH=str(release),
+        environment.pop("DATABASE_URL", None)
+        environment.update(DAILYPLANNER_DATABASE_SOURCE=json.dumps(
+                               [url.host, url.port or 5432, url.username, source_database]),
+                           DAILYPLANNER_DATABASE_TARGET=target_database, PYTHONPATH=str(release),
                            DAILYPLANNER_RELEASE_SHA=sha, READINESS_FILE=str(readiness),
                            PYTHONDONTWRITEBYTECODE="1", PYTHONPYCACHEPREFIX=str(readiness) + ".pycache")
         return payload, readiness
