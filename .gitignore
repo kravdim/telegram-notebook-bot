@@ -68,3 +68,4 @@ project/
 /dailyplanner-image.tar
 /dailyplanner.sbom.cdx.json
 /SHA256SUMS
+/migration-rollback.json
