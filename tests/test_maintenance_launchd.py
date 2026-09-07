@@ -79,6 +79,7 @@ class Launchctl:
         self.admissions = 0
         self.uncertain_bootstrap = False
         self.transient_prints = 0
+        self.absent_bootout_status = 113
 
     async def __call__(self, *args):
         self.calls.append(args)
@@ -92,7 +93,7 @@ class Launchctl:
             return 0, self.disabled_output or f'\tdisabled services = {{\n "com.notebook-bot" => {value}\n}}'
         elif command == "bootout":
             if not self.loaded:
-                return 113, ""
+                return self.absent_bootout_status, ""
             self.loaded = False
         elif command == "print":
             if args[1] == self.controller.target and not self.loaded:
@@ -166,6 +167,14 @@ async def test_freeze_waits_for_acknowledged_job_to_disappear(service):
     # after acquiring the database lease.
     assert len(target_prints) == 4
     assert controller.lease.held
+
+
+async def test_repeated_halt_accepts_macos_esrch_then_proves_exact_absence(service):
+    controller, fake, _ = service
+    await controller.halt()
+    fake.absent_bootout_status = 3
+    await controller.halt()
+    assert not fake.loaded
 
 
 @pytest.mark.parametrize("failure", ["disable", "print-disabled", "bootout", "print"])

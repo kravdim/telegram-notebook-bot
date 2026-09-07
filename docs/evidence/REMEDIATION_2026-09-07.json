@@ -2,7 +2,7 @@
   "schema_version": 1,
   "base_commit": "b845c087fa9046478138efa737a9d1469f0c0835",
   "scope": "uncommitted working copy; code/tests/config/platform files; docs and Markdown excluded from source fingerprint",
-  "source_fingerprint_sha256": "b52d1dacdb936c6d3429d63ba5ae69c3c0908e31cc94dff57fbd79da01f63d47",
+  "source_fingerprint_sha256": "664989a1f9f28bf6577291c0a4ee44959cd5ea802fe170327a30fd66002e388d",
   "source_files": [
     {
       "path": ".dockerignore",
@@ -434,7 +434,7 @@
     },
     {
       "path": "bot/operations/maintenance_launchd.py",
-      "sha256": "565131f3e60fa6d1a10949b0416acf02338d2030e107777c45d301b87526a48e"
+      "sha256": "1cf820d2005fc741f52df23e2552ca76a9773f4a80dcbace1071d92e4bfd5a4b"
     },
     {
       "path": "bot/operations/maintenance_lease.py",
@@ -946,7 +946,7 @@
     },
     {
       "path": "tests/test_maintenance_launchd.py",
-      "sha256": "70f24d8677ee9c5b8e53a6bca513696604f5ee6eabab42626cee78263681d0c9"
+      "sha256": "7e0e8703bc31ddb1d42e6fb31b3be1f068d4b5f258d8b3c8dcc696e0cff05fa4"
     },
     {
       "path": "tests/test_maintenance_postgres_client.py",
@@ -1095,10 +1095,10 @@
   ],
   "validation": {
     "pytest": {
-      "passed": 701,
+      "passed": 702,
       "skipped": 1,
-      "seconds": 41.71,
-      "coverage_percent": 74.85,
+      "seconds": 41.42,
+      "coverage_percent": 74.81,
       "skipped_reason": "opt-in native Whisper resource test"
     },
     "critical_coverage": "passed without lowering thresholds",
@@ -1161,7 +1161,7 @@
     },
     "saved_response_contracts": "parser_cases=6 tool_call_parser_accuracy=1.000 saved_response_cases=17 saved_response_contract_accuracy=1.000 invalid_saved_response_rate=0.000 scope=saved-response-parsing-not-intent-recognition",
     "deterministic_recognizer": "deterministic_utterance_cases=13 failed=0 scope=task-fast-path",
-    "maintenance_launchd_regression": "56 focused tests passed; full disposable quality gate passed"
+    "maintenance_launchd_regression": "57 focused tests passed; full disposable quality gate passed"
   },
   "not_executed": [
     "GitHub CI for this uncommitted tree",
@@ -1178,5 +1178,12 @@
     "previous_runtime_restored": true,
     "cause": "launchd briefly exposed terminating job after acknowledged bootout",
     "fix": "bounded wait for exact service-not-found; other statuses fail closed"
+  },
+  "deployment_attempt_2": {
+    "phase": "snapshot restore verification before migration",
+    "production_schema_changed": false,
+    "previous_runtime_restored": true,
+    "cause": "ephemeral operator did not own recovery-template extensions; repeated halt exposed macOS bootout ESRCH",
+    "fix": "template owner aligned for deployment; repeated ESRCH accepted only before exact absence proof"
   }
 }
