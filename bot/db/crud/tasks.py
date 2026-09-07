@@ -7,7 +7,7 @@ from difflib import SequenceMatcher
 from typing import List, Optional
 
 import pendulum
-from sqlalchemy import select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm.exc import StaleDataError
 
@@ -62,6 +62,17 @@ async def create_task(
     **kwargs,
 ) -> Task:
     """Создать задачу."""
+    from bot.db.models import Project, Trip
+    for field, model in (("project_id", Project), ("trip_id", Trip)):
+        if kwargs.get(field) and await session.scalar(select(model.id).where(
+            model.id == kwargs[field], model.user_id == user_id,
+        )) is None:
+            raise ValueError("Related entity is not owned by the task user")
+    if kwargs.get("repeat_rule") and not kwargs.get("recurrence_timezone"):
+        from bot.db.models import User
+        kwargs["recurrence_timezone"] = await session.scalar(
+            select(User.timezone).where(User.telegram_id == user_id)
+        ) or "Europe/Moscow"
     task = Task(
         user_id=user_id,
         title=title,
@@ -81,10 +92,11 @@ async def create_task(
 async def get_task_by_id(
     session: AsyncSession,
     task_id: uuid.UUID,
+    user_id: int,
 ) -> Optional[Task]:
     """Получить задачу по ID."""
     result = await session.execute(
-        select(Task).where(Task.id == task_id)
+        select(Task).where(Task.id == task_id, Task.user_id == user_id)
     )
     return result.scalar_one_or_none()
 
@@ -118,6 +130,7 @@ async def get_today_tasks(
         .where(
             Task.user_id == user_id,
             Task.status == "open",
+            or_(Task.is_frog.is_(True), func.coalesce(Task.scheduled_date, Task.due_date) <= today),
         )
         .order_by(
             Task.is_frog.desc(),  # лягушки первые
@@ -127,17 +140,7 @@ async def get_today_tasks(
             Task.created_at.asc(),
         )
     )
-    tasks = list(result.scalars().all())
-    today_tasks = []
-    for t in tasks:
-        if t.is_frog:
-            today_tasks.append(t)
-            continue
-
-        plan_date = t.scheduled_date or t.due_date
-        if plan_date and plan_date <= today:
-            today_tasks.append(t)
-    return today_tasks
+    return list(result.scalars().all())
 
 
 async def get_frog(
@@ -160,14 +163,16 @@ async def set_frog(
     commit: bool = True,
 ) -> Optional[Task]:
     """Назначить задачу лягушкой. Снимает флаг с предыдущей."""
-    # Снять флаг с текущей лягушки
+    task = await get_task_by_id(session, task_id, user_id)
+    if not task or task.user_id != user_id:
+        return None
+
     current_frog = await get_frog(session, user_id)
     if current_frog:
         current_frog.is_frog = False
-
-    task = await get_task_by_id(session, task_id)
-    if not task or task.user_id != user_id:
-        return None
+        # PostgreSQL checks the partial unique index per statement. Flush the
+        # previous flag before ORM ordering can enable the replacement first.
+        await session.flush()
 
     task.is_frog = True
     if commit:
@@ -227,7 +232,7 @@ async def update_task(
     **updates,
 ) -> Optional[Task]:
     """Обновить задачу."""
-    task = await get_task_by_id(session, task_id)
+    task = await get_task_by_id(session, task_id, user_id)
     if not task or task.user_id != user_id:
         return None
 
@@ -360,7 +365,7 @@ async def delete_task(
     user_id: int,
 ) -> bool:
     """Удалить задачу. Возвращает True если удалена."""
-    task = await get_task_by_id(session, task_id)
+    task = await get_task_by_id(session, task_id, user_id)
     if not task or task.user_id != user_id:
         return False
 

@@ -102,6 +102,8 @@ async def test_create_task_coordinates_trip_frog_reminder_and_repeat_atomically(
             "repeat_rule": "daily",
             "remind_at": "2030-01-01T10:00:00",
             "remind_before_min": 15,
+            "due_date": "2030-01-01",
+            "due_time": "10:15",
         },
         "UTC",
         _dependencies(
@@ -115,7 +117,7 @@ async def test_create_task_coordinates_trip_frog_reminder_and_repeat_atomically(
 
     assert captured["task"]["title"] == "Отправить отчёт"
     assert captured["task"]["trip_id"] == "trip-7"
-    assert captured["task"]["scheduled_date"] == pendulum.now("UTC").date()
+    assert captured["task"]["scheduled_date"] is None
     assert captured["task"]["commit"] is False
     assert captured["reminder"]["task_id"] == "task-9"
     assert old_frog.is_frog is False

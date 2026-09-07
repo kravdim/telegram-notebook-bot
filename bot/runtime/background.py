@@ -23,6 +23,7 @@ from bot.scheduler.reminders import send_pending_reminders
 from bot.scheduler.sweep import sweep_missed_reminders
 from bot.scheduler.task_reminders import send_task_reminders
 from bot.scheduler.weekly_review import send_weekly_review
+from bot.services.delivery import resume_pending_deliveries
 from bot.stt.base import STTClient
 
 logger = logging.getLogger(__name__)
@@ -56,8 +57,6 @@ async def _health_action(bot: Bot, llm_client: LLMClient) -> None:
 
 
 async def _maintenance_action() -> None:
-    await reindex_missing_embeddings()
-    await rotate_llm_logs()
     await run_backup_if_due()
 
 
@@ -83,14 +82,19 @@ def start_background_tasks(
     """Create all runtime-owned jobs and return their cancellation handles."""
     jobs: tuple[tuple[str, int, _AsyncAction, bool], ...] = (
         ("reminders", 30, lambda: send_pending_reminders(bot), False),
-        ("reminder_sweep", 300, lambda: sweep_missed_reminders(bot), False),
-        ("health", 300, lambda: _health_action(bot, llm_client), False),
+        ("outbox", 30, lambda: resume_pending_deliveries(bot), True),
+        ("reminder_sweep", int(settings.yaml_config.get("scheduler", {}).get(
+            "sweep_interval_min", 5)) * 60, lambda: sweep_missed_reminders(bot), False),
+        ("health", int(settings.yaml_config.get("scheduler", {}).get(
+            "healthcheck_interval_min", 5)) * 60, lambda: _health_action(bot, llm_client), False),
         ("digest", 60, lambda: send_digests(bot), False),
         ("memoir", 60, lambda: send_memoir_prompts(bot), False),
         ("chronometry", 60, lambda: send_chronometry_prompts(bot), False),
         ("task_reminders", 60, lambda: send_task_reminders(bot), False),
         ("weekly_review", 60, lambda: send_weekly_review(bot), False),
         ("maintenance", 3600, _maintenance_action, True),
+        ("reindex", 3600, reindex_missing_embeddings, True),
+        ("retention", 3600, rotate_llm_logs, True),
     )
     tasks = [
         asyncio.create_task(

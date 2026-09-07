@@ -4,6 +4,7 @@ import asyncio
 import logging
 import re
 import time
+from contextvars import ContextVar
 from typing import Any, Dict, List, Optional
 
 from openai import APIConnectionError, APIError, APITimeoutError, AsyncOpenAI, RateLimitError
@@ -13,6 +14,22 @@ from bot.logging_safety import error_type
 from bot.observability import metrics
 
 logger = logging.getLogger(__name__)
+_egress_user: ContextVar[int | None] = ContextVar("llm_egress_user", default=None)
+
+
+async def _check_egress_consent() -> None:
+    """Проверить свежий consent непосредственно перед каждым внешним запросом."""
+    user_id = _egress_user.get()
+    if user_id is None:
+        return
+    from bot.db.crud.users import get_user
+    from bot.db.engine import session_factory
+    from bot.privacy import has_current_consent
+
+    async with session_factory() as session:
+        user = await get_user(session, user_id)
+    if not has_current_consent(user):
+        raise PermissionError("Cloud processing consent is absent or revoked")
 
 
 class LLMResponse:
@@ -91,13 +108,16 @@ class LLMClient:
         timeout: Optional[float] = None,
         prompt_key: Optional[str] = None,
         tool_choice: Optional[str] = None,
+        user_id: int | None = None,
     ) -> LLMResponse:
         """Отправить запрос. При ошибке main — retry на fallback, если он настроен."""
         total_timeout = float(timeout if timeout is not None else self.total_timeout)
-        async with asyncio.timeout(total_timeout):
-            return await self._chat_with_fallback(
-                messages, functions, tool_choice
-            )
+        token = _egress_user.set(user_id)
+        try:
+            async with asyncio.timeout(total_timeout):
+                return await self._chat_with_fallback(messages, functions, tool_choice)
+        finally:
+            _egress_user.reset(token)
 
     async def _chat_with_fallback(
         self,
@@ -167,6 +187,7 @@ class LLMClient:
         last_error: Exception = RuntimeError("unexpected: no attempts made")
 
         for attempt in range(max_retries + 1):
+            await _check_egress_consent()
             metrics.increment("llm.provider_attempt")
             try:
                 response = await client.chat.completions.create(**kwargs)

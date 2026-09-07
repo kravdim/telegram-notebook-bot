@@ -108,13 +108,15 @@ async def _send_review(bot: Bot, user, tz: str) -> bool:
         frogs_eaten = [f for f in frogs if f.status == "done"]
 
         # 4. Ценности из мемуарника
-        value_stats = await get_value_stats(session, user.telegram_id, days=7)
+        value_stats = await get_value_stats(
+            session, user.telegram_id, days=7, tz=tz, start_date=week_start.date()
+        )
 
         # 5. Прогресс по слонам
         projects = await get_user_projects(session, user.telegram_id)
         project_progress = {}
         for p in projects[:5]:
-            progress = await get_project_progress(session, p.id)
+            progress = await get_project_progress(session, p.id, user.telegram_id)
             project_progress[p.title] = progress
 
     # Форматируем

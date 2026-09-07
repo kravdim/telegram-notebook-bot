@@ -18,6 +18,16 @@ ADDITIONS = {
     ("processed_requests", "action_plan"): "NULL",
     ("processed_requests", "action_results"): "'{}'::jsonb",
     ("users", "privacy_provider_fingerprint"): "NULL",
+    ("tasks", "recurrence_timezone"): (
+        "CASE WHEN t.repeat_rule IS NOT NULL THEN "
+        "(SELECT u.timezone FROM public.users u WHERE u.telegram_id=t.user_id) ELSE NULL END"
+    ),
+    ("notes", "embedding_model"): "NULL",
+    ("diary_entries", "embedding_model"): "NULL",
+    ("memoir_entries", "embedding_model"): "NULL",
+    ("knowledge_base", "embedding_model"): "NULL",
+    ("delivery_batches", "next_attempt_at"): "NULL",
+    ("delivery_batches", "expires_at"): "t.created_at + INTERVAL '24 hours'",
 }
 
 

@@ -182,9 +182,8 @@ async def cleanup(
             (
                 "fsm_states",
                 delete(FsmState).where(
-                    FsmState.storage_key.like(f"%:{user_id}:{user_id}:%")
-                    if all_user_data
-                    else cast(FsmState.data, Text).ilike(pattern)
+                    FsmState.storage_key.like(f"%:{user_id}:{user_id}:%"),
+                    true() if all_user_data else cast(FsmState.data, Text).ilike(pattern),
                 ),
             ),
             (

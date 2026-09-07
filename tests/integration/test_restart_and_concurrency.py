@@ -416,6 +416,7 @@ async def test_full_export_matches_deletion_inventory_and_excludes_other_users(t
 
     async with async_session() as session:
         expected = await user_data_counts(session, user_id)
+        await session.rollback()
         sections = await build_user_export_sections(
             session,
             user_id,
@@ -761,6 +762,9 @@ async def test_delivery_outbox_resumes_after_partial_failure_without_repeating_p
         assert failed_part.last_error == "RuntimeError"
         assert "DELIVERY_SECRET_CANARY" not in failed_batch.last_error
         assert "DELIVERY_SECRET_CANARY" not in failed_part.last_error
+        assert failed_batch.next_attempt_at > pendulum.now("UTC")
+        failed_batch.next_attempt_at = pendulum.now("UTC").subtract(seconds=1)
+        await failed_check.commit()
 
     resumed = await deliver_batch(
         bot,

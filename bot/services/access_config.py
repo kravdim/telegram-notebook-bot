@@ -22,6 +22,9 @@ def read_allowed_telegram_ids(config_path: Path) -> list[int]:
 
 def write_allowed_telegram_ids(config_path: Path, user_ids: list[int]) -> None:
     """Persist the whitelist atomically while preserving unrelated settings."""
+    # Release directories link to one operator-owned configuration. Replace the
+    # target, never the release symlink, so revocations survive deploy/rollback.
+    config_path = config_path.resolve()
     content = config_path.read_text(encoding="utf-8") if config_path.exists() else ""
     config = yaml.safe_load(content) or {}
     config.setdefault("bot", {})["allowed_telegram_ids"] = list(dict.fromkeys(user_ids))

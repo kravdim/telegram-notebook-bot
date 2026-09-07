@@ -157,7 +157,9 @@ PostgreSQL, применяет миграции и проходит schema/vecto
 ```bash
 cd platform/linux
 cp config.docker.yaml.example config.docker.yaml
-# Задайте POSTGRES_PASSWORD, BOT_TOKEN, OPENAI_API_KEY, EMBEDDING_API_KEY,
+# Задайте три РАЗНЫХ пароля POSTGRES_PASSWORD, APP_DATABASE_PASSWORD,
+# MIGRATION_DATABASE_PASSWORD (для URL используйте случайные hex-строки),
+# а также BOT_TOKEN, OPENAI_API_KEY, EMBEDDING_API_KEY,
 # ALLOWED_TELEGRAM_IDS и ADMIN_TELEGRAM_IDS в shell или env-файле.
 docker compose up -d --wait
 ```

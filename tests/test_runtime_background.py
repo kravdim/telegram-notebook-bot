@@ -90,6 +90,7 @@ async def test_start_and_stop_owns_all_background_tasks(monkeypatch):
     )
     assert {task.get_name() for task in tasks} == {
         "background:reminders",
+        "background:outbox",
         "background:reminder_sweep",
         "background:health",
         "background:digest",
@@ -98,6 +99,8 @@ async def test_start_and_stop_owns_all_background_tasks(monkeypatch):
         "background:task_reminders",
         "background:weekly_review",
         "background:maintenance",
+        "background:reindex",
+        "background:retention",
         "background:stt-warmup",
     }
 

@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Fixed the September 7 review's backup/restore, singleton, FSM/onboarding,
+  voice/STT, recurrence, outbox, consent, export and indexing defects.
+- Added deterministic `/add`, `/note`, `/remind` and `/cancel` commands,
+  retry pagination/closure and versioned prepared project results.
+- Split Docker bootstrap, migration and application database roles; existing
+  volumes require the documented maintenance transition.
+- Added migration `e0a3b5c7d914`, regression tests and local remediation evidence
+  in `docs/REMEDIATION_2026-09-07.md`. These changes have not been deployed.
+
 ## 0.5.0 — 2026-09-04
 
 - Decomposed the remaining configuration, intent routing, task listing and

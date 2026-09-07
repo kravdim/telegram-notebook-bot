@@ -78,7 +78,7 @@ async def test_weekly_review_splits_long_messages(monkeypatch):
             sent.append((chat_id, text, parse_mode))
             return SimpleNamespace(message_id=len(sent))
 
-    async def fake_get_entries(session, user_id, limit):
+    async def fake_get_entries(session, user_id, limit, **period):
         return entries
 
     async def fake_deliver(bot, **kwargs):

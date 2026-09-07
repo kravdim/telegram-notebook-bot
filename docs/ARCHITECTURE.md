@@ -80,7 +80,7 @@ complexity, branches, returns or statements; widening the global limits is not
 an accepted shortcut.
 
 The central-path and command-presentation milestones are complete. Background scheduling and STT
-warmup are owned by `bot.runtime.background`, while `bot.main` is now a 295-line
+warmup are owned by `bot.runtime.background`, while `bot.main` is the
 composition root with no complexity suppression. Task creation is a typed,
 transport-independent use case in `bot.application.task_creation`; its former
 43-complexity/104-statement dispatcher function is now a thin adapter without a
@@ -112,3 +112,43 @@ creation rights. Recovery is a separate operational boundary: a CREATEDB-only
 role may clone a locked extension template and owns only disposable drill
 databases. The application process never receives this credential, and the
 recovery process never receives the application's Telegram or AI credentials.
+
+
+## Review remediation contracts (2026-09-07)
+
+- Task completion, cancellation and project closure use the same task lifecycle
+  service. Recurring tasks preserve their series timezone and the offset between
+  planning date and deadline. Lookup APIs require an owner; settings repositories
+  reject identity, role and lifecycle fields outside their explicit allowlists.
+- Database FSM writes use field-specific upserts and atomic JSONB merge; Telegram
+  FSM events are serialized per storage key. Global privacy and local commands
+  are routed before onboarding state handlers.
+- Onboarding and local `/add`, `/note`, `/remind` have short atomic transactions.
+  Local commands persist their result with the effect and work without cloud
+  consent. Project AI preparation happens outside the action transaction and is
+  journaled separately; retry reuses the prepared result. Persisted command results
+  carry `schema_version=1`. The legacy ContextVar transaction adapter and several
+  compatibility executors still exist; this is not a complete repository/UoW rewrite.
+- The singleton watcher verifies the original PostgreSQL session and stops polling
+  if ownership cannot be confirmed. Actual successful `getUpdates` responses,
+  including empty ones, refresh polling readiness; it expires after 90 seconds.
+  Backup, indexing and retention run as independently supervised jobs.
+- An independent outbox worker resumes due parts every 30 seconds. Failures have
+  bounded exponential backoff, at most eight attempts, permanent-error termination
+  and expiry. Default lifetime is 24 hours; periodic task lists expire at the end
+  of their hour. Telegram has no send idempotency key: an accepted message followed
+  by a lost acknowledgement can still be duplicated after a crash.
+- Export uses a repeatable-read, read-only snapshot. ZIP compression and checksum
+  hashing run outside the event loop; concurrent exports are limited to one per
+  process. Native Whisper work keeps its admission slot after a request timeout;
+  model teardown runs behind the native job in the same single-worker executor.
+- Vectors carry a provider/model/dimension/endpoint/text-format fingerprint.
+  Incompatible vectors are excluded from semantic ranking while text search
+  remains available. Reindex writes compare the source text/title before storing
+  the vector, so a late worker cannot index an obsolete edit.
+- Linux separates bootstrap, migration and application database credentials.
+  The application cannot create schema objects or elevate roles. Existing database
+  volumes require an explicit operator migration; init scripts run only on new volumes.
+
+Implementation evidence and remaining architectural work are recorded in
+[the remediation report](REMEDIATION_2026-09-07.md).

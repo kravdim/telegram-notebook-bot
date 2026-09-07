@@ -150,6 +150,8 @@ jobs:
     timeout-minutes: 20
     env:
       POSTGRES_PASSWORD: container-smoke
+      APP_DATABASE_PASSWORD: container-smoke-app
+      MIGRATION_DATABASE_PASSWORD: container-smoke-migrator
       BOT_TOKEN: container-smoke
       OPENAI_API_KEY: container-smoke
       EMBEDDING_API_KEY: container-smoke

@@ -10,7 +10,7 @@ from typing import Any
 from uuid import UUID
 
 import pendulum
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from bot.db.models import Base, DeliveryBatch, DeliveryPart, FsmState, User
@@ -93,6 +93,9 @@ async def build_user_export_sections(
     """Stage a bounded, count-verified export without retaining rows in memory."""
     if max_bytes <= 0:
         raise ValueError("max_bytes must be positive")
+    # Caller must provide a fresh transaction: counts and all streamed datasets
+    # represent exactly one snapshot, including concurrent inserts/deletions.
+    await session.execute(text("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY"))
     staging_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
     expected_counts = await user_data_counts(session, user_id)
     actual_counts: dict[str, int] = {}

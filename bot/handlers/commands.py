@@ -1,5 +1,6 @@
 """Команды бота: /help, /tasks, /today, /frog, /done, /notes, /projects, /memoir, /chrono, /focus, /stats."""
 
+import asyncio
 import html
 import logging
 import tempfile
@@ -110,7 +111,11 @@ async def cmd_help(message: Message) -> None:
         "• Что у меня на сегодня?\n"
         "• Отметь задачу «купить продукты» выполненной\n"
         "• Создай слона «ремонт кухни»\n\n"
-        "Также можно отправлять голосовые сообщения 🎤",
+        "Также можно отправлять голосовые сообщения 🎤\n\n"
+        "<b>Без облачного AI:</b>\n"
+        "/add Название задачи\n/note Текст заметки\n"
+        "/remind 2030-01-01 09:00 Текст напоминания\n"
+        "/cancel — отменить текущий диалог",
         parse_mode="HTML",
     )
 
@@ -472,7 +477,9 @@ async def cmd_memoir(message: Message) -> None:
 
     async with async_session() as session:
         entries = await get_memoir_entries(session, message.from_user.id, limit=7)
-        stats = await get_value_stats(session, message.from_user.id)
+        user = await get_user(session, message.from_user.id)
+        stats = await get_value_stats(session, message.from_user.id,
+                                      tz=user.timezone if user else "Europe/Moscow")
 
     text = format_memoir_entries(entries)
     if stats:
@@ -712,7 +719,9 @@ async def _stats_values(message: Message) -> None:
     if not message.from_user:
         return
     async with async_session() as session:
-        stats = await get_value_stats(session, message.from_user.id)
+        user = await get_user(session, message.from_user.id)
+        stats = await get_value_stats(session, message.from_user.id,
+                                      tz=user.timezone if user else "Europe/Moscow")
 
     text = format_value_stats(stats)
     await message.answer(text, parse_mode="HTML")
@@ -1186,8 +1195,17 @@ async def cmd_export(message: Message) -> None:
     """Export every user-owned dataset as a versioned JSONL archive."""
     if not message.from_user:
         return
+    if _EXPORT_LOCK.locked():
+        await message.answer("Уже готовлю экспорт. Попробуй ещё раз через минуту.")
+        return
+    async with _EXPORT_LOCK:
+        await _export_user(message, message.from_user.id)
 
-    user_id = message.from_user.id
+
+_EXPORT_LOCK = asyncio.Lock()
+
+
+async def _export_user(message: Message, user_id: int) -> None:
     await message_bot(message).send_chat_action(chat_id=message.chat.id, action="typing")
 
     max_bytes = int(
@@ -1204,7 +1222,14 @@ async def cmd_export(message: Message) -> None:
                     max_bytes=max_bytes,
                 )
 
-            write_export_archive(archive_path, sections, max_bytes=max_bytes)
+            writer = asyncio.create_task(asyncio.to_thread(
+                write_export_archive, archive_path, sections, max_bytes=max_bytes
+            ))
+            try:
+                await asyncio.shield(writer)
+            finally:
+                # Do not remove staging files while a cancelled request's writer runs.
+                await writer
             doc = FSInputFile(
                 archive_path,
                 filename=f"dailyplanner_export_v1_{pendulum.now().format('YYYY-MM-DD')}.zip",

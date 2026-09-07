@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import logging
 import uuid
 from dataclasses import dataclass
 from datetime import timedelta
 from typing import Any, Sequence
 
 import pendulum
+from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
 from aiogram.types import InlineKeyboardMarkup
 from sqlalchemy import or_, select, update
 from sqlalchemy.dialects.postgresql import insert
@@ -15,6 +17,8 @@ from sqlalchemy.dialects.postgresql import insert
 from bot.db.engine import async_session
 from bot.db.models import DeliveryBatch, DeliveryPart
 from bot.logging_safety import error_type
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -31,6 +35,7 @@ class DeliveryResult:
     busy: bool = False
     already_completed: bool = False
     message_ids: tuple[int | None, ...] = ()
+    terminal: bool = False
 
 
 class _DeliveryLeaseLost(RuntimeError):
@@ -48,6 +53,7 @@ async def _ensure_batch(
     user_id: int,
     kind: str,
     parts: Sequence[DeliveryPartSpec],
+    expires_at=None,
 ) -> uuid.UUID:
     """Create an immutable batch once; retries use its persisted payload."""
     if not parts:
@@ -63,6 +69,7 @@ async def _ensure_batch(
                 user_id=user_id,
                 kind=kind,
                 status="pending",
+                expires_at=expires_at or pendulum.now("UTC").add(hours=24),
             )
             .on_conflict_do_nothing(index_elements=[DeliveryBatch.delivery_key])
             .returning(DeliveryBatch.id)
@@ -104,22 +111,36 @@ async def deliver_batch(
     kind: str,
     parts: Sequence[DeliveryPartSpec],
     lease_seconds: int = 300,
+    expires_at=None,
 ) -> DeliveryResult:
     """Send pending parts and persist progress after every Telegram response.
 
     The boundary remains at-least-once: a process death after Telegram accepts a
     message but before the database commit can repeat that one part.
     """
-    batch_id = await _ensure_batch(delivery_key, user_id, kind, parts)
+    batch_id = await _ensure_batch(delivery_key, user_id, kind, parts, expires_at)
+    return await _deliver_existing_batch(bot, batch_id, lease_seconds)
+
+
+async def _deliver_existing_batch(bot, batch_id: uuid.UUID, lease_seconds: int = 300) -> DeliveryResult:
+    """Продолжить сохранённую доставку без повторного построения payload."""
     now = pendulum.now("UTC")
     lease_token = uuid.uuid4()
 
     async with async_session() as session:
+        await session.execute(update(DeliveryBatch).where(
+            DeliveryBatch.id == batch_id,
+            DeliveryBatch.status.in_(("pending", "delivering")),
+            DeliveryBatch.expires_at <= now,
+            or_(DeliveryBatch.lease_token.is_(None), DeliveryBatch.lease_expires_at < now),
+        ).values(status="expired", lease_token=None, lease_expires_at=None))
         claimed = await session.execute(
             update(DeliveryBatch)
             .where(
                 DeliveryBatch.id == batch_id,
-                DeliveryBatch.status != "delivered",
+                DeliveryBatch.status.in_(("pending", "delivering")),
+                or_(DeliveryBatch.next_attempt_at.is_(None), DeliveryBatch.next_attempt_at <= now),
+                or_(DeliveryBatch.expires_at.is_(None), DeliveryBatch.expires_at > now),
                 or_(
                     DeliveryBatch.lease_token.is_(None),
                     DeliveryBatch.lease_expires_at.is_(None),
@@ -156,6 +177,7 @@ async def deliver_batch(
             busy=status == "delivering",
             already_completed=status == "delivered",
             message_ids=ids,
+            terminal=status in ("failed", "expired"),
         )
 
     async with async_session() as session:
@@ -246,6 +268,10 @@ async def deliver_batch(
     except Exception as exc:
         failed_at = pendulum.now("UTC")
         async with async_session() as session:
+            attempts = await session.scalar(select(DeliveryBatch.attempts).where(
+                DeliveryBatch.id == batch_id, DeliveryBatch.lease_token == lease_token
+            ))
+            terminal = isinstance(exc, (TelegramBadRequest, TelegramForbiddenError)) or (attempts or 0) >= 8
             await session.execute(
                 update(DeliveryPart)
                 .where(
@@ -270,7 +296,8 @@ async def deliver_batch(
                     DeliveryBatch.lease_token == lease_token,
                 )
                 .values(
-                    status="pending",
+                    status="failed" if terminal else "pending",
+                    next_attempt_at=failed_at.add(seconds=min(3600, 30 * 2 ** min(attempts or 1, 7))),
                     lease_token=None,
                     lease_expires_at=None,
                     last_error=error_type(exc),
@@ -311,3 +338,19 @@ async def deliver_batch(
         busy=not owns_completion,
         message_ids=ids,
     )
+
+
+async def resume_pending_deliveries(bot) -> None:
+    """Восстановить outbox после рестарта независимо от окна исходного scheduler."""
+    now = pendulum.now("UTC")
+    async with async_session() as session:
+        batch_ids = list((await session.scalars(select(DeliveryBatch.id).where(
+            DeliveryBatch.status.in_(("pending", "delivering")),
+            or_(DeliveryBatch.next_attempt_at.is_(None), DeliveryBatch.next_attempt_at <= now),
+            or_(DeliveryBatch.lease_token.is_(None), DeliveryBatch.lease_expires_at < now),
+        ).order_by(DeliveryBatch.created_at).limit(50))).all())
+    for batch_id in batch_ids:
+        try:
+            await _deliver_existing_batch(bot, batch_id)
+        except Exception as exc:
+            logger.warning("Outbox retry failed: error_type=%s", error_type(exc))

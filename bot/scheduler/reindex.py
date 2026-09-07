@@ -3,12 +3,13 @@
 import logging
 from collections.abc import Sequence
 
-from sqlalchemy import select
+from sqlalchemy import or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from bot.config import settings
 from bot.db.engine import async_session
-from bot.db.models import DiaryEntry, MemoirEntry, Note, User
+from bot.db.models import DiaryEntry, KnowledgeChunk, MemoirEntry, Note, User
+from bot.embeddings.identity import embedding_identity
 from bot.logging_safety import error_type
 from bot.privacy import PRIVACY_NOTICE_VERSION, provider_fingerprint
 
@@ -35,18 +36,30 @@ def init(embed_client) -> None:
 
 
 async def _reindex_records(
-    session: AsyncSession, records: Sequence[Note | DiaryEntry | MemoirEntry],
+    session: AsyncSession, records: Sequence[Note | DiaryEntry | MemoirEntry | KnowledgeChunk],
     cloud: bool, entity: str,
 ) -> None:
     assert _embed_client is not None
     for index, record in enumerate(records, 1):
         try:
-            if cloud and not await _cloud_consent_current(session, record.user_id):
+            if cloud and not isinstance(record, KnowledgeChunk) and not await _cloud_consent_current(
+                session, record.user_id
+            ):
                 continue
-            text = record.content
+            content = record.content
+            text = content
+            title = getattr(record, "title", None)
             if entity == "note":
                 text = f"{getattr(record, 'title', '') or ''} {text}".strip()
-            record.embedding = await _embed_client.embed(text)
+            vector = await _embed_client.embed(text)
+            model = type(record)
+            statement = update(model).where(model.id == record.id, model.content == content)
+            if isinstance(record, Note):
+                statement = statement.where(Note.title.is_not_distinct_from(title))
+            # A late worker cannot publish a vector for a concurrently edited text.
+            await session.execute(statement.values(
+                embedding=vector, embedding_model=embedding_identity()
+            ).execution_options(synchronize_session=False))
         except Exception as exc:
             logger.warning("Embedding failed: entity=%s error_type=%s", entity, error_type(exc))
         if index % 10 == 0:
@@ -64,7 +77,9 @@ async def reindex_missing_embeddings() -> None:
 
     async with async_session() as session:
         # Notes
-        note_query = select(Note).where(Note.embedding.is_(None))
+        note_query = select(Note).where(or_(
+            Note.embedding.is_(None), Note.embedding_model.is_distinct_from(embedding_identity())
+        ))
         if cloud_embedding:
             note_query = note_query.join(User, User.telegram_id == Note.user_id).where(
                 User.cloud_processing_enabled.is_(True),
@@ -77,7 +92,9 @@ async def reindex_missing_embeddings() -> None:
         await _reindex_records(session, notes, cloud_embedding, "note")
 
         # Diary
-        diary_query = select(DiaryEntry).where(DiaryEntry.embedding.is_(None))
+        diary_query = select(DiaryEntry).where(or_(
+            DiaryEntry.embedding.is_(None), DiaryEntry.embedding_model.is_distinct_from(embedding_identity())
+        ))
         if cloud_embedding:
             diary_query = diary_query.join(
                 User, User.telegram_id == DiaryEntry.user_id
@@ -90,7 +107,9 @@ async def reindex_missing_embeddings() -> None:
         await _reindex_records(session, diaries, cloud_embedding, "diary")
 
         # Memoir
-        memoir_query = select(MemoirEntry).where(MemoirEntry.embedding.is_(None))
+        memoir_query = select(MemoirEntry).where(or_(
+            MemoirEntry.embedding.is_(None), MemoirEntry.embedding_model.is_distinct_from(embedding_identity())
+        ))
         if cloud_embedding:
             memoir_query = memoir_query.join(
                 User, User.telegram_id == MemoirEntry.user_id
@@ -101,6 +120,12 @@ async def reindex_missing_embeddings() -> None:
         memoirs = list(result.scalars().all())
 
         await _reindex_records(session, memoirs, cloud_embedding, "memoir")
+
+        chunks = list((await session.execute(select(KnowledgeChunk).where(or_(
+            KnowledgeChunk.embedding.is_(None),
+            KnowledgeChunk.embedding_model.is_distinct_from(embedding_identity()),
+        )).limit(50))).scalars().all())
+        await _reindex_records(session, chunks, False, "knowledge")
 
         await session.commit()
 

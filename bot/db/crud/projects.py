@@ -33,10 +33,11 @@ async def create_project(
 async def get_project_by_id(
     session: AsyncSession,
     project_id: uuid.UUID,
+    user_id: int,
 ) -> Optional[Project]:
     """Получить проект по ID."""
     result = await session.execute(
-        select(Project).where(Project.id == project_id)
+        select(Project).where(Project.id == project_id, Project.user_id == user_id)
     )
     return result.scalar_one_or_none()
 
@@ -81,7 +82,7 @@ async def complete_project(
     user_id: int,
 ) -> Optional[Project]:
     """Отметить проект завершённым."""
-    project = await get_project_by_id(session, project_id)
+    project = await get_project_by_id(session, project_id, user_id)
     if not project or project.user_id != user_id:
         return None
     project.status = "done"
@@ -96,14 +97,21 @@ async def complete_project_and_cancel_open_tasks(
     user_id: int,
 ) -> Optional[Project]:
     """Закрыть проект и атомарно отменить его незавершённые задачи."""
-    project = await get_project_by_id(session, project_id)
+    from bot.services.tasks import update_task_workflow
+
+    project = await session.scalar(
+        select(Project).where(Project.id == project_id, Project.user_id == user_id)
+        .with_for_update().execution_options(populate_existing=True)
+    )
     if not project or project.user_id != user_id or project.status != "active":
         return None
-    tasks = await get_project_tasks(session, project_id)
+    tasks = await get_project_tasks(session, project_id, user_id)
     for task in tasks:
         if task.status == "open":
-            task.status = "cancelled"
-            task.resolution = "cancelled"
+            await update_task_workflow(
+                session, task.id, user_id, status="cancelled", expected_status="open",
+                commit=False,
+            )
     project.status = "done"
     await session.commit()
     await session.refresh(project)
@@ -113,11 +121,12 @@ async def complete_project_and_cancel_open_tasks(
 async def get_project_tasks(
     session: AsyncSession,
     project_id: uuid.UUID,
+    user_id: int,
 ) -> List[Task]:
     """Получить задачи проекта."""
     result = await session.execute(
         select(Task)
-        .where(Task.project_id == project_id)
+        .where(Task.project_id == project_id, Task.user_id == user_id)
         .order_by(Task.created_at.asc())
     )
     return list(result.scalars().all())
@@ -130,12 +139,13 @@ async def update_project(
     **updates,
 ) -> Optional[Project]:
     """Обновить проект."""
-    project = await get_project_by_id(session, project_id)
+    if updates.keys() - {"title", "description", "category"}:
+        raise ValueError("Unsupported project field; lifecycle changes require a service")
+    project = await get_project_by_id(session, project_id, user_id)
     if not project or project.user_id != user_id:
         return None
     for key, value in updates.items():
-        if hasattr(project, key):
-            setattr(project, key, value)
+        setattr(project, key, value)
     await session.commit()
     await session.refresh(project)
     return project
@@ -144,9 +154,10 @@ async def update_project(
 async def get_project_progress(
     session: AsyncSession,
     project_id: uuid.UUID,
+    user_id: int,
 ) -> dict:
     """Получить прогресс проекта."""
-    tasks = await get_project_tasks(session, project_id)
+    tasks = await get_project_tasks(session, project_id, user_id)
     total = len(tasks)
     done = sum(1 for t in tasks if t.status == "done")
     return {

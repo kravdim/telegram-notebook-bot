@@ -229,6 +229,7 @@ CANDIDATE_DB_HEAD="$(
         --project "$CANDIDATE_DIR"
 )"
 ROLLBACK_COMPATIBLE_HEAD=""
+rollback_args=()
 if [ -n "$PREVIOUS_SHA" ]; then
     DEPLOY_PHASE="prepare_rollback"
     if ! PREVIOUS_DIR="$(prepare_release "$PREVIOUS_SHA")"; then
@@ -246,6 +247,12 @@ if [ -n "$PREVIOUS_SHA" ]; then
         if grep -Eq "^[[:space:]]*${CANDIDATE_DB_HEAD}[[:space:]]*$" \
             "$CANDIDATE_DIR/bot/db/migrations/rollback_compatible_heads.txt"; then
             ROLLBACK_COMPATIBLE_HEAD="$CANDIDATE_DB_HEAD"
+            if ! grep -q 'DAILYPLANNER_COMPATIBLE_DATABASE_HEAD' \
+                "$PREVIOUS_DIR/platform/macos/run.sh"; then
+                write_report "pre_switch_failed" "previous startup cannot accept a newer database"
+                exit 1
+            fi
+            rollback_args+=(--compatible-database-head "$ROLLBACK_COMPATIBLE_HEAD")
         else
             DEPLOY_PHASE="migration_compatibility"
             write_report "pre_switch_failed" \
@@ -258,6 +265,7 @@ if [ -n "$PREVIOUS_SHA" ]; then
         --template "$CANDIDATE_DIR/platform/macos/com.notebook-bot.plist" \
         --output "$ROLLBACK_PLIST" --project "$PREVIOUS_DIR" --home "$HOME" \
         --readiness-file "$READINESS_FILE" --release-sha "$PREVIOUS_SHA" \
+        ${rollback_args[@]+"${rollback_args[@]}"} \
         ${proxy_args[@]+"${proxy_args[@]}"}; then
         write_report "pre_switch_failed" "rollback LaunchAgent render failed"
         exit 1
@@ -270,7 +278,8 @@ fi
 
 echo "Applying backward-compatible candidate migrations..."
 DEPLOY_PHASE="migration"
-if ! env "${runtime_env[@]}" "$CANDIDATE_DIR/.venv/bin/alembic" upgrade head; then
+if ! env "${runtime_env[@]}" "$CANDIDATE_DIR/.venv/bin/alembic" \
+    -c "$CANDIDATE_DIR/alembic.ini" upgrade head; then
     write_report "pre_switch_failed" "migration failed"
     exit 1
 fi

@@ -361,8 +361,9 @@ async def test_cloud_reindex_queries_only_consented_users(monkeypatch):
 
     await reindex_scheduler.reindex_missing_embeddings()
 
-    assert len(statements) == 3
-    assert all("users.cloud_processing_enabled IS true" in sql for sql in statements)
+    assert len(statements) == 4
+    assert all("users.cloud_processing_enabled IS true" in sql for sql in statements[:3])
+    assert "knowledge_base" in statements[3]
 
 
 def test_privacy_notice_lists_active_recipients_and_user_controls(monkeypatch):

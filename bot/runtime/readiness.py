@@ -8,15 +8,21 @@ import os
 import time
 from contextlib import suppress
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from bot.runtime.polling_health import PollingHealth
 
 
 class RuntimeReadiness:
     """Publish an atomic heartbeat while the application event loop is alive."""
 
-    def __init__(self, path: str | Path, interval_seconds: float = 5.0) -> None:
+    def __init__(self, path: str | Path, interval_seconds: float = 5.0,
+                 polling_health: PollingHealth | None = None) -> None:
         self.path = Path(path)
         self.interval_seconds = interval_seconds
         self._task: asyncio.Task[None] | None = None
+        self.polling_health = polling_health
 
     async def start(self) -> None:
         if self._task is not None:
@@ -38,10 +44,12 @@ class RuntimeReadiness:
         temporary = self.path.with_suffix(f"{self.path.suffix}.tmp")
         payload = {
             "pid": os.getpid(),
-            "ready": True,
+            "ready": self.polling_health.ready if self.polling_health else True,
             "heartbeat_epoch": time.time(),
             "release_sha": os.environ.get("DAILYPLANNER_RELEASE_SHA", "unknown"),
         }
+        if self.polling_health:
+            payload["last_poll_success_epoch"] = self.polling_health.last_success
         temporary.write_text(json.dumps(payload), encoding="utf-8")
         temporary.replace(self.path)
 

@@ -6,6 +6,7 @@ if [ ! -f /app/config.yaml ]; then
     exit 1
 fi
 
+if [ "${DAILYPLANNER_SKIP_MIGRATIONS:-0}" != "1" ]; then
 attempt=0
 until alembic upgrade head; do
     attempt=$((attempt + 1))
@@ -17,6 +18,7 @@ until alembic upgrade head; do
 done
 
 python scripts/seed_knowledge.py
+fi
 python scripts/preflight.py
 
 if [ "$#" -eq 0 ]; then

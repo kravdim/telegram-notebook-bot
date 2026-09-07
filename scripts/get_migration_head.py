@@ -12,7 +12,10 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--project", type=Path, required=True)
     project = parser.parse_args().project.resolve()
-    migrations = ScriptDirectory.from_config(Config(str(project / "alembic.ini")))
+    config = Config(str(project / "alembic.ini"))
+    # Older release configs use a cwd-relative script_location.
+    config.set_main_option("script_location", str(project / "bot/db/migrations"))
+    migrations = ScriptDirectory.from_config(config)
     heads = migrations.get_heads()
     if len(heads) != 1:
         raise SystemExit(f"Expected one Alembic head, found {heads!r}")

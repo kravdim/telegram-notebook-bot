@@ -49,13 +49,21 @@ async def update_user_settings(
     **kwargs,
 ) -> User | None:
     """Обновить настройки пользователя."""
+    allowed = {
+        "username", "timezone", "digest_morning_time", "digest_evening_time",
+        "memoir_prompt_time", "digest_enabled", "chronometry_enabled",
+        "chronometry_interval_min", "work_start_time", "work_end_time", "work_days",
+        "focus_until", "onboarding_completed", "privacy_notice_version",
+        "privacy_provider_fingerprint", "cloud_processing_enabled", "chronometry_last_asked",
+    }
+    if kwargs.keys() - allowed:
+        raise ValueError("Unsupported user setting")
     user = await get_user(session, telegram_id)
     if not user:
         return None
 
     for key, value in kwargs.items():
-        if hasattr(user, key):
-            setattr(user, key, value)
+        setattr(user, key, value)
 
     if commit:
         await session.commit()

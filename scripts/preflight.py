@@ -42,6 +42,7 @@ async def main(
         raise SystemExit("Invalid runtime configuration: " + "; ".join(errors))
 
     alembic_cfg = Config(str(BASE_DIR / "alembic.ini"))
+    alembic_cfg.set_main_option("script_location", str(BASE_DIR / "bot/db/migrations"))
     migrations = ScriptDirectory.from_config(alembic_cfg)
     expected = migrations.get_current_head()
     async with engine.connect() as connection:

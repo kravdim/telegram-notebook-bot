@@ -53,6 +53,8 @@ async def execute_action(
         ).with_for_update())
         if row is None or row.action_plan is None:
             raise RuntimeError("Missing durable action plan")
+        if "_abandoned" in row.action_results:
+            return CommandResult("Продолжение этого запроса закрыто.", "error")
         if not 0 <= position < len(row.action_plan):
             raise ValueError("Action position outside durable plan")
         action_id = str(position) if phase == "effect" else f"{position}:{phase}"
@@ -68,3 +70,36 @@ async def execute_action(
         row.action_results = {**row.action_results, action_id: asdict(result)}
         await session.commit()
         return result
+
+
+async def prepare_project_action(
+    user_id: int, position: int, prepare: Callable[[], Awaitable[CommandResult]],
+) -> CommandResult:
+    """Подготовить AI-план вне UoW и сохранить его до атомарного domain effect."""
+    key = active_request.get()
+    if key is None:
+        return await prepare()
+    preparation_id = f"{position}:prepared_project"
+    completed_id = f"{position}:project_tasks"
+    async with async_session() as session:
+        row = await session.scalar(select(ProcessedRequest).where(
+            ProcessedRequest.request_key == key, ProcessedRequest.user_id == user_id,
+        ))
+        if row is None:
+            raise RuntimeError("Missing durable request")
+        for result_id in (completed_id, preparation_id):
+            if result_id in row.action_results:
+                return CommandResult(**row.action_results[result_id])
+    prepared = await prepare()  # no open transaction or checked-out connection
+    if prepared.kind == "error":
+        return prepared
+    async with async_session() as session:
+        row = await session.scalar(select(ProcessedRequest).where(
+            ProcessedRequest.request_key == key, ProcessedRequest.user_id == user_id,
+        ).with_for_update())
+        if row is None or row.action_results.get(str(position), {}).get("kind") != "project_created":
+            raise RuntimeError("Preparation requires persisted project creation")
+        if preparation_id not in row.action_results:
+            row.action_results = {**row.action_results, preparation_id: asdict(prepared)}
+        await session.commit()
+        return CommandResult(**row.action_results[preparation_id])

@@ -772,6 +772,8 @@ def _prepare_task_updates(updates: dict, tz: str) -> tuple[dict, str | None]:
         if error:
             return {}, error
     if "title" in clean_updates:
+        if not isinstance(clean_updates["title"], str):
+            return {}, "Название задачи должно быть непустым текстом."
         clean_updates["title"] = _sanitize_title(str(clean_updates["title"]))
         if error := _validate_title(str(clean_updates["title"])):
             return {}, error
@@ -908,7 +910,7 @@ async def _handle_complete_project(user_id: int, args: Dict[str, Any]) -> str | 
             return "\n".join(lines)
 
         selected = exact or projects[0]
-        project_tasks = await get_project_tasks(session, selected.id)
+        project_tasks = await get_project_tasks(session, selected.id, user_id)
         open_count = sum(task.status == "open" for task in project_tasks)
         if open_count:
             return CommandResult(
@@ -929,6 +931,9 @@ async def _handle_add_birthday(user_id: int, args: Dict[str, Any], tz: str) -> s
         return "Укажи имя человека."
 
     date_str = args.get("date")
+    if date_str == "1900-02-29":
+        date_str = "2000-02-29"
+        args = {**args, "year_known": False}
     bd = _parse_date(date_str, tz)
     if not bd:
         return "Не удалось распознать дату. Укажи в формате ДД.ММ или ДД месяц."

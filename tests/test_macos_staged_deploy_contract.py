@@ -23,7 +23,7 @@ def test_candidate_checks_happen_before_launchagent_switch():
         'plutil -lint "$CANDIDATE_PLIST"',
     ):
         assert script.index(required) < switch
-    migration = script.index('"$CANDIDATE_DIR/.venv/bin/alembic" upgrade head')
+    migration = script.index('-c "$CANDIDATE_DIR/alembic.ini" upgrade head')
     assert script.index('scripts/check_telegram_credentials.py') < migration < switch
     assert script.index('scripts/prefetch_stt_model.py') < migration < switch
 
@@ -91,6 +91,7 @@ def _build_installer_harness(tmp_path: Path) -> tuple[Path, dict[str, str], str,
         "# test fixture\n", encoding="utf-8"
     )
     (repo / "bot/runtime/readiness.py").write_text("release_sha = True\n", encoding="utf-8")
+    shutil.copy2(INSTALLER.parent / "run.sh", repo / "platform/macos/run.sh")
 
     subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
     subprocess.run(["git", "config", "user.email", "test@example.invalid"], cwd=repo, check=True)

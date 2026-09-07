@@ -5,10 +5,10 @@ import logging
 from typing import List
 
 from json_repair import repair_json
+from sqlalchemy import select
 
-from bot.db.crud.projects import get_project_by_id
 from bot.db.engine import async_session
-from bot.db.models import Task
+from bot.db.models import Project, Task
 from bot.llm.client import LLMClient
 from bot.llm.queue import PRIORITY_DECOMPOSE, LLMQueue
 from bot.logging_safety import error_type
@@ -45,6 +45,7 @@ async def decompose_project(
         response = await llm_queue.submit(
             PRIORITY_DECOMPOSE,
             llm_client.chat(
+                user_id=user_id,
                 messages=[
                     {"role": "system", "content": prompt},
                     {"role": "user", "content": f"Декомпозируй: {project_title}"},
@@ -91,8 +92,10 @@ async def create_project_tasks(
 
     async with async_session() as session:
         try:
-            project = await get_project_by_id(session, pid)
-            if not project or project.user_id != user_id:
+            project = await session.scalar(select(Project).where(
+                Project.id == pid, Project.user_id == user_id
+            ).with_for_update().execution_options(populate_existing=True))
+            if not project or project.status != "active":
                 return 0
 
             for title in task_titles:

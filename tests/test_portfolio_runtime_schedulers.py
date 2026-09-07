@@ -141,10 +141,9 @@ async def test_digest_only_delivers_due_unsent_period_and_marks_it(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_task_reminder_releases_claim_when_telegram_fails(monkeypatch):
+async def test_task_reminder_does_not_claim_slot_when_delivery_fails(monkeypatch):
     now = pendulum.datetime(2026, 8, 3, 11, 5, tz="Europe/Moscow")
     user = SimpleNamespace(telegram_id=7, timezone="Europe/Moscow", work_days=[1, 2, 3, 4, 5, 6, 7], tasks_reminder_last_date=None, tasks_reminder_last_hour=None)
-    released = []
     monkeypatch.setattr(task_reminders, "async_session", lambda: FakeSessionContext())
     monkeypatch.setattr(task_reminders, "get_all_users", AsyncMock(return_value=[user]))
     monkeypatch.setattr(task_reminders.pendulum, "now", lambda _: now)
@@ -154,13 +153,10 @@ async def test_task_reminder_releases_claim_when_telegram_fails(monkeypatch):
     monkeypatch.setattr(task_reminders, "claim_task_reminder_slot", AsyncMock(return_value=True))
     monkeypatch.setattr(task_reminders, "split_html_message", lambda text: [text])
 
-    async def release(_, *args):
-        released.append(args)
-
-    monkeypatch.setattr(task_reminders, "release_task_reminder_slot", release)
+    monkeypatch.setattr(task_reminders, "deliver_batch", AsyncMock(side_effect=RuntimeError("offline")))
     bot = SimpleNamespace(send_message=AsyncMock(side_effect=RuntimeError("offline")))
     await task_reminders.send_task_reminders(bot)
-    assert released == [(7, now.date(), 11)]
+    task_reminders.claim_task_reminder_slot.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -285,6 +281,14 @@ async def test_task_reminder_sends_claimed_slot_with_tasks_and_completion(monkey
     claim = AsyncMock(return_value=True)
     monkeypatch.setattr(task_reminders, "claim_task_reminder_slot", claim)
     monkeypatch.setattr(task_reminders, "split_html_message", lambda text: [text])
+
+    async def deliver(actual_bot, **kwargs):
+        for part in kwargs["parts"]:
+            await actual_bot.send_message(chat_id=part.chat_id, text=part.text, parse_mode=part.parse_mode)
+        assert kwargs["expires_at"] == now.start_of("hour").add(hours=1)
+        return SimpleNamespace(completed=True)
+
+    monkeypatch.setattr(task_reminders, "deliver_batch", deliver)
 
     await task_reminders.send_task_reminders(bot)
 
@@ -443,6 +447,7 @@ def test_backup_rotation_removes_archive_and_companion_checksum(tmp_path, monkey
     import os
 
     os.utime(archive, (old_timestamp, old_timestamp))
+    (tmp_path / "notebook_bot_new.sql.gz").write_bytes(b"new recovery point")
     monkeypatch.setattr(backup, "_BACKUP_DIR", tmp_path)
 
     backup._rotate_backups(retention_days=1)
@@ -505,7 +510,7 @@ async def test_evaluate_slos_reports_lag_and_missing_backup_marker(monkeypatch):
         "pending": 2,
         "target_seconds": 120,
     }
-    assert evaluated["backup"]["status"] == "unknown"
+    assert evaluated["backup"]["status"] == "error"
     assert registry.snapshot()["gauges"]["reminders.pending"] == 2.0
 
 

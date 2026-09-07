@@ -1,0 +1,294 @@
+[
+  {
+    "rows_in_tenant": 1000,
+    "query": [
+      {
+        "Plan": {
+          "Node Type": "Sort",
+          "Parallel Aware": false,
+          "Async Capable": false,
+          "Startup Cost": 49.95,
+          "Total Cost": 50.78,
+          "Plan Rows": 333,
+          "Plan Width": 244,
+          "Actual Startup Time": 0.102,
+          "Actual Total Time": 0.103,
+          "Actual Rows": 33,
+          "Actual Loops": 1,
+          "Sort Key": [
+            "is_frog DESC",
+            "priority",
+            "scheduled_date",
+            "due_date",
+            "created_at"
+          ],
+          "Sort Method": "quicksort",
+          "Sort Space Used": 28,
+          "Sort Space Type": "Memory",
+          "Shared Hit Blocks": 16,
+          "Shared Read Blocks": 0,
+          "Shared Dirtied Blocks": 0,
+          "Shared Written Blocks": 0,
+          "Local Hit Blocks": 0,
+          "Local Read Blocks": 0,
+          "Local Dirtied Blocks": 0,
+          "Local Written Blocks": 0,
+          "Temp Read Blocks": 0,
+          "Temp Written Blocks": 0,
+          "Plans": [
+            {
+              "Node Type": "Seq Scan",
+              "Parent Relationship": "Outer",
+              "Parallel Aware": false,
+              "Async Capable": false,
+              "Relation Name": "tasks",
+              "Alias": "tasks",
+              "Startup Cost": 0.0,
+              "Total Cost": 36.0,
+              "Plan Rows": 333,
+              "Plan Width": 244,
+              "Actual Startup Time": 0.007,
+              "Actual Total Time": 0.088,
+              "Actual Rows": 33,
+              "Actual Loops": 1,
+              "Filter": "((user_id = '919999999998'::bigint) AND (status = 'open'::text) AND ((COALESCE(scheduled_date, due_date) <= CURRENT_DATE) OR is_frog))",
+              "Rows Removed by Filter": 967,
+              "Shared Hit Blocks": 16,
+              "Shared Read Blocks": 0,
+              "Shared Dirtied Blocks": 0,
+              "Shared Written Blocks": 0,
+              "Local Hit Blocks": 0,
+              "Local Read Blocks": 0,
+              "Local Dirtied Blocks": 0,
+              "Local Written Blocks": 0,
+              "Temp Read Blocks": 0,
+              "Temp Written Blocks": 0
+            }
+          ]
+        },
+        "Planning": {
+          "Shared Hit Blocks": 131,
+          "Shared Read Blocks": 0,
+          "Shared Dirtied Blocks": 0,
+          "Shared Written Blocks": 0,
+          "Local Hit Blocks": 0,
+          "Local Read Blocks": 0,
+          "Local Dirtied Blocks": 0,
+          "Local Written Blocks": 0,
+          "Temp Read Blocks": 0,
+          "Temp Written Blocks": 0
+        },
+        "Planning Time": 0.153,
+        "Triggers": [],
+        "Execution Time": 0.112
+      }
+    ]
+  },
+  {
+    "rows_in_tenant": 10000,
+    "query": [
+      {
+        "Plan": {
+          "Node Type": "Sort",
+          "Parallel Aware": false,
+          "Async Capable": false,
+          "Startup Cost": 549.02,
+          "Total Cost": 557.36,
+          "Plan Rows": 3333,
+          "Plan Width": 245,
+          "Actual Startup Time": 0.876,
+          "Actual Total Time": 0.883,
+          "Actual Rows": 333,
+          "Actual Loops": 1,
+          "Sort Key": [
+            "is_frog DESC",
+            "priority",
+            "scheduled_date",
+            "due_date",
+            "created_at"
+          ],
+          "Sort Method": "quicksort",
+          "Sort Space Used": 64,
+          "Sort Space Type": "Memory",
+          "Shared Hit Blocks": 154,
+          "Shared Read Blocks": 0,
+          "Shared Dirtied Blocks": 0,
+          "Shared Written Blocks": 0,
+          "Local Hit Blocks": 0,
+          "Local Read Blocks": 0,
+          "Local Dirtied Blocks": 0,
+          "Local Written Blocks": 0,
+          "Temp Read Blocks": 0,
+          "Temp Written Blocks": 0,
+          "Plans": [
+            {
+              "Node Type": "Seq Scan",
+              "Parent Relationship": "Outer",
+              "Parallel Aware": false,
+              "Async Capable": false,
+              "Relation Name": "tasks",
+              "Alias": "tasks",
+              "Startup Cost": 0.0,
+              "Total Cost": 354.0,
+              "Plan Rows": 3333,
+              "Plan Width": 245,
+              "Actual Startup Time": 0.006,
+              "Actual Total Time": 0.774,
+              "Actual Rows": 333,
+              "Actual Loops": 1,
+              "Filter": "((user_id = '919999999998'::bigint) AND (status = 'open'::text) AND ((COALESCE(scheduled_date, due_date) <= CURRENT_DATE) OR is_frog))",
+              "Rows Removed by Filter": 9667,
+              "Shared Hit Blocks": 154,
+              "Shared Read Blocks": 0,
+              "Shared Dirtied Blocks": 0,
+              "Shared Written Blocks": 0,
+              "Local Hit Blocks": 0,
+              "Local Read Blocks": 0,
+              "Local Dirtied Blocks": 0,
+              "Local Written Blocks": 0,
+              "Temp Read Blocks": 0,
+              "Temp Written Blocks": 0
+            }
+          ]
+        },
+        "Planning": {
+          "Shared Hit Blocks": 115,
+          "Shared Read Blocks": 0,
+          "Shared Dirtied Blocks": 0,
+          "Shared Written Blocks": 0,
+          "Local Hit Blocks": 0,
+          "Local Read Blocks": 0,
+          "Local Dirtied Blocks": 0,
+          "Local Written Blocks": 0,
+          "Temp Read Blocks": 0,
+          "Temp Written Blocks": 0
+        },
+        "Planning Time": 0.105,
+        "Triggers": [],
+        "Execution Time": 0.897
+      }
+    ]
+  },
+  {
+    "rows_in_tenant": 100000,
+    "query": [
+      {
+        "Plan": {
+          "Node Type": "Gather Merge",
+          "Parallel Aware": false,
+          "Async Capable": false,
+          "Startup Cost": 7395.45,
+          "Total Cost": 9650.37,
+          "Plan Rows": 19608,
+          "Plan Width": 246,
+          "Actual Startup Time": 6.831,
+          "Actual Total Time": 8.079,
+          "Actual Rows": 3333,
+          "Actual Loops": 1,
+          "Workers Planned": 1,
+          "Workers Launched": 1,
+          "Shared Hit Blocks": 1600,
+          "Shared Read Blocks": 0,
+          "Shared Dirtied Blocks": 0,
+          "Shared Written Blocks": 0,
+          "Local Hit Blocks": 0,
+          "Local Read Blocks": 0,
+          "Local Dirtied Blocks": 0,
+          "Local Written Blocks": 0,
+          "Temp Read Blocks": 0,
+          "Temp Written Blocks": 0,
+          "Plans": [
+            {
+              "Node Type": "Sort",
+              "Parent Relationship": "Outer",
+              "Parallel Aware": false,
+              "Async Capable": false,
+              "Startup Cost": 6395.44,
+              "Total Cost": 6444.46,
+              "Plan Rows": 19608,
+              "Plan Width": 246,
+              "Actual Startup Time": 4.583,
+              "Actual Total Time": 4.621,
+              "Actual Rows": 1666,
+              "Actual Loops": 2,
+              "Sort Key": [
+                "is_frog DESC",
+                "priority",
+                "scheduled_date",
+                "due_date",
+                "created_at"
+              ],
+              "Sort Method": "quicksort",
+              "Sort Space Used": 392,
+              "Sort Space Type": "Memory",
+              "Shared Hit Blocks": 1600,
+              "Shared Read Blocks": 0,
+              "Shared Dirtied Blocks": 0,
+              "Shared Written Blocks": 0,
+              "Local Hit Blocks": 0,
+              "Local Read Blocks": 0,
+              "Local Dirtied Blocks": 0,
+              "Local Written Blocks": 0,
+              "Temp Read Blocks": 0,
+              "Temp Written Blocks": 0,
+              "Workers": [
+                {
+                  "Worker Number": 0,
+                  "Sort Method": "quicksort",
+                  "Sort Space Used": 120,
+                  "Sort Space Type": "Memory"
+                }
+              ],
+              "Plans": [
+                {
+                  "Node Type": "Seq Scan",
+                  "Parent Relationship": "Outer",
+                  "Parallel Aware": true,
+                  "Async Capable": false,
+                  "Relation Name": "tasks",
+                  "Alias": "tasks",
+                  "Startup Cost": 0.0,
+                  "Total Cost": 2715.47,
+                  "Plan Rows": 19608,
+                  "Plan Width": 246,
+                  "Actual Startup Time": 0.008,
+                  "Actual Total Time": 4.07,
+                  "Actual Rows": 1666,
+                  "Actual Loops": 2,
+                  "Filter": "((user_id = '919999999998'::bigint) AND (status = 'open'::text) AND ((COALESCE(scheduled_date, due_date) <= CURRENT_DATE) OR is_frog))",
+                  "Rows Removed by Filter": 48334,
+                  "Shared Hit Blocks": 1539,
+                  "Shared Read Blocks": 0,
+                  "Shared Dirtied Blocks": 0,
+                  "Shared Written Blocks": 0,
+                  "Local Hit Blocks": 0,
+                  "Local Read Blocks": 0,
+                  "Local Dirtied Blocks": 0,
+                  "Local Written Blocks": 0,
+                  "Temp Read Blocks": 0,
+                  "Temp Written Blocks": 0,
+                  "Workers": []
+                }
+              ]
+            }
+          ]
+        },
+        "Planning": {
+          "Shared Hit Blocks": 132,
+          "Shared Read Blocks": 0,
+          "Shared Dirtied Blocks": 0,
+          "Shared Written Blocks": 0,
+          "Local Hit Blocks": 0,
+          "Local Read Blocks": 0,
+          "Local Dirtied Blocks": 0,
+          "Local Written Blocks": 0,
+          "Temp Read Blocks": 0,
+          "Temp Written Blocks": 0
+        },
+        "Planning Time": 0.133,
+        "Triggers": [],
+        "Execution Time": 8.157
+      }
+    ]
+  }
+]

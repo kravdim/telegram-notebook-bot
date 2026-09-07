@@ -223,7 +223,7 @@ async def test_projects_tasks_and_trips_cover_mutations_filters_and_ownership(po
         completed = (await complete_task_workflow(session, done_task.id, owner_id)).task
         assert completed and completed.resolution == "completed"
         assert await update_task(session, other_task.id, owner_id, title="stolen") is None
-        progress = await get_project_progress(session, project.id)
+        progress = await get_project_progress(session, project.id, owner_id)
         assert progress == {"total": 2, "done": 1, "percent": 50}
         assert await complete_project_and_cancel_open_tasks(session, project.id, owner_id)
         assert {row.status for row in await get_user_tasks(session, owner_id, status=None)} == {

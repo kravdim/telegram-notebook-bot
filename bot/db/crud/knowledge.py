@@ -7,6 +7,7 @@ from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from bot.db.models import KnowledgeChunk
+from bot.embeddings.identity import embedding_identity
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +39,7 @@ async def add_chunk(
         topic=topic,
         content=content,
         embedding=embedding,
+        embedding_model=embedding_identity() if embedding is not None else None,
     )
     session.add(chunk)
     await session.commit()
@@ -65,7 +67,7 @@ async def hybrid_search(
                 SELECT id, content, source, topic,
                        ROW_NUMBER() OVER (ORDER BY embedding <=> CAST(:emb AS vector)) AS vrank
                 FROM knowledge_base
-                WHERE embedding IS NOT NULL
+                WHERE embedding IS NOT NULL AND embedding_model = :embedding_model
                 ORDER BY embedding <=> CAST(:emb AS vector)
                 LIMIT 20
             ),
@@ -97,7 +99,8 @@ async def hybrid_search(
         result = await session.execute(
             sql,
             {"emb": str(query_embedding), "query": query, "topic": topic_hint,
-             "sw": semantic_weight, "tw": text_weight, "lim": limit},
+             "sw": semantic_weight, "tw": text_weight, "lim": limit,
+             "embedding_model": embedding_identity()},
         )
     else:
         # Только текстовый поиск (trigram similarity)

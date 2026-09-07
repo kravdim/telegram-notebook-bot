@@ -10,11 +10,11 @@ from bot.db.crud.tasks import get_completed_today, get_frog, get_today_tasks
 from bot.db.crud.users import (
     claim_task_reminder_slot,
     get_all_users,
-    release_task_reminder_slot,
 )
 from bot.db.engine import async_session
 from bot.formatters import split_html_message
 from bot.logging_safety import error_type
+from bot.services.delivery import DeliveryPartSpec, deliver_batch
 
 logger = logging.getLogger(__name__)
 
@@ -60,28 +60,20 @@ async def send_task_reminders(bot: Bot) -> None:
                 # Нет открытых задач — не беспокоим периодическим списком.
                 continue
 
+            text = _format_task_reminder(tasks, completed, frog, today, current_hour)
+            delivered = await deliver_batch(
+                bot, delivery_key=f"task-list:{user.telegram_id}:{today}:{current_hour}",
+                user_id=user.telegram_id, kind="task_list",
+                parts=[DeliveryPartSpec(user.telegram_id, part, parse_mode="HTML")
+                       for part in split_html_message(text)],
+                expires_at=now.start_of("hour").add(hours=1),
+            )
+            if not delivered.completed:
+                continue
             async with async_session() as session:
-                claimed = await claim_task_reminder_slot(
+                await claim_task_reminder_slot(
                     session, user.telegram_id, today, current_hour
                 )
-            if not claimed:
-                continue
-
-            text = _format_task_reminder(tasks, completed, frog, today, current_hour)
-
-            try:
-                for part in split_html_message(text):
-                    await bot.send_message(
-                        chat_id=user.telegram_id,
-                        text=part,
-                        parse_mode="HTML",
-                    )
-            except Exception:
-                async with async_session() as session:
-                    await release_task_reminder_slot(
-                        session, user.telegram_id, today, current_hour
-                    )
-                raise
 
             logger.info(
                 "Напоминание задач (%d:00) отправлено",

@@ -1,5 +1,6 @@
 """CRUD-операции для дней рождения."""
 
+from calendar import isleap
 from datetime import date, timedelta
 from typing import List, Optional
 
@@ -52,12 +53,15 @@ async def get_birthdays_on_date(
     today: date,
 ) -> List[Birthday]:
     """Получить дни рождения на конкретную дату (по месяцу и дню)."""
+    days = [today.day]
+    if today.month == 2 and today.day == 28 and not isleap(today.year):
+        days.append(29)
     result = await session.execute(
         select(Birthday)
         .where(
             Birthday.user_id == user_id,
             extract("month", Birthday.birth_date) == today.month,
-            extract("day", Birthday.birth_date) == today.day,
+            extract("day", Birthday.birth_date).in_(days),
         )
     )
     return list(result.scalars().all())

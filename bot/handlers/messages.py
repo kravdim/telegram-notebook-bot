@@ -282,6 +282,8 @@ async def _claim_request(request_key: str, user_id: int) -> Optional[bool]:
             if existing:
                 if existing.user_id != user_id:
                     return False
+                if "_abandoned" in existing.action_results:
+                    return False
                 import pendulum
                 is_stale = (
                     existing.status == "processing"
@@ -729,7 +731,7 @@ async def _request_intent_response(
     try:
         response = await llm_queue.submit(
             PRIORITY_INTENT,
-            llm_client.chat(messages=messages, functions=FUNCTIONS),
+            llm_client.chat(messages=messages, functions=FUNCTIONS, user_id=user_id),
         )
         return response, None
     except LLMUnavailableError:
@@ -763,6 +765,7 @@ async def _require_mutation_tool_call(
         response = await llm_queue.submit(
             PRIORITY_INTENT,
             llm_client.chat(
+                user_id=user_id,
                 messages=messages,
                 functions=FUNCTIONS,
                 tool_choice="required",
@@ -902,11 +905,18 @@ async def _present_created_project(
     add_message(user_id, "assistant", project_prompt)
     await message.answer(project_prompt, parse_mode=None)
     await message_bot(message).send_chat_action(chat_id=message.chat.id, action="typing")
-    result = await execute_action(
-        user_id, position,
-        lambda: _decompose_created_project(user_id, project_id, project_title),
-        phase="project_tasks",
+    from bot.services.command_execution import prepare_project_action
+
+    prepared = await prepare_project_action(
+        user_id, position, lambda: _decompose_created_project(user_id, project_id, project_title)
     )
+    result = prepared
+    if prepared.kind != "error" and prepared.dict_payload().get("task_titles"):
+        result = await execute_action(
+            user_id, position,
+            lambda: _save_project_decomposition(user_id, project_id, prepared),
+            phase="project_tasks",
+        )
     add_message(user_id, "assistant", result.text)
     for part in split_message(result.text):
         await message.answer(part, parse_mode=None)
@@ -919,12 +929,14 @@ async def _decompose_created_project(
     import uuid
 
     from bot.db.crud.projects import get_project_by_id
-    from bot.llm.decompose import create_project_tasks, decompose_project
+    from bot.llm.decompose import decompose_project
 
     assert llm_client is not None and llm_queue is not None
 
     async with async_session() as session:
-        project = await get_project_by_id(session, uuid.UUID(project_id))
+        project = await get_project_by_id(session, uuid.UUID(project_id), user_id)
+    if not project or project.user_id != user_id or project.status != "active":
+        return CommandResult("Проект уже закрыт или недоступен.", "error")
     description = (project.description or "") if project else ""
     category = project.category if project else "work"
     task_titles = await decompose_project(
@@ -934,7 +946,15 @@ async def _decompose_created_project(
         return CommandResult(
             "Слон создан, но декомпозиция не удалась. Продолжи через /retry.", "error"
         )
-    created = await create_project_tasks(user_id, project_id, task_titles, category)
+    return CommandResult("План подготовлен.", payload={"task_titles": task_titles, "category": category})
+
+
+async def _save_project_decomposition(user_id: int, project_id: str, prepared: CommandResult) -> CommandResult:
+    from bot.llm.decompose import create_project_tasks
+
+    payload = prepared.dict_payload()
+    task_titles = payload["task_titles"]
+    created = await create_project_tasks(user_id, project_id, task_titles, payload["category"])
     if created != len(task_titles):
         return CommandResult("Не удалось сохранить задачи проекта. Продолжи через /retry.", "error")
     tasks_list = "\n".join(f"  • {title}" for title in task_titles)
@@ -1535,7 +1555,7 @@ def _extract_weekday_or_birthday_intent(
         month = _RU_MONTHS.get(birthday.group("month").casefold())
         if month:
             try:
-                birth_date = pendulum.date(1900, month, day)
+                birth_date = pendulum.date(2000, month, day)
             except ValueError:
                 return None
             name = birthday.group("name").casefold()
