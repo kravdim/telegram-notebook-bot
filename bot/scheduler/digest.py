@@ -106,7 +106,7 @@ async def _send_morning(bot: Bot, user, today, tz: str) -> DeliveryResult:
 
         project_progress = {}
         for p in projects[:3]:
-            progress = await get_project_progress(session, p.id)
+            progress = await get_project_progress(session, p.id, user.telegram_id)
             project_progress[str(p.id)] = progress
 
     text = format_morning_digest(

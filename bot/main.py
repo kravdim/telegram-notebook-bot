@@ -10,6 +10,7 @@ from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.enums import ParseMode
+from aiogram.fsm.storage.memory import SimpleEventIsolation
 from aiogram.types import BotCommand, BotCommandScopeAllPrivateChats
 
 from bot.config import settings
@@ -21,6 +22,7 @@ from bot.handlers import (
     callbacks,
     commands,
     evening_review,
+    local_commands,
     messages,
     onboarding,
     privacy,
@@ -34,6 +36,7 @@ from bot.logging_safety import error_type
 from bot.middleware import PrivateChatMiddleware, RateLimitMiddleware, WhitelistMiddleware
 from bot.observability import install_telegram_conflict_alert
 from bot.runtime.background import start_background_tasks, stop_background_tasks
+from bot.runtime.polling_health import PollingHealth
 from bot.runtime.readiness import RuntimeReadiness
 from bot.runtime.singleton import SingletonLease
 from bot.stt.base import STTClient
@@ -174,7 +177,8 @@ async def main() -> None:
         )
 
     readiness_file = os.environ.get("READINESS_FILE")
-    readiness = RuntimeReadiness(readiness_file) if readiness_file else None
+    polling_health = PollingHealth()
+    readiness = RuntimeReadiness(readiness_file, polling_health=polling_health) if readiness_file else None
 
     # Прокси для Telegram API (из env: ALL_PROXY или HTTPS_PROXY)
     proxy_url = os.environ.get("ALL_PROXY") or os.environ.get("HTTPS_PROXY")
@@ -185,7 +189,8 @@ async def main() -> None:
         default=DefaultBotProperties(parse_mode=ParseMode.HTML),
         session=session,
     )
-    dp = Dispatcher(storage=DatabaseFSMStorage())
+    bot.session.middleware.register(polling_health)
+    dp = Dispatcher(storage=DatabaseFSMStorage(), events_isolation=SimpleEventIsolation())
 
     # LLM
     llm_client = LLMClient()
@@ -211,6 +216,10 @@ async def main() -> None:
         await bot.set_my_commands(
             [
                 BotCommand(command="today", description="Задачи на сегодня"),
+                BotCommand(command="add", description="Создать задачу без AI"),
+                BotCommand(command="note", description="Сохранить заметку без AI"),
+                BotCommand(command="remind", description="Напоминание с точной датой без AI"),
+                BotCommand(command="cancel", description="Отменить текущий диалог"),
                 BotCommand(command="tasks", description="Все открытые задачи"),
                 BotCommand(command="frog", description="Лягушка дня"),
                 BotCommand(command="done", description="Отметить задачу выполненной"),
@@ -245,10 +254,11 @@ async def main() -> None:
     dp.callback_query.middleware(RateLimitMiddleware())
 
     # Роутеры (порядок важен: onboarding, admin, commands, callbacks первыми; messages — последний)
-    dp.include_router(onboarding.router)
     dp.include_router(privacy.router)
     dp.include_router(admin.router)
     dp.include_router(commands.router)
+    dp.include_router(local_commands.router)
+    dp.include_router(onboarding.router)
     dp.include_router(callbacks.router)
     dp.include_router(evening_review.router)
     dp.include_router(trip.router)
@@ -269,6 +279,21 @@ async def main() -> None:
     conflict_handler = install_telegram_conflict_alert(bot, loop)
 
     try:
+        await _poll_with_lease(dp, bot, singleton, readiness)
+    finally:
+        logging.getLogger("aiogram.dispatcher").removeHandler(conflict_handler)
+        await stop_background_tasks(background_tasks)
+        await _cleanup_runtime_resources(singleton, bot, llm_queue, stt_client)
+        logger.info("Бот остановлен.")
+
+
+async def _poll_with_lease(
+    dp: Dispatcher, bot: Bot, singleton: SingletonLease, readiness: RuntimeReadiness | None,
+) -> None:
+    """Связать polling/readiness с непрерывно подтверждаемым владением runtime."""
+    lease_task = asyncio.create_task(singleton.watch(), name="runtime-lease-watch")
+    polling_task = None
+    try:
         polling_task = asyncio.create_task(
             dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types()),
             name="telegram-polling",
@@ -278,14 +303,21 @@ async def main() -> None:
             await polling_task
         if readiness is not None:
             await readiness.start()
-        await polling_task
+        done, _ = await asyncio.wait(
+            (polling_task, lease_task), return_when=asyncio.FIRST_COMPLETED
+        )
+        for task in done:
+            await task
     finally:
+        lease_task.cancel()
+        if polling_task is not None:
+            polling_task.cancel()
+        await asyncio.gather(
+            lease_task, *([polling_task] if polling_task is not None else []),
+            return_exceptions=True,
+        )
         if readiness is not None:
             await readiness.stop()
-        logging.getLogger("aiogram.dispatcher").removeHandler(conflict_handler)
-        await stop_background_tasks(background_tasks)
-        await _cleanup_runtime_resources(singleton, bot, llm_queue, stt_client)
-        logger.info("Бот остановлен.")
 
 
 async def _shutdown(dp: Dispatcher, bot: Bot, llm_queue: LLMQueue) -> None:

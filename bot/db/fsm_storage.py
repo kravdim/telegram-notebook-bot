@@ -7,6 +7,7 @@ import pendulum
 from aiogram.fsm.state import State
 from aiogram.fsm.storage.base import BaseStorage, StateType, StorageKey
 from sqlalchemy import select
+from sqlalchemy.dialects.postgresql import insert
 
 from bot.db.engine import async_session
 from bot.db.models import FsmState
@@ -39,38 +40,35 @@ class DatabaseFSMStorage(BaseStorage):
                 return None, {}
             return row.state, dict(row.data or {})
 
-    async def _write(self, key: StorageKey, state: str | None, data: dict) -> None:
-        storage_key = _serialize_key(key)
+    async def _update(self, key: StorageKey, values: dict, *, merge: bool = False) -> dict:
+        """Атомарно менять только переданные поля, включая JSONB merge."""
+        statement = insert(FsmState).values(
+            storage_key=_serialize_key(key), **values, updated_at=pendulum.now("UTC")
+        )
+        changes = {**values, "updated_at": pendulum.now("UTC")}
+        if merge:
+            changes["data"] = FsmState.data.op("||")(statement.excluded.data)
+        returning = statement.on_conflict_do_update(
+            index_elements=[FsmState.storage_key], set_=changes
+        ).returning(FsmState.data)
         async with async_session() as session:
-            result = await session.execute(
-                select(FsmState).where(FsmState.storage_key == storage_key)
-            )
-            row = result.scalar_one_or_none()
-            if state is None and not data:
-                if row:
-                    await session.delete(row)
-                    await session.commit()
-                return
-            if row:
-                row.state = state
-                row.data = data
-                row.updated_at = pendulum.now("UTC")
-            else:
-                session.add(FsmState(storage_key=storage_key, state=state, data=data))
+            data = (await session.execute(returning)).scalar_one()
             await session.commit()
+            return dict(data or {})
 
     async def set_state(self, key: StorageKey, state: StateType = None) -> None:
-        _, data = await self._get(key)
         value = state.state if isinstance(state, State) else state
-        await self._write(key, value, data)
+        await self._update(key, {"state": value})
 
     async def get_state(self, key: StorageKey) -> str | None:
         state, _ = await self._get(key)
         return state
 
     async def set_data(self, key: StorageKey, data: Mapping[str, Any]) -> None:
-        state, _ = await self._get(key)
-        await self._write(key, state, dict(data))
+        await self._update(key, {"data": dict(data)})
+
+    async def update_data(self, key: StorageKey, data: Mapping[str, Any]) -> dict[str, Any]:
+        return await self._update(key, {"data": dict(data)}, merge=True)
 
     async def get_data(self, key: StorageKey) -> dict[str, Any]:
         _, data = await self._get(key)

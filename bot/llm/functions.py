@@ -172,7 +172,7 @@ FUNCTIONS = [
             "type": "object",
             "properties": {
                 "name": {"type": "string", "description": "Имя человека"},
-                "date": {"type": "string", "description": "Дата рождения YYYY-MM-DD; если год не назван, используй 1900"},
+                "date": {"type": "string", "description": "Дата рождения YYYY-MM-DD; если год не назван, используй 2000 и year_known=false"},
                 "year_known": {"type": "boolean", "description": "true, только если пользователь явно назвал год рождения"},
                 "note": {"type": "string", "description": "Заметка (что подарить, кто это и т.д.)"},
             },

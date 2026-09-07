@@ -8,6 +8,7 @@ from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from bot.db.models import DiaryEntry
+from bot.embeddings.identity import embedding_identity
 
 
 async def create_diary_entry(
@@ -48,17 +49,20 @@ async def hybrid_search_diary(
         res = await session.execute(
             text("""
                 SELECT id, content,
-                       COALESCE(1 - (embedding <=> CAST(:emb AS vector)), 0) * 0.6 +
+                       CASE WHEN embedding_model = :embedding_model
+                            THEN COALESCE(1 - (embedding <=> CAST(:emb AS vector)), 0)
+                            ELSE 0 END * 0.6 +
                        COALESCE(similarity(content, CAST(:query AS text)), 0) * 0.4 AS score
                 FROM diary_entries
                 WHERE user_id = :uid
                   AND (content % CAST(:query AS text) OR content ILIKE :pattern
-                       OR (embedding IS NOT NULL AND embedding <=> CAST(:emb AS vector) < 0.8))
+                       OR (embedding_model = :embedding_model AND embedding IS NOT NULL
+                           AND embedding <=> CAST(:emb AS vector) < 0.8))
                 ORDER BY score DESC
                 LIMIT :lim
             """),
             {"uid": user_id, "query": query, "pattern": f"%{query}%",
-             "emb": query_embedding, "lim": limit},
+             "emb": query_embedding, "lim": limit, "embedding_model": embedding_identity()},
         )
     else:
         res = await session.execute(

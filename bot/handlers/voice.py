@@ -5,7 +5,6 @@ import logging
 import secrets
 import tempfile
 import time
-from html import escape
 from pathlib import Path
 from typing import cast
 
@@ -169,11 +168,11 @@ async def handle_voice(message: Message) -> None:
 
     with tempfile.NamedTemporaryFile(suffix=".ogg", delete=False) as tmp:
         tmp_path = Path(tmp.name)
-        await bot.download_file(file.file_path, tmp_path)
 
-    await message.answer("🎤 Распознаю голосовое…")
     started = time.monotonic()
     try:
+        await bot.download_file(file.file_path, tmp_path)
+        await message.answer("🎤 Распознаю голосовое…")
         timeout_sec = int(
             settings.yaml_config.get("stt", {}).get("timeout_sec", 90)
         )
@@ -222,11 +221,12 @@ async def handle_voice(message: Message) -> None:
         return
     _pending_transcripts[(message.from_user.id, session_token)] = text
 
-    confirmation = await message.answer(
-        f"🎤 Распознано:\n\n<i>{escape(text)}</i>\n\nВсё верно?",
-        parse_mode="HTML",
-        reply_markup=_voice_keyboard(session_token),
-    )
+    try:
+        confirmation = await _send_confirmation(message, text, session_token)
+    except BaseException:
+        await _clear_voice_state(message.from_user.id, "voice_confirm", session_token)
+        _pending_transcripts.pop((message.from_user.id, session_token), None)
+        raise
     confirmation_id = getattr(confirmation, "message_id", None)
     if confirmation_id is not None:
         state_payload = {**state_payload, "message_id": confirmation_id}
@@ -239,6 +239,22 @@ async def handle_voice(message: Message) -> None:
         )
         if not updated:
             _pending_transcripts.pop((message.from_user.id, session_token), None)
+
+
+async def _send_confirmation(message: Message, text: str, token: str):
+    """Показать весь transcript; клавиатура относится к последнему сообщению."""
+    if len(text.encode("utf-16-le")) // 2 <= 3000:
+        return await message.answer(
+            f"🎤 Распознано:\n\n{text}\n\nВсё верно?", parse_mode=None,
+            reply_markup=_voice_keyboard(token),
+        )
+    # 1900 Unicode codepoints fit even when every character is a surrogate pair.
+    for offset in range(0, len(text), 1900):
+        await message.answer(text[offset:offset + 1900], parse_mode=None)
+    return await message.answer(
+        "🎤 Текст голосового показан выше. Всё верно?", parse_mode=None,
+        reply_markup=_voice_keyboard(token),
+    )
 
 
 def _voice_callback_token(callback: CallbackQuery, action: str) -> str | None:
@@ -297,17 +313,15 @@ async def cb_voice_confirm(callback: CallbackQuery) -> None:
     if not claimed:
         await _expire_stale_callback(callback)
         return
-    await callback.answer()
-
     message = callback_message(callback)
-    await message.edit_text(
-        f"🎤 {text}\n\n⏳ Выполняю подтверждённую команду…",
-        parse_mode=None,
-    )
 
     # Обрабатываем распознанный текст через LLM
     from bot.handlers.messages import MessageOutcome, process_text_message
     try:
+        await callback.answer()
+        await message.edit_text(
+            "🎤 ⏳ Выполняю подтверждённую команду…", parse_mode=None,
+        )
         outcome = await process_text_message(user_id, text, message)
     except Exception as e:
         logger.error(
@@ -330,7 +344,7 @@ async def cb_voice_confirm(callback: CallbackQuery) -> None:
             )
             return
         await message.edit_text(
-            f"🎤 {text}\n\nНе удалось выполнить команду. Можно повторить.",
+            "🎤 Не удалось выполнить команду. Можно повторить подтверждённый текст.",
             parse_mode=None,
             reply_markup=_voice_keyboard(session_token),
         )

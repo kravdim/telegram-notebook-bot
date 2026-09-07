@@ -1,8 +1,9 @@
 title = "DailyPlanner gitleaks configuration"
 
+[extend]
+useDefault = true
+
 [allowlist]
 description = "Documentation and explicit placeholders"
-paths = [
-  '''config\.yaml\.example''',
-  '''\.env\.example''',
-]
+regexTarget = "secret"
+regexes = ['''^your_[a-z_]+$''', '''^synthetic[-_a-zA-Z0-9]*$''']

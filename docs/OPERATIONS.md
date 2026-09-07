@@ -1,5 +1,57 @@
 # Operations runbook
 
+## Исправления ревью 7 сентября 2026
+
+Статус работы и результаты проверок: [REMEDIATION_2026-09-07.md](REMEDIATION_2026-09-07.md).
+
+Docker Compose разделяет bootstrap PostgreSQL (`postgres`), владельца миграций
+(`notebook_migrator`) и runtime (`notebook`). Задайте три разных пароля:
+`POSTGRES_PASSWORD`, `MIGRATION_DATABASE_PASSWORD`, `APP_DATABASE_PASSWORD`.
+Рекомендуются случайные hex-значения, чтобы URL не требовал escaping.
+Bootstrap-пароль не передаётся контейнеру бота; runtime не имеет SUPERUSER,
+CREATEDB, CREATEROLE, BYPASSRLS и права создавать таблицы. Одноразовый сервис
+`migrate` должен завершиться успешно до старта бота.
+
+**Существующий volume не перепровизионируется переменными Compose.** Перед
+переходом со старого superuser-профиля нужен maintenance-план: проверенная копия,
+новый изолированный кластер/volume с разделёнными ролями, восстановление через
+операторский workflow, проверка данных и runtime-прав, затем переключение.
+Старый volume сохраняется до проверки восстановления. Не запускать `down -v`
+для существующего deployment и не считать замену паролей в YAML миграцией ролей.
+
+В macOS rollback на более новый schema head разрешён только при явном allowlist
+и поддержке `DAILYPLANNER_COMPATIBLE_DATABASE_HEAD` старым startup. Этот режим
+проверяет точный head и запускает код без повторной миграции/seed. При отсутствии
+такого startup installer останавливается до изменения БД; нужен maintenance/restore.
+
+Backup публикуется после окончания потокового dump/gzip, новая копия имеет права
+0600. Ошибка backup не запускает возрастную ротацию; последняя точка восстановления
+сохраняется даже старше обычного срока хранения. Срок удаления персональных данных
+из последней старой копии требует решения оператора, если новые копии не появляются.
+Полное отсутствие успешного backup считается SLO-ошибкой.
+Локальный backup не защищает от потери хоста: оператор должен настроить независимое
+зашифрованное хранение и проверять восстановление из него. Адрес внешнего хранилища
+и ключи не заданы проектом и не создаются автоматически.
+
+Outbox восстанавливается каждые 30 секунд и при старте. Повторы используют
+сохранённые части, backoff от 60 секунд до часа, максимум восемь попыток;
+ошибки запрета доступа/невалидного Telegram payload терминальны. Общая доставка
+имеет срок 24 часа; периодический список задач действует до конца своего часа.
+Сбой после принятия сообщения Telegram до записи acknowledgment по-прежнему может
+повторить последнюю часть — API не предоставляет exactly-once отправку.
+
+Readiness живого бота требует успешного getUpdates за последние 90 секунд,
+а не только heartbeat event loop. Пустой успешный long poll тоже считается успехом.
+Метрики содержат время последнего успеха каждого фонового job. Внешний монитор
+должен проверять readiness/процесс независимо от Telegram-канала оповещения.
+Синтетический container smoke использует только heartbeat и не доказывает polling.
+
+Локальный Whisper допускает одну native работу без очереди. Timeout пользовательского
+запроса не освобождает native слот; новые задания отклоняются до окончания работы.
+Native-библиотеку нельзя безопасно прервать из Python thread: постоянно зависший
+worker требует перезапуска процесса. Export ограничен одним параллельным архивом
+и настроенным размером; ZIP сжимается вне event loop на согласованном DB-снимке.
+
 ## Reliability targets
 
 - Reminder delivery lag: no more than 120 seconds under normal operation.
@@ -258,11 +310,48 @@ extra and Ollama. Copy `platform/linux/config.docker.yaml.example`, provide the
 required environment values, and use `docker compose up -d --wait`. Do not
 publish PostgreSQL unless an operator explicitly needs temporary local access.
 
-The container entrypoint rejects a missing config, migrates to Alembic head,
-seeds knowledge and runs preflight before the application command. Runtime
+The supported Compose profile runs migrations and seeding once in the separate
+`migrate` service. The application entrypoint rejects a missing config, skips DDL
+with `DAILYPLANNER_SKIP_MIGRATIONS=1`, and runs preflight before the bot command.
+Direct image invocation retains the migration step unless that flag is set. Runtime
 readiness is stricter than process liveness: a separate probe checks the event
 loop heartbeat, runtime PID, database query and migration revision. The CI
 smoke override additionally verifies required PostgreSQL extensions, an ORM
 write/read/delete cycle and a 768-dimensional pgvector roundtrip without using
 Telegram or provider secrets. This hermetic smoke does not replace the release
 check of `/status` and one non-mutating Telegram command with real adapters.
+
+
+## Review release candidate and recovery limits
+
+Current local evidence is in [REMEDIATION_2026-09-07.md](REMEDIATION_2026-09-07.md).
+The new head is `e0a3b5c7d914`. It is not allowlisted for automatic rollback into
+an older runtime. Use the maintenance/snapshot procedure for an existing install.
+A schema downgrade removes vector provenance, recurrence timezone and outbox
+retry metadata; it maps failed/expired batches to legacy terminal delivered status
+so the old sender cannot resurrect stale messages. This is intentionally lossy:
+use a verified pre-upgrade snapshot to recover the old schema and audit meaning.
+
+Backup archives are privately permissioned, streamed through gzip, fsynced and
+published from a unique temporary path. Checksum sidecars are published atomically;
+rotation occurs only after a successful archive and always retains the newest copy.
+A crash between publishing archive and sidecar can leave an unverified archive;
+restore automation only selects archives with valid sidecars. No prior recovery
+point is removed in that window. Ordinary failure/cancellation cleans its partial
+files; a hard kill can leave hidden `.partial` files for operator inspection.
+
+The daily local backup objective does not protect against loss of the host.
+An independent destination has not been configured by this change. Before calling
+host-loss recovery ready, the operator must choose an off-host destination, encrypt
+archives before transfer, retain the decryption key independently, enforce remote
+retention and periodically restore a downloaded copy. Suggested acceptance targets:
+remote verified copy age under 24 hours and measured full recovery under 30 minutes.
+The local synthetic restore measurement is not evidence for those remote targets.
+
+A local Whisper timeout cannot interrupt native inference safely. The process
+admits no second inference until the native job finishes and queues unload behind
+it. A permanently hung native library still requires a supervised process restart.
+For personal use, the current concurrency budget is one LLM worker (queue limit
+100), one native STT worker and one export. PostgreSQL pool limits are 5 regular
+connections plus 10 overflow. Large-tenant pagination and distributed concurrency
+are future capacity work; the included SQL benchmark does not certify such a load.

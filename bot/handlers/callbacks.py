@@ -259,7 +259,7 @@ async def cb_delete_choose(callback: CallbackQuery) -> None:
     await callback.answer()
     task_id = uuid.UUID(callback_data(callback).split(":", 1)[1])
     async with async_session() as session:
-        task = await get_task_by_id(session, task_id)
+        task = await get_task_by_id(session, task_id, callback.from_user.id)
     if not task or task.user_id != callback.from_user.id:
         await callback_message(callback).edit_text("Задача не найдена.")
         return

@@ -119,7 +119,7 @@ def test_common_intent_fast_paths_cover_live_beta_phrases():
         "кстати у папы день рождения 3 апреля", "Europe/Moscow"
     )
     assert tool == "add_birthday"
-    assert args == {"name": "папа", "date": "1900-04-03", "year_known": False}
+    assert args == {"name": "папа", "date": "2000-04-03", "year_known": False}
 
 
 def test_explicit_task_fast_path_sanitizes_via_dispatch_and_rejects_injection():
@@ -239,8 +239,8 @@ async def test_project_decomposition_has_no_duplicate_confirmation(monkeypatch):
             },
         )
 
-    async def fake_project(session, project_id):
-        return SimpleNamespace(description="", category="work")
+    async def fake_project(session, project_id, user_id):
+        return SimpleNamespace(description="", category="work", user_id=user_id, status="active")
 
     async def fake_decompose(*args, **kwargs):
         return ["Собрать данные", "Проверить цифры"]

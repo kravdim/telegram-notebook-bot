@@ -114,8 +114,13 @@ async def _send_weekly_review(
     bot: Bot, user, tz: str, today=None, session_token: str = "legacy"
 ) -> DeliveryResult:
     """Отправить недельный ревью мемуарника."""
+    today = today or pendulum.now(tz).date()
     async with async_session() as session:
-        entries = await get_memoir_entries(session, user.telegram_id, limit=7)
+        entries = await get_memoir_entries(
+            session, user.telegram_id, limit=7,
+            start_date=today.subtract(days=today.isoweekday() - 1),
+            end_date=today.add(days=1),
+        )
 
     today = today or pendulum.now(tz).date()
     text = format_weekly_review(entries)
@@ -229,8 +234,12 @@ async def _clear_memoir_state(
 
 async def _send_monthly_review(bot: Bot, user, tz: str, today=None) -> DeliveryResult:
     """Отправить месячный ревью мемуарника."""
+    today = today or pendulum.now(tz).date()
     async with async_session() as session:
-        entries = await get_memoir_entries(session, user.telegram_id, limit=31)
+        entries = await get_memoir_entries(
+            session, user.telegram_id, limit=31, start_date=today.replace(day=1),
+            end_date=today.add(days=1),
+        )
 
     if not entries:
         return DeliveryResult(completed=True)

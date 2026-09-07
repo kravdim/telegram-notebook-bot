@@ -75,6 +75,7 @@ async def process_chronometry_response(
         response = await llm_queue.submit(
             PRIORITY_CHRONOMETRY,
             llm_client.chat(
+                user_id=user_id,
                 messages=[
                     {"role": "system", "content": prompt},
                     {"role": "user", "content": text},

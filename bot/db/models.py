@@ -156,6 +156,7 @@ class Task(Base):
     remind_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
     remind_before_min: Mapped[Optional[int]] = mapped_column(Integer)
     repeat_rule: Mapped[Optional[str]] = mapped_column(Text)
+    recurrence_timezone: Mapped[Optional[str]] = mapped_column(Text)
     status: Mapped[str] = mapped_column(Text, nullable=False, default="open")
     resolution: Mapped[Optional[str]] = mapped_column(Text)
     tags: Mapped[List[str]] = mapped_column(ARRAY(Text), default=[])
@@ -291,10 +292,12 @@ class DeliveryBatch(Base):
         DateTime(timezone=True), nullable=False, server_default="now()"
     )
     completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    next_attempt_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
 
     __table_args__ = (
         CheckConstraint(
-            "status IN ('pending', 'delivering', 'delivered')",
+            "status IN ('pending', 'delivering', 'delivered', 'failed', 'expired')",
             name="ck_delivery_batches_status",
         ),
         CheckConstraint("attempts >= 0", name="ck_delivery_batches_attempts"),
@@ -355,6 +358,7 @@ class MemoirEntry(Base):
     value_tag: Mapped[Optional[str]] = mapped_column(Text)
     period_type: Mapped[str] = mapped_column(Text, nullable=False, default="day")
     embedding = mapped_column(Vector(768))
+    embedding_model: Mapped[Optional[str]] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default="now()"
     )
@@ -425,6 +429,7 @@ class Note(Base):
     content: Mapped[str] = mapped_column(Text, nullable=False)
     tags: Mapped[List[str]] = mapped_column(ARRAY(Text), default=[])
     embedding = mapped_column(Vector(768))
+    embedding_model: Mapped[Optional[str]] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default="now()"
     )
@@ -453,6 +458,7 @@ class DiaryEntry(Base):
     content: Mapped[str] = mapped_column(Text, nullable=False)
     entry_date: Mapped[date] = mapped_column(Date, nullable=False)
     embedding = mapped_column(Vector(768))
+    embedding_model: Mapped[Optional[str]] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default="now()"
     )
@@ -549,6 +555,7 @@ class KnowledgeChunk(Base):
     topic: Mapped[str] = mapped_column(Text, nullable=False)
     content: Mapped[str] = mapped_column(Text, nullable=False)
     embedding = mapped_column(Vector(768))
+    embedding_model: Mapped[Optional[str]] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default="now()"
     )

@@ -389,7 +389,7 @@ async def test_preflight_accepts_only_explicit_compatible_newer_head(monkeypatch
     fake_engine = SimpleNamespace(connect=lambda: Connect(), dispose=AsyncMock())
     monkeypatch.setattr(db_engine, "engine", fake_engine)
     monkeypatch.setattr(type(settings), "runtime_config_errors", lambda self: [])
-    monkeypatch.setattr(preflight, "Config", lambda *_: object())
+    monkeypatch.setattr(preflight, "Config", lambda *_: SimpleNamespace(set_main_option=lambda *a: None))
     monkeypatch.setattr(
         preflight.ScriptDirectory,
         "from_config",
@@ -445,7 +445,7 @@ async def test_container_scripts_success_paths_use_only_fake_database(monkeypatc
         "from_config",
         lambda *_: SimpleNamespace(get_current_head=lambda: "head"),
     )
-    monkeypatch.setattr(preflight, "Config", lambda *_: object())
+    monkeypatch.setattr(preflight, "Config", lambda *_: SimpleNamespace(set_main_option=lambda *a: None))
     monkeypatch.setattr(
         preflight.ScriptDirectory,
         "from_config",

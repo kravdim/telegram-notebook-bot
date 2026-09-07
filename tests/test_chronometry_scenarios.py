@@ -11,7 +11,7 @@ class FakeLLMClient:
         self.content = content
         self.messages = None
 
-    async def chat(self, messages):
+    async def chat(self, messages, *, user_id=None):
         self.messages = messages
         return SimpleNamespace(content=self.content)
 

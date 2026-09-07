@@ -1,5 +1,6 @@
 """PostgreSQL-backed singleton lease for the bot process."""
 
+import asyncio
 import logging
 
 from sqlalchemy import text
@@ -48,6 +49,32 @@ class SingletonLease:
         finally:
             await connection.close()
         logger.info("Singleton lease освобождён: %s", self._name)
+
+    async def verify(self) -> bool:
+        """Проверить владение на исходной сессии, не захватывая lock повторно."""
+        connection = self._connection
+        if connection is None or connection.closed or connection.invalidated:
+            return False
+        result = await connection.execute(
+            text("""
+                SELECT EXISTS (
+                    SELECT 1 FROM pg_locks
+                    WHERE locktype = 'advisory' AND pid = pg_backend_pid() AND granted
+                    AND classid::bigint = ((hashtext(:name)::bigint >> 32) & 4294967295)
+                    AND objid::bigint = (hashtext(:name)::bigint & 4294967295)
+                    AND objsubid = 1
+                )
+            """), {"name": self._name},
+        )
+        return bool(result.scalar_one())
+
+    async def watch(self, interval_seconds: float = 5) -> None:
+        """Прервать runtime при потере lease или невозможности подтвердить его."""
+        while True:
+            async with asyncio.timeout(3):
+                if not await self.verify():
+                    raise RuntimeError("Runtime singleton lease lost")
+            await asyncio.sleep(interval_seconds)
 
     async def __aenter__(self) -> "SingletonLease":
         if not await self.acquire():

@@ -57,6 +57,25 @@ class _DuplicateTask:
     is_frog: bool
     priority: str
     repeat_rule: str | None
+    remind_before_min: int | None = None
+
+
+def _relative_alarm(
+    due_date: date | None, due_time: time | None, offset: int | None,
+    remind_at: datetime | None, timezone: str,
+) -> tuple[datetime | None, str | None]:
+    """Вычислить связанный alarm и отклонить неоднозначное время."""
+    if offset is None:
+        return remind_at, None
+    if not due_date or not due_time:
+        return None, "Для напоминания до дедлайна укажи дату и время дедлайна."
+    relative = pendulum.datetime(
+        due_date.year, due_date.month, due_date.day, due_time.hour, due_time.minute,
+        tz=timezone,
+    ).subtract(minutes=offset)
+    if remind_at is not None and remind_at != relative:
+        return None, "Время напоминания не совпадает с отступом от дедлайна. Уточни время."
+    return relative, None
 
 
 def _prepare_task(
@@ -100,6 +119,12 @@ def _prepare_task(
     if priority not in ("high", "medium", "normal"):
         priority = "normal"
     remind_before = args.get("remind_before_min")
+    remind_at, alarm_error = _relative_alarm(
+        due_date, due_time, int(remind_before) if remind_before is not None else None,
+        remind_at, timezone,
+    )
+    if alarm_error:
+        return None, alarm_error
     return _PreparedTask(
         title=title,
         category=category,
@@ -152,6 +177,7 @@ async def _load_context(
                 is_frog=existing.is_frog,
                 priority=existing.priority,
                 repeat_rule=existing.repeat_rule,
+                remind_before_min=getattr(existing, "remind_before_min", None),
             )
     return trip_id, duplicate
 
@@ -164,6 +190,8 @@ def _duplicate_updates(task: _PreparedTask, duplicate: _DuplicateTask) -> dict[s
             updates[field] = value
     if task.remind_at:
         updates["remind_at"] = task.remind_at
+    if task.remind_before_min is not None:
+        updates["remind_before_min"] = task.remind_before_min
     if task.is_frog and not duplicate.is_frog:
         updates["is_frog"] = True
     if task.priority != "normal" and task.priority != duplicate.priority:

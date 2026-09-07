@@ -109,9 +109,11 @@ def _validate_scheduler(config: dict[str, Any]) -> list[str]:
         "sweep_interval_min",
         "backup_retention_days",
         "llm_log_retention_days",
+        "transient_state_retention_days",
     ):
-        if not _is_positive(scheduler.get(key, 1)):
-            errors.append(f"scheduler {key} must be positive")
+        value = scheduler.get(key, 1)
+        if type(value) is not int or value <= 0:
+            errors.append(f"scheduler {key} must be a positive integer")
     return errors
 
 

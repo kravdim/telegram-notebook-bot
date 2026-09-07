@@ -66,7 +66,7 @@ async def test_memoir_skip_rejects_stale_state_and_delete_choice_checks_owner(mo
 
     task_id = uuid4()
 
-    async def foreign_task(session, requested_id):
+    async def foreign_task(session, requested_id, user_id):
         return SimpleNamespace(id=requested_id, user_id=99, title="Чужая")
 
     monkeypatch.setattr(callbacks, "async_session", lambda: FakeSessionContext())
@@ -193,7 +193,8 @@ async def test_evening_review_updates_tomorrow_and_handles_missing_task(monkeypa
     monkeypatch.setattr(evening_review, "update_task", missing)
     callback = FakeCallback(user_id=4, data=f"review_tomorrow:{task_id}")
     await evening_review.cb_review_tomorrow(callback)
-    assert callback.message.edits[-1][0] == "Задача не найдена."
+    assert "уже закрыта или удалена" in callback.message.edits[-1][0]
+    assert captured[0][2]["expected_status"] == "open"
 
 
 @pytest.mark.asyncio
@@ -285,7 +286,7 @@ async def test_admin_digest_reports_delivery_success_and_error(monkeypatch):
 async def test_callback_confirmation_renders_owned_task_and_cancel_paths(monkeypatch):
     task_id = uuid4()
 
-    async def owned_task(session, requested_id):
+    async def owned_task(session, requested_id, user_id):
         return SimpleNamespace(id=requested_id, user_id=5, title="Купить <чай>")
 
     monkeypatch.setattr(callbacks, "async_session", lambda: FakeSessionContext())

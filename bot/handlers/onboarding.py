@@ -13,7 +13,6 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, Message
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
-from bot.db.crud.tasks import create_task
 from bot.db.crud.users import get_or_create_user, get_user, update_user_settings
 from bot.db.engine import async_session
 from bot.handlers.telegram import callback_message
@@ -23,6 +22,7 @@ from bot.privacy import (
     privacy_notice_text,
     provider_fingerprint,
 )
+from bot.services.onboarding import complete_onboarding
 
 logger = logging.getLogger(__name__)
 
@@ -189,7 +189,7 @@ async def onb_name_custom(callback: CallbackQuery, state: FSMContext) -> None:
     await callback_message(callback).answer("Введи своё имя:")
 
 
-@router.message(OnboardingStates.step_name)
+@router.message(OnboardingStates.step_name, ~F.text.startswith("/"))
 async def onb_name_text(message: Message, state: FSMContext) -> None:
     """Пользователь ввёл имя текстом."""
     name = message.text.strip() if message.text else "друг"
@@ -322,7 +322,7 @@ async def onb_tz_change(callback: CallbackQuery, state: FSMContext) -> None:
     await state.set_state(OnboardingStates.step_timezone_input)
 
 
-@router.message(OnboardingStates.step_timezone_input)
+@router.message(OnboardingStates.step_timezone_input, ~F.text.startswith("/"))
 async def onb_tz_text(message: Message, state: FSMContext) -> None:
     """Пользователь ввёл часовой пояс."""
     tz = message.text.strip() if message.text else "Europe/Moscow"
@@ -382,7 +382,7 @@ async def onb_digest_change(callback: CallbackQuery, state: FSMContext) -> None:
     await state.set_state(OnboardingStates.step_digest_times_input)
 
 
-@router.message(OnboardingStates.step_digest_times_input)
+@router.message(OnboardingStates.step_digest_times_input, ~F.text.startswith("/"))
 async def onb_digest_text(message: Message, state: FSMContext) -> None:
     """Пользователь ввёл время дайджестов."""
     text = message.text or ""
@@ -477,7 +477,7 @@ _DAY_MAP = {
 }
 
 
-@router.message(OnboardingStates.step_work_schedule_input)
+@router.message(OnboardingStates.step_work_schedule_input, ~F.text.startswith("/"))
 async def onb_work_text(message: Message, state: FSMContext) -> None:
     """Пользователь ввёл рабочий график."""
     text = message.text or ""
@@ -574,7 +574,7 @@ async def onb_task_skip(callback: CallbackQuery, state: FSMContext) -> None:
     await _finish_onboarding(callback_message(callback), callback.from_user.id, state)
 
 
-@router.message(OnboardingStates.step_first_task)
+@router.message(OnboardingStates.step_first_task, ~F.text.startswith("/"))
 async def onb_first_task(message: Message, state: FSMContext) -> None:
     """Пользователь создал первую задачу."""
     if not message.from_user:
@@ -583,64 +583,42 @@ async def onb_first_task(message: Message, state: FSMContext) -> None:
     if not title:
         await message.answer("Не понял задачу. Напиши текстом или нажми «Пропустить».")
         return
+    if len(title) > 500:
+        await message.answer("Сократи название задачи до 500 символов.")
+        return
 
-    async with async_session() as session:
-        task = await create_task(session, message.from_user.id, title=title)
-
-    await message.answer(f"Задача создана: {task.title} ✅")
-    await _finish_onboarding(message, message.from_user.id, state)
+    await _finish_onboarding(message, message.from_user.id, state, first_task_title=title)
 
 
-async def _finish_onboarding(message: Message, user_id: int, state: FSMContext) -> None:
+def _onboarding_profile(data: dict) -> dict:
+    """Перевести проверенные поля диалога в настройки профиля."""
+    settings_update: dict = {"onboarding_completed": True}
+    for key in ("timezone", "username", "work_days"):
+        if value := data.get(key):
+            settings_update[key] = value
+    clocks = {"digest_morning": "digest_morning_time", "digest_evening": "digest_evening_time",
+              "memoir_prompt": "memoir_prompt_time", "work_start": "work_start_time",
+              "work_end": "work_end_time"}
+    for source, target in clocks.items():
+        if value := data.get(source):
+            parsed = _parse_clock(value)
+            if parsed is None:
+                raise ValueError("Invalid saved onboarding time")
+            settings_update[target] = parsed
+    return settings_update
+
+
+async def _finish_onboarding(
+    message: Message, user_id: int, state: FSMContext, *, first_task_title: str | None = None,
+) -> None:
     """Завершает онбординг: сохраняет настройки, очищает FSM."""
     data = await state.get_data()
-    settings_update: dict = {"onboarding_completed": True}
-
-    if tz := data.get("timezone"):
-        settings_update["timezone"] = tz
-    if name := data.get("username"):
-        settings_update["username"] = name
-
-    # Время дайджестов
-    if morning := data.get("digest_morning"):
-        try:
-            h, m = morning.split(":")
-            settings_update["digest_morning_time"] = dt_time(int(h), int(m))
-        except (ValueError, TypeError):
-            pass
-    if evening := data.get("digest_evening"):
-        try:
-            h, m = evening.split(":")
-            settings_update["digest_evening_time"] = dt_time(int(h), int(m))
-        except (ValueError, TypeError):
-            pass
-    if memoir := data.get("memoir_prompt"):
-        try:
-            h, m = memoir.split(":")
-            settings_update["memoir_prompt_time"] = dt_time(int(h), int(m))
-        except (ValueError, TypeError):
-            pass
-
-    # Рабочий график
-    if work_days := data.get("work_days"):
-        settings_update["work_days"] = work_days
-    if work_start := data.get("work_start"):
-        try:
-            h, m = work_start.split(":")
-            settings_update["work_start_time"] = dt_time(int(h), int(m))
-        except (ValueError, TypeError):
-            pass
-    if work_end := data.get("work_end"):
-        try:
-            h, m = work_end.split(":")
-            settings_update["work_end_time"] = dt_time(int(h), int(m))
-        except (ValueError, TypeError):
-            pass
-
-    async with async_session() as session:
-        await update_user_settings(session, user_id, **settings_update)
+    settings_update = _onboarding_profile(data)
+    created_title = await complete_onboarding(user_id, settings_update, first_task_title)
 
     await state.clear()
+    if created_title:
+        await message.answer(f"Задача создана: {created_title} ✅", parse_mode=None)
 
     if data.get("cloud_processing_enabled"):
         capabilities = (
@@ -651,6 +629,7 @@ async def _finish_onboarding(message: Message, user_id: int, state: FSMContext) 
     else:
         capabilities = (
             "Cloud AI отключён: свободный текст и голос не обрабатываются.\n"
-            "Используй slash-команды из /help или измени выбор через /privacy."
+            "Создавай задачи через /add, заметки через /note и напоминания через /remind.\n"
+            "Все команды — /help; выбор AI — /privacy."
         )
     await message.answer(f"Настройка завершена! 🎉\n\n{capabilities}\n\nПоехали! 🚀")

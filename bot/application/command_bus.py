@@ -26,6 +26,11 @@ class CommandResult:
         "error",
     ] = "message"
     payload: dict[str, Any] | list[dict[str, Any]] | None = None
+    schema_version: int = 1
+
+    def __post_init__(self) -> None:
+        if self.schema_version != 1:
+            raise ValueError("Unsupported persisted command result version")
 
     def dict_payload(self) -> dict[str, Any]:
         return self.payload if isinstance(self.payload, dict) else {}

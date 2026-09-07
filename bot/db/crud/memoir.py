@@ -7,6 +7,7 @@ from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from bot.db.models import MemoirEntry
+from bot.embeddings.identity import embedding_identity
 
 
 async def create_memoir_entry(
@@ -28,6 +29,9 @@ async def create_memoir_entry(
     )
     entry = result.scalar_one_or_none()
     if entry:
+        if entry.content != content:
+            entry.embedding = None
+            entry.embedding_model = None
         entry.content = content
         entry.value_tag = value_tag
     else:
@@ -52,17 +56,17 @@ async def get_memoir_entries(
     user_id: int,
     period_type: str = "day",
     limit: int = 7,
+    *, start_date: date | None = None, end_date: date | None = None,
 ) -> List[MemoirEntry]:
     """Получить последние записи мемуарника."""
-    result = await session.execute(
-        select(MemoirEntry)
-        .where(
-            MemoirEntry.user_id == user_id,
-            MemoirEntry.period_type == period_type,
-        )
-        .order_by(MemoirEntry.event_date.desc())
-        .limit(limit)
-    )
+    statement = select(MemoirEntry).where(
+        MemoirEntry.user_id == user_id, MemoirEntry.period_type == period_type,
+    ).order_by(MemoirEntry.event_date.desc()).limit(limit)
+    if start_date is not None:
+        statement = statement.where(MemoirEntry.event_date >= start_date)
+    if end_date is not None:
+        statement = statement.where(MemoirEntry.event_date < end_date)
+    result = await session.execute(statement)
     return list(result.scalars().all())
 
 
@@ -87,10 +91,12 @@ async def get_value_stats(
     session: AsyncSession,
     user_id: int,
     days: int = 90,
+    *, tz: str = "Europe/Moscow", start_date: date | None = None,
 ) -> List[dict]:
     """Статистика ценностей за N дней."""
     import pendulum
-    since = pendulum.now().subtract(days=days).date()
+    today = pendulum.now(tz).date()
+    since = start_date or today.subtract(days=days - 1)
     result = await session.execute(
         select(
             MemoirEntry.value_tag,
@@ -100,6 +106,7 @@ async def get_value_stats(
             MemoirEntry.user_id == user_id,
             MemoirEntry.period_type == "day",
             MemoirEntry.event_date >= since,
+            MemoirEntry.event_date <= today,
             MemoirEntry.value_tag.isnot(None),
         )
         .group_by(MemoirEntry.value_tag)
@@ -120,17 +127,20 @@ async def hybrid_search_memoir(
         res = await session.execute(
             text("""
                 SELECT id, content,
-                       COALESCE(1 - (embedding <=> CAST(:emb AS vector)), 0) * 0.6 +
+                       CASE WHEN embedding_model = :embedding_model
+                            THEN COALESCE(1 - (embedding <=> CAST(:emb AS vector)), 0)
+                            ELSE 0 END * 0.6 +
                        COALESCE(similarity(content, CAST(:query AS text)), 0) * 0.4 AS score
                 FROM memoir_entries
                 WHERE user_id = :uid
                   AND (content % CAST(:query AS text) OR content ILIKE :pattern
-                       OR (embedding IS NOT NULL AND embedding <=> CAST(:emb AS vector) < 0.8))
+                       OR (embedding_model = :embedding_model AND embedding IS NOT NULL
+                           AND embedding <=> CAST(:emb AS vector) < 0.8))
                 ORDER BY score DESC
                 LIMIT :lim
             """),
             {"uid": user_id, "query": query, "pattern": f"%{query}%",
-             "emb": query_embedding, "lim": limit},
+             "emb": query_embedding, "lim": limit, "embedding_model": embedding_identity()},
         )
     else:
         res = await session.execute(

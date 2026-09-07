@@ -192,6 +192,7 @@ async def observe_job(name: str) -> AsyncIterator[None]:
     try:
         yield
         metrics.increment(f"scheduler.{name}.success")
+        metrics.gauge(f"scheduler.{name}.last_success_epoch", time.time())
     except Exception:
         metrics.increment(f"scheduler.{name}.error")
         raise
@@ -241,7 +242,7 @@ async def evaluate_slos() -> dict[str, dict[str, object]]:
         },
         "backup": {
             "status": (
-                "unknown" if backup_age_hours is None
+                "error" if backup_age_hours is None
                 else "ok" if backup_age_hours <= max_backup_age_hours and artifact_ok
                 else "error"
             ),

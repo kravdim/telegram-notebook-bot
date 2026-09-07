@@ -1,5 +1,5 @@
-#!/bin/sh
-set -eu
+#!/bin/bash
+set -euo pipefail
 
 if [ "$#" -ne 1 ]; then
     echo "Usage: DATABASE_URL=postgresql://... $0 BACKUP.sql.gz" >&2
@@ -19,6 +19,7 @@ if [ -z "${DATABASE_URL:-}" ]; then
 fi
 
 (cd "$(dirname "$backup_file")" && sha256sum -c "$(basename "$checksum_file")")
+gzip -t "$backup_file"
 echo "Checksum is valid. Restoring will overwrite database objects." >&2
 printf "Type RESTORE to continue: " >&2
 read -r confirmation

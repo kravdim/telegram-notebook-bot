@@ -82,6 +82,9 @@ async def complete_task_workflow(
     if task.status != "open":
         return TaskCompletionResult(task=task)
 
+    timezone = task.recurrence_timezone or timezone
+    if task.repeat_rule and task.recurrence_timezone is None:
+        task.recurrence_timezone = timezone
     now_utc = pendulum.now("UTC")
     now_local = now_utc.in_tz(timezone)
     task.status = "done"
@@ -127,10 +130,11 @@ async def complete_task_workflow(
                 category=task.category,
                 priority=task.priority,
                 scheduled_date=next_date if task.scheduled_date else None,
-                due_date=next_date if task.due_date else None,
+                due_date=(next_date + (task.due_date - anchor_date)) if task.due_date else None,
                 due_time=task.due_time,
                 remind_before_min=task.remind_before_min,
                 repeat_rule=task.repeat_rule,
+                recurrence_timezone=timezone,
                 tags=list(task.tags or []),
             )
             session.add(next_task)
@@ -189,7 +193,9 @@ async def _sync_bound_alarm(
     session: AsyncSession, task: Task, updates: dict[str, Any], timezone: str,
 ) -> None:
     """Only explicit remind_before_min establishes a deadline-relative alarm."""
-    if task.remind_before_min is None or not {"due_date", "due_time"}.intersection(updates):
+    if task.remind_before_min is None or not {
+        "due_date", "due_time", "remind_before_min"
+    }.intersection(updates):
         return
     if not task.due_date or not task.due_time:
         task.remind_at = None
@@ -207,7 +213,7 @@ async def _sync_bound_alarm(
 
 async def update_task_workflow(
     session: AsyncSession, task_id: uuid.UUID, user_id: int, *,
-    commit: bool = True, **updates: Any,
+    commit: bool = True, expected_status: str | None = None, **updates: Any,
 ) -> Task | None:
     """Apply edits and lifecycle effects atomically for every inbound channel."""
     task = await session.scalar(
@@ -216,6 +222,8 @@ async def update_task_workflow(
     )
     if task is None:
         return None
+    if expected_status is not None and task.status != expected_status:
+        return None
     user = await session.get(User, user_id)
     timezone = user.timezone if user else "Europe/Moscow"
     target = updates.pop("status", None)
@@ -223,15 +231,20 @@ async def update_task_workflow(
         raise ValueError("Reopening a recurring occurrence requires series reconciliation")
     allowed = {
         "title", "priority", "is_frog", "scheduled_date", "due_date", "due_time",
-        "remind_at", "repeat_rule",
+        "remind_at", "remind_before_min", "repeat_rule",
     }
     if updates.keys() - allowed:
         raise ValueError("Unsupported task fields")
-    if any(value is None and key not in {"scheduled_date", "due_date", "due_time", "remind_at", "repeat_rule"}
+    if any(value is None and key not in {"scheduled_date", "due_date", "due_time", "remind_at", "repeat_rule", "remind_before_min"}
            for key, value in updates.items()):
         raise ValueError("Required task fields cannot be cleared")
     for key, value in updates.items():
         setattr(task, key, value)
+    if task.repeat_rule:
+        task.recurrence_timezone = task.recurrence_timezone or timezone
+        timezone = task.recurrence_timezone
+    elif "repeat_rule" in updates:
+        task.recurrence_timezone = None
     if target == "done":
         await complete_task_workflow(session, task_id, user_id, timezone, commit=False)
     elif target == "cancelled":

@@ -265,11 +265,11 @@ async def test_new_onboarding_privacy_choice_sends_name_step_without_creating_us
 async def test_finish_onboarding_keeps_declined_cloud_path_and_persists_settings(monkeypatch):
     updates = []
 
-    async def update(session, user_id, **values):
+    async def update(user_id, values, title):
         updates.append((user_id, values))
 
     monkeypatch.setattr(onboarding, "async_session", lambda: FakeSessionContext())
-    monkeypatch.setattr(onboarding, "update_user_settings", update)
+    monkeypatch.setattr(onboarding, "complete_onboarding", update)
     state = FakeState(
         {
             "username": "Лена",
@@ -587,14 +587,10 @@ async def test_onboarding_work_schedule_rejects_reversed_time_then_advances(monk
 async def test_first_onboarding_task_rejects_empty_and_finishes_after_create(monkeypatch):
     finished = []
 
-    async def create(session, user_id, *, title):
-        return SimpleNamespace(title=title)
-
-    async def finish(message, user_id, state):
-        finished.append((message, user_id, state))
+    async def finish(message, user_id, state, *, first_task_title=None):
+        finished.append((message, user_id, state, first_task_title))
 
     monkeypatch.setattr(onboarding, "async_session", lambda: FakeSessionContext())
-    monkeypatch.setattr(onboarding, "create_task", create)
     monkeypatch.setattr(onboarding, "_finish_onboarding", finish)
     state = FakeState()
     blank = FakeMessage("", user_id=42)
@@ -604,5 +600,4 @@ async def test_first_onboarding_task_rejects_empty_and_finishes_after_create(mon
 
     task = FakeMessage("Закончить проверку", user_id=42)
     await onboarding.onb_first_task(task, state)
-    assert task.answers == [("Задача создана: Закончить проверку ✅", {})]
-    assert finished == [(task, 42, state)]
+    assert finished == [(task, 42, state, "Закончить проверку")]

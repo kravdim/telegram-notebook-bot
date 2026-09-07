@@ -50,6 +50,7 @@ def render_launchagent(
     all_proxy: str | None = None,
     readiness_file: Path | None = None,
     release_sha: str | None = None,
+    compatible_database_head: str | None = None,
 ) -> None:
     """Render one valid plist atomically; direct networking is the default."""
     with template.open("rb") as source:
@@ -68,6 +69,8 @@ def render_launchagent(
         environment["READINESS_FILE"] = str(readiness_file.resolve())
     if release_sha:
         environment["DAILYPLANNER_RELEASE_SHA"] = release_sha
+    if compatible_database_head:
+        environment["DAILYPLANNER_COMPATIBLE_DATABASE_HEAD"] = compatible_database_head
 
     output.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.NamedTemporaryFile("wb", dir=output.parent, delete=False) as temporary:
@@ -86,6 +89,7 @@ def main() -> None:
     parser.add_argument("--all-proxy")
     parser.add_argument("--readiness-file", type=Path)
     parser.add_argument("--release-sha")
+    parser.add_argument("--compatible-database-head")
     args = parser.parse_args()
     render_launchagent(
         args.template,
@@ -96,6 +100,7 @@ def main() -> None:
         all_proxy=args.all_proxy,
         readiness_file=args.readiness_file,
         release_sha=args.release_sha,
+        compatible_database_head=args.compatible_database_head,
     )
 
 

@@ -43,7 +43,8 @@ async def cb_review_tomorrow(callback: CallbackQuery) -> None:
         tomorrow = pendulum.tomorrow(tz).date()
 
         task = await update_task(
-            session, task_id, callback.from_user.id, scheduled_date=tomorrow
+            session, task_id, callback.from_user.id, scheduled_date=tomorrow,
+            expected_status="open",
         )
 
     if task:
@@ -52,7 +53,9 @@ async def cb_review_tomorrow(callback: CallbackQuery) -> None:
             reply_markup=None,
         )
     else:
-        await callback_message(callback).edit_text("Задача не найдена.", reply_markup=None)
+        await callback_message(callback).edit_text(
+            "Задача уже закрыта или удалена. Открой актуальный список /tasks.", reply_markup=None
+        )
 
 
 @router.callback_query(F.data.startswith("review_cancel:"))
@@ -65,12 +68,17 @@ async def cb_review_cancel(callback: CallbackQuery) -> None:
         task = await update_task(
             session, task_id, callback.from_user.id,
             status="cancelled",
+            expected_status="open",
         )
 
     if task:
         await callback_message(callback).edit_text(
             f"🗑 «{html.escape(task.title)}» отменена",
             reply_markup=None,
+        )
+    else:
+        await callback_message(callback).edit_text(
+            "Задача уже закрыта или удалена. Открой актуальный список /tasks.", reply_markup=None
         )
 
 

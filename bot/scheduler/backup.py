@@ -5,6 +5,7 @@ import hashlib
 import logging
 import os
 import shutil
+import uuid
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -65,7 +66,10 @@ def _dump_command_and_env() -> tuple[list[str], dict[str, str]] | None:
 async def _stop_pipeline(processes: tuple, stderr_tasks: tuple) -> None:
     for process in processes:
         if process and process.returncode is None:
-            process.kill()
+            try:
+                process.kill()
+            except ProcessLookupError:
+                pass
     await asyncio.gather(
         *(process.wait() for process in processes if process),
         return_exceptions=True,
@@ -88,7 +92,8 @@ async def _stream_backup(filepath: Path, command: list[str], env: dict[str, str]
         )
         if pg_dump.stdout is None or pg_dump.stderr is None:
             raise RuntimeError("pg_dump pipes were not created")
-        with open(filepath, "wb") as backup_file:
+        with open(filepath, "xb") as backup_file:
+            os.chmod(filepath, 0o600)
             gzip_proc = await asyncio.create_subprocess_exec(
                 "gzip",
                 stdin=asyncio.subprocess.PIPE,
@@ -97,19 +102,18 @@ async def _stream_backup(filepath: Path, command: list[str], env: dict[str, str]
             )
             if gzip_proc.stdin is None or gzip_proc.stderr is None:
                 raise RuntimeError("gzip pipes were not created")
-            pg_stderr_task = asyncio.create_task(pg_dump.stderr.read())
-            gzip_stderr_task = asyncio.create_task(gzip_proc.stderr.read())
+            pg_stderr_task = asyncio.create_task(_drain_stderr(pg_dump.stderr))
+            gzip_stderr_task = asyncio.create_task(_drain_stderr(gzip_proc.stderr))
             async with asyncio.timeout(300):
-                while line := await pg_dump.stdout.readline():
-                    if _is_portable_dump_line(line):
-                        gzip_proc.stdin.write(line)
-                        await gzip_proc.stdin.drain()
+                await _copy_portable_dump(pg_dump.stdout, gzip_proc.stdin)
                 gzip_proc.stdin.close()
                 await gzip_proc.stdin.wait_closed()
                 await asyncio.gather(pg_dump.wait(), gzip_proc.wait())
                 pg_stderr, gzip_stderr = await asyncio.gather(
                     pg_stderr_task, gzip_stderr_task
                 )
+            backup_file.flush()
+            os.fsync(backup_file.fileno())
         return pg_dump.returncode, gzip_proc.returncode, pg_stderr, gzip_stderr
     except BaseException:
         await _stop_pipeline(
@@ -118,15 +122,81 @@ async def _stream_backup(filepath: Path, command: list[str], env: dict[str, str]
         raise
 
 
-async def _record_backup_success(filepath: Path) -> None:
+async def _drain_stderr(reader: asyncio.StreamReader) -> bytes:
+    """Drain pipes without retaining unlimited diagnostics in process memory."""
+    retained = b""
+    while chunk := await reader.read(64 * 1024):
+        retained += chunk[:max(0, 64 * 1024 - len(retained))]
+    return retained
+
+
+async def _copy_portable_dump(reader: asyncio.StreamReader, writer) -> None:
+    """Передать COPY-строки любой длины, удерживая лишь короткий SQL-префикс."""
+    pending = b""
+    passthrough = False
+    header = True
+    while chunk := await reader.read(64 * 1024):
+        # split on LF only: arbitrary COPY bytes must remain unchanged.
+        parts = chunk.split(b"\n")
+        for index, part in enumerate(parts):
+            complete = index < len(parts) - 1
+            segment = part + (b"\n" if complete else b"")
+            if passthrough:
+                writer.write(segment)
+            else:
+                pending += segment
+                if complete or len(pending) > 256:
+                    if not complete or not _is_dump_preamble(pending):
+                        header = False
+                    if not header or _is_portable_dump_line(pending):
+                        writer.write(pending)
+                    pending = b""
+                    passthrough = not complete
+            if complete:
+                passthrough = False
+        await writer.drain()
+    if pending and (not header or _is_portable_dump_line(pending)):
+        writer.write(pending)
+        await writer.drain()
+
+
+def _is_dump_preamble(line: bytes) -> bool:
+    """Compatibility filtering must never alter COPY values or function bodies."""
+    value = line.strip()
+    return not value or value.startswith((b"--", b"SET ", b"SELECT pg_catalog.set_config(", b"\\restrict "))
+
+
+def _write_checksum(filepath: Path) -> str:
     digest = hashlib.sha256()
     with open(filepath, "rb") as source:
         for chunk in iter(lambda: source.read(1024 * 1024), b""):
             digest.update(chunk)
     checksum_path = filepath.with_suffix(filepath.suffix + ".sha256")
-    checksum_path.write_text(
-        f"{digest.hexdigest()}  {filepath.name}\n", encoding="ascii"
-    )
+    temporary = checksum_path.with_name(f".{checksum_path.name}.partial")
+    try:
+        with temporary.open("x", encoding="ascii") as output:
+            temporary.chmod(0o600)
+            output.write(f"{digest.hexdigest()}  {filepath.name}\n")
+            output.flush()
+            os.fsync(output.fileno())
+        os.replace(temporary, checksum_path)
+        directory = os.open(filepath.parent, os.O_RDONLY)
+        try:
+            os.fsync(directory)
+        finally:
+            os.close(directory)
+    finally:
+        temporary.unlink(missing_ok=True)
+    return digest.hexdigest()
+
+
+async def _record_backup_success(filepath: Path) -> None:
+    checksum_task = asyncio.create_task(asyncio.to_thread(_write_checksum, filepath))
+    try:
+        checksum = await asyncio.shield(checksum_task)
+    finally:
+        # Do not race cancellation cleanup against a still-running writer.
+        await checksum_task
     try:
         async with async_session() as session:
             await set_operational_state(
@@ -135,7 +205,7 @@ async def _record_backup_success(filepath: Path) -> None:
                 {
                     "file": filepath.name,
                     "bytes": filepath.stat().st_size,
-                    "sha256": digest.hexdigest(),
+                    "sha256": checksum,
                     "checksum_verified_at": pendulum.now("UTC").to_iso8601_string(),
                 },
             )
@@ -168,26 +238,40 @@ async def run_backup() -> Path | None:
     retention_days = settings.yaml_config.get("scheduler", {}).get(
         "backup_retention_days", 30
     )
-    _BACKUP_DIR.mkdir(parents=True, exist_ok=True)
-    filename = f"notebook_bot_{pendulum.now().format('YYYY-MM-DD_HHmmss')}.sql.gz"
+    _BACKUP_DIR.mkdir(parents=True, exist_ok=True, mode=0o700)
+    filename = (
+        f"notebook_bot_{pendulum.now().format('YYYY-MM-DD_HHmmss')}_{uuid.uuid4().hex}.sql.gz"
+    )
     filepath = _BACKUP_DIR / filename
+    partial = filepath.with_name(f".{filepath.name}.partial")
     invocation = _dump_command_and_env()
     if invocation is None:
         return None
 
     try:
-        evidence = await _stream_backup(filepath, *invocation)
-        await _finalize_backup(filepath, evidence)
+        evidence = await _stream_backup(partial, *invocation)
+        if evidence[0] == 0 and evidence[1] == 0:
+            os.replace(partial, filepath)
+        if await _finalize_backup(filepath, evidence):
+            _rotate_backups(retention_days)
+            return filepath
+    except asyncio.CancelledError:
+        filepath.unlink(missing_ok=True)
+        filepath.with_suffix(filepath.suffix + ".sha256").unlink(missing_ok=True)
+        raise
     except asyncio.TimeoutError:
         logger.error("Таймаут бэкапа")
         filepath.unlink(missing_ok=True)
+        filepath.with_suffix(filepath.suffix + ".sha256").unlink(missing_ok=True)
         metrics.increment("backup.error")
     except Exception as e:
         logger.error("Ошибка бэкапа: error_type=%s", error_type(e))
         filepath.unlink(missing_ok=True)
+        filepath.with_suffix(filepath.suffix + ".sha256").unlink(missing_ok=True)
         metrics.increment("backup.error")
-    _rotate_backups(retention_days)
-    return filepath if filepath.exists() else None
+    finally:
+        partial.unlink(missing_ok=True)
+    return None
 
 
 def is_backup_due(
@@ -247,7 +331,12 @@ def _rotate_backups(retention_days: int) -> None:
         return
 
     cutoff = datetime.now() - timedelta(days=retention_days)
-    for f in _BACKUP_DIR.glob("notebook_bot_*.sql.gz"):
+    archives = sorted(
+        _BACKUP_DIR.glob("notebook_bot_*.sql.gz"), key=lambda path: path.stat().st_mtime,
+        reverse=True,
+    )
+    # Never remove the last recovery point, even after an extended outage.
+    for f in archives[1:]:
         if f.stat().st_mtime < cutoff.timestamp():
             f.with_suffix(f.suffix + ".sha256").unlink(missing_ok=True)
             f.unlink()

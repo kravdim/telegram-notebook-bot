@@ -707,7 +707,7 @@ async def test_failed_mutation_is_closed_in_history_before_next_turn(monkeypatch
     calls = []
 
     class Client:
-        async def chat(self, *, messages, functions, tool_choice=None):
+        async def chat(self, *, messages, functions, tool_choice=None, user_id=None):
             calls.append((list(messages), tool_choice))
             if len(calls) == 1:
                 return FakeResponse(content="Не уверен, что нужно сделать")

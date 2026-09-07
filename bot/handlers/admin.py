@@ -1,6 +1,7 @@
 """Команды администратора и безопасные ручные scheduler-trigger."""
 
 import logging
+import os
 from html import escape as html_escape
 
 import anyio
@@ -305,6 +306,8 @@ async def cmd_listusers(message: Message) -> None:
 
 async def _persist_whitelist() -> None:
     """Сохранить текущий whitelist в config.yaml атомарной заменой."""
+    if "ALLOWED_TELEGRAM_IDS" in os.environ:
+        raise ValueError("Whitelist is managed by ALLOWED_TELEGRAM_IDS; update the deployment environment")
     config_path = BASE_DIR / "config.yaml"
     await anyio.to_thread.run_sync(
         write_allowed_telegram_ids,
