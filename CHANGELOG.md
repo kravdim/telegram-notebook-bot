@@ -4,6 +4,8 @@
 
 - Tolerate launchd's brief post-`bootout` terminating state while still requiring
   the exact service-not-found result before maintenance acquires the writer lease.
+- Accept macOS `bootout` ESRCH during repeated failure cleanup, followed by the
+  same exact service-absence proof.
 - Fixed the September 7 review's backup/restore, singleton, FSM/onboarding,
   voice/STT, recurrence, outbox, consent, export and indexing defects.
 - Added deterministic `/add`, `/note`, `/remind` and `/cancel` commands,

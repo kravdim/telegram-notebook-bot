@@ -133,7 +133,10 @@ class MaintenanceLaunchd:
         await self._command("disable", self.target)
         await self._disabled()
         status, _ = await launchctl("bootout", self.target)
-        if status not in {0, 113}:
+        # macOS returns 3 (ESRCH) when a previously removed exact target is
+        # booted out again during fail-closed cleanup. `_absent` below still
+        # requires launchctl's exact service-not-found result.
+        if status not in {0, 3, 113}:
             raise RuntimeError(f"launchctl bootout failed (exit {status})")
         await self._absent()
 
