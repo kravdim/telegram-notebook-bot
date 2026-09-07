@@ -78,6 +78,7 @@ class Launchctl:
         self.disabled_output = None
         self.admissions = 0
         self.uncertain_bootstrap = False
+        self.transient_prints = 0
 
     async def __call__(self, *args):
         self.calls.append(args)
@@ -95,6 +96,9 @@ class Launchctl:
             self.loaded = False
         elif command == "print":
             if args[1] == self.controller.target and not self.loaded:
+                if self.transient_prints:
+                    self.transient_prints -= 1
+                    return 0, "terminating"
                 return 113, ""
         elif command == "enable":
             self.admissions += 1
@@ -151,6 +155,17 @@ async def test_freeze_disables_before_removal_and_acquires_live_lease(service):
     assert [call[0] for call in fake.calls[:3]] == ["disable", "print-disabled", "bootout"]
     assert controller.lease.held
     await controller.freeze()  # Explicit recovery can encounter an absent job.
+
+
+async def test_freeze_waits_for_acknowledged_job_to_disappear(service):
+    controller, fake, _ = service
+    fake.transient_prints = 2
+    await controller.freeze()
+    target_prints = [call for call in fake.calls if call == ("print", controller.target)]
+    # Three polls during halt, then assert_frozen verifies absence once more
+    # after acquiring the database lease.
+    assert len(target_prints) == 4
+    assert controller.lease.held
 
 
 @pytest.mark.parametrize("failure", ["disable", "print-disabled", "bootout", "print"])

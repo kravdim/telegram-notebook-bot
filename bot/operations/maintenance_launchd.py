@@ -116,9 +116,17 @@ class MaintenanceLaunchd:
         # Prove domain access separately: permission/domain failures are not an
         # absent service. Service-not-found on this exact target is the sole miss.
         await self._command("print", self.domain)
-        status, _ = await launchctl("print", self.target)
-        if status != 113:
-            raise RuntimeError("Cannot confirm launchd service removal")
+        # launchd can acknowledge bootout before `print` stops exposing the old
+        # job. Treat only that still-present status as transient; every other
+        # unexpected error remains fail-closed.
+        deadline = time.monotonic() + 5
+        while True:
+            status, _ = await launchctl("print", self.target)
+            if status == 113:
+                return
+            if status != 0 or time.monotonic() >= deadline:
+                raise RuntimeError("Cannot confirm launchd service removal")
+            await asyncio.sleep(0.2)
 
     async def halt(self) -> None:
         self.installed()  # Revalidate the exact target before any external write.
