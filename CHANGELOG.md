@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Accept an explicit Reply to a memoir prompt for 31 days after its one-hour
+  interaction state expires, and save it under the prompt's original date
+  without clearing a newer workflow.
 - Tolerate launchd's brief post-`bootout` terminating state while still requiring
   the exact service-not-found result before maintenance acquires the writer lease.
 - Accept macOS `bootout` ESRCH during repeated failure cleanup, followed by the

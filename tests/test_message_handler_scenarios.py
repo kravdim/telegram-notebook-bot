@@ -410,8 +410,8 @@ async def test_explicit_reply_to_persisted_memoir_is_saved(monkeypatch):
     async def fake_clear(user_id, state_type):
         cleared.append((user_id, state_type))
 
-    async def fake_save(user_id, text, timezone):
-        saved.append((user_id, text, timezone))
+    async def fake_save(user_id, text, timezone, session_token, **kwargs):
+        saved.append((user_id, text, timezone, session_token, kwargs))
 
     monkeypatch.setattr(messages, "async_session", lambda: FakeSessionContext())
     monkeypatch.setattr(messages, "get_user", fake_get_user)
@@ -423,7 +423,15 @@ async def test_explicit_reply_to_persisted_memoir_is_saved(monkeypatch):
     msg = FakeMessage("Сегодня помог родителям", user_id=42, reply_to_message=reply)
     await messages.process_text_message(42, msg.text, msg)
 
-    assert saved == [(42, "Сегодня помог родителям", "Europe/Moscow")]
+    assert saved == [
+        (
+            42,
+            "Сегодня помог родителям",
+            "Europe/Moscow",
+            None,
+            {"event_date": None, "clear_pending": True},
+        )
+    ]
     # State deletion is part of the same transaction as memoir + diary writes;
     # the handler no longer clears it before the durable side effect.
     assert cleared == []
@@ -445,8 +453,8 @@ async def test_task_like_reply_is_owned_by_pending_memoir(monkeypatch):
             )
         return None
 
-    async def fake_save(user_id, text, timezone, session_token):
-        saved.append((user_id, text, timezone, session_token))
+    async def fake_save(user_id, text, timezone, session_token, **kwargs):
+        saved.append((user_id, text, timezone, session_token, kwargs))
 
     async def forbidden_dispatch(*args, **kwargs):
         raise AssertionError("memoir answer must precede deterministic task routing")
@@ -466,7 +474,13 @@ async def test_task_like_reply_is_owned_by_pending_memoir(monkeypatch):
     await messages.process_text_message(42, msg.text, msg)
 
     assert saved == [
-        (42, "Позвонить маме — сделал", "Europe/Moscow", "memoir-token")
+        (
+            42,
+            "Позвонить маме — сделал",
+            "Europe/Moscow",
+            "memoir-token",
+            {"event_date": None, "clear_pending": True},
+        )
     ]
     assert "Записано в мемуарник" in msg.answers[-1][0]
 
@@ -503,6 +517,62 @@ def test_memoir_reply_rejects_a_different_prompt_marker():
     )
 
     assert not messages._is_memoir_answer(message, interaction)
+
+
+@pytest.mark.asyncio
+async def test_expired_memoir_reply_is_saved_for_prompt_date(monkeypatch):
+    saved = []
+
+    async def no_state(user_id, state_type):
+        return None
+
+    async def fake_save(user_id, text, timezone, session_token, **kwargs):
+        saved.append((user_id, text, timezone, session_token, kwargs))
+
+    monkeypatch.setattr(messages, "_get_persisted_interaction", no_state)
+    monkeypatch.setattr(messages, "_save_memoir_answer", fake_save)
+
+    prompt_date = messages.pendulum.now("Europe/Moscow").date().subtract(days=1)
+    reply = SimpleNamespace(
+        message_id=100,
+        text=f"📔 Мемуарник · {prompt_date:%d.%m.%Y}\n\nЧто было самым ярким?",
+        from_user=SimpleNamespace(id=777, is_bot=True),
+    )
+    msg = FakeMessage(
+        "Вчера завершил важный проект",
+        user_id=42,
+        reply_to_message=reply,
+    )
+    msg.bot.id = 777
+
+    outcome = await messages._route_pending_memoir(
+        42, msg.text, msg, "Europe/Moscow"
+    )
+
+    assert outcome == messages.MessageOutcome.COMPLETED
+    assert saved == [
+        (
+            42,
+            "Вчера завершил важный проект",
+            "Europe/Moscow",
+            None,
+            {"event_date": prompt_date, "clear_pending": False},
+        )
+    ]
+    assert f"за {prompt_date:%d.%m}" in msg.answers[-1][0]
+
+
+def test_expired_memoir_reply_rejects_forged_user_message():
+    prompt_date = messages.pendulum.now("Europe/Moscow").date().subtract(days=1)
+    reply = SimpleNamespace(
+        message_id=100,
+        text=f"📔 Мемуарник · {prompt_date:%d.%m.%Y}",
+        from_user=SimpleNamespace(id=42, is_bot=False),
+    )
+    msg = FakeMessage("Поддельный ответ", user_id=42, reply_to_message=reply)
+    msg.bot.id = 777
+
+    assert messages._memoir_reply_date(msg, "Europe/Moscow") is None
 
 
 @pytest.mark.asyncio

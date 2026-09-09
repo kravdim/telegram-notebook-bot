@@ -7,9 +7,11 @@ import logging
 import re
 import secrets
 import time
+from datetime import date, timedelta
 from enum import StrEnum
 from typing import Optional
 
+import pendulum
 from aiogram import F, Router
 from aiogram.types import Message
 
@@ -113,6 +115,11 @@ _INCOMPLETE_MUTATION_RE = re.compile(
     r"напоминани[ея]|слона?|проект))?\s*[.!?]*$",
     re.IGNORECASE,
 )
+
+_MEMOIR_REPLY_MARKER_RE = re.compile(
+    r"(?:^|\s)Мемуарник\s*·\s*(?P<day>\d{2})\.(?P<month>\d{2})\.(?P<year>\d{4})(?:\s|$)"
+)
+_MEMOIR_LATE_REPLY_DAYS = 31
 
 _MUTATING_TOOLS = {
     "create_task",
@@ -589,18 +596,32 @@ async def _route_pending_memoir(
     message: Message,
     user_tz: str,
 ) -> MessageOutcome | None:
-    """Consume the next answer owned by an active memoir prompt."""
+    """Save an explicit Reply to an active or recently expired memoir prompt."""
     persisted_memoir = await _get_persisted_interaction(user_id, "memoir")
-    if not persisted_memoir or not _is_memoir_answer(message, persisted_memoir):
+    owns_active_prompt = bool(
+        persisted_memoir and _is_memoir_answer(message, persisted_memoir)
+    )
+    prompt_date = _memoir_reply_date(message, user_tz)
+    if not owns_active_prompt and prompt_date is None:
         return None
 
     await message_bot(message).send_chat_action(chat_id=message.chat.id, action="typing")
-    session_token = persisted_memoir.payload.get("session_token")
-    if session_token:
-        await _save_memoir_answer(user_id, text, user_tz, session_token)
-    else:
-        await _save_memoir_answer(user_id, text, user_tz)
-    await message.answer("📔 Записано в мемуарник! ✅")
+    session_token = (
+        persisted_memoir.payload.get("session_token")
+        if owns_active_prompt and persisted_memoir
+        else None
+    )
+    await _save_memoir_answer(
+        user_id,
+        text,
+        user_tz,
+        session_token,
+        event_date=prompt_date,
+        clear_pending=owns_active_prompt,
+    )
+    today = pendulum.now(user_tz).date()
+    suffix = f" за {prompt_date:%d.%m}" if prompt_date and prompt_date != today else ""
+    await message.answer(f"📔 Записано в мемуарник{suffix}! ✅")
     return MessageOutcome.COMPLETED
 
 
@@ -621,6 +642,38 @@ def _is_memoir_answer(message: Message, interaction) -> bool:
     if not reply_marker or not reply_text:
         return False
     return str(reply_marker) in reply_text
+
+
+def _memoir_reply_date(message: Message, user_tz: str) -> date | None:
+    """Read a recent memoir date from a Reply to this Telegram bot's prompt."""
+    reply_to = message.reply_to_message
+    if reply_to is None:
+        return None
+    author = getattr(reply_to, "from_user", None)
+    bot_id = getattr(message_bot(message), "id", None)
+    if (
+        author is None
+        or not getattr(author, "is_bot", False)
+        or bot_id is None
+        or getattr(author, "id", None) != bot_id
+    ):
+        return None
+    reply_text = getattr(reply_to, "text", None) or getattr(reply_to, "caption", None)
+    match = _MEMOIR_REPLY_MARKER_RE.search(reply_text or "")
+    if not match:
+        return None
+    try:
+        prompt_date = date(
+            int(match.group("year")),
+            int(match.group("month")),
+            int(match.group("day")),
+        )
+    except ValueError:
+        return None
+    today = pendulum.now(user_tz).date()
+    if prompt_date > today or prompt_date < today - timedelta(days=_MEMOIR_LATE_REPLY_DAYS):
+        return None
+    return prompt_date
 
 
 async def _process_text_message_unlocked(
@@ -1021,6 +1074,9 @@ async def _save_memoir_answer(
     text: str,
     tz: str,
     session_token: str | None = None,
+    *,
+    event_date: date | None = None,
+    clear_pending: bool = True,
 ) -> None:
     """Сохранить ответ на мемуарник как memoir_entry + diary_entry."""
     import pendulum
@@ -1030,7 +1086,7 @@ async def _save_memoir_answer(
     from bot.db.crud.memoir import create_memoir_entry
     from bot.llm.dispatcher import _extract_value_tag
 
-    today = pendulum.now(tz).date()
+    today = event_date or pendulum.now(tz).date()
     value_tag = _extract_value_tag(text)
 
     async with async_session() as session:
@@ -1043,15 +1099,16 @@ async def _save_memoir_answer(
         await create_diary_entry(
             session, user_id, content=text, entry_date=today, tz=tz, commit=False
         )
-        cleared = await clear_state_if_type(
-            session,
-            user_id,
-            "memoir",
-            session_token,
-            commit=False,
-        )
-        if not cleared:
-            raise RuntimeError("memoir interaction ownership was lost")
+        if clear_pending:
+            cleared = await clear_state_if_type(
+                session,
+                user_id,
+                "memoir",
+                session_token,
+                commit=False,
+            )
+            if not cleared:
+                raise RuntimeError("memoir interaction ownership was lost")
         await session.commit()
 
     logger.info("Мемуарник сохранён: date=%s value_present=%s", today, bool(value_tag))
