@@ -1001,6 +1001,57 @@ async def test_memoir_reply_is_restart_safe_ttl_bound_and_single_consumer():
 
 
 @pytest.mark.asyncio
+async def test_late_memoir_reply_keeps_newer_interaction_and_original_date():
+    user_id = 8_571_000_000 + int(uuid.uuid4().hex[:6], 16)
+    prompt_date = pendulum.now("Europe/Moscow").date().subtract(days=1)
+    text_value = f"late-memoir-{uuid.uuid4().hex}"
+
+    async with async_session() as setup:
+        setup.add(User(telegram_id=user_id, username="late-memoir-test"))
+        await setup.commit()
+        assert await claim_state(
+            setup,
+            user_id,
+            "chronometry",
+            {"message_id": 67890, "session_token": "newer-workflow"},
+        ) is not None
+
+    await message_handler._save_memoir_answer(
+        user_id,
+        text_value,
+        "Europe/Moscow",
+        event_date=prompt_date,
+        clear_pending=False,
+    )
+
+    async with async_session() as verify:
+        memoir = (
+            await verify.execute(
+                select(MemoirEntry).where(
+                    MemoirEntry.user_id == user_id,
+                    MemoirEntry.event_date == prompt_date,
+                )
+            )
+        ).scalar_one()
+        diary = (
+            await verify.execute(
+                select(DiaryEntry).where(
+                    DiaryEntry.user_id == user_id,
+                    DiaryEntry.content == text_value,
+                )
+            )
+        ).scalar_one()
+        state = await get_state(verify, user_id)
+        assert memoir.content == text_value
+        assert diary.entry_date == prompt_date
+        assert state is not None
+        assert state.state_type == "chronometry"
+        assert state.payload["session_token"] == "newer-workflow"
+        await verify.execute(delete(User).where(User.telegram_id == user_id))
+        await verify.commit()
+
+
+@pytest.mark.asyncio
 async def test_restart_recovers_voice_processing_as_retryable_confirmation():
     user_id = 8_565_000_000 + int(uuid.uuid4().hex[:6], 16)
     async with async_session() as session:
